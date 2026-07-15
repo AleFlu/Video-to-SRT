@@ -1,0 +1,14 @@
+# Video → SRT — Dipendenze
+#
+# faster-whisper: backend CPU (CTranslate2), fallback se MLX non disponibile
+# mlx-whisper: backend GPU Apple Silicon (30-40% più veloce), opzionale
+# customtkinter: GUI moderna
+# tkinterdnd2: drag & drop nativo (opzionale)
+
+faster-whisper>=1.0.0
+onnxruntime>=1.16.0
+customtkinter>=5.2.0
+tkinterdnd2>=0.3.0
+
+# GPU Apple Silicon (opzionale — installare solo su Mac con M1/M2/M3/M4)
+# pip install mlx-whisper

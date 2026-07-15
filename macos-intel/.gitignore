@@ -1,0 +1,36 @@
+# Ambiente virtuale
+venv/
+venv_intel/
+.venv/
+
+# Build PyInstaller
+build/
+dist/
+*.spec
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Cache pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Autosave app (generati a runtime)
+autosave_*.v2srt
+
+# Log
+*.log

@@ -1,0 +1,47 @@
+# Ambienti virtuali
+venv/
+venv_intel/
+.venv/
+env/
+
+# Build PyInstaller
+build/
+dist/
+*.manifest
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Autosave app (generati a runtime)
+autosave_*.v2srt
+
+# Log
+*.log
+
+# Modelli Whisper scaricati localmente
+_build_model/
+models/
