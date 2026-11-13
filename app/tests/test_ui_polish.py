@@ -780,3 +780,38 @@ def test_export_panel_no_second_overwrite_prompt_after_file_dialog(app, tmp_path
     finally:
         panel.close()
         panel.deleteLater()
+
+
+# ── Pulsante di overflow della toolbar: mai l'icona di sistema ───────────────
+
+def test_extension_buttons_use_painted_icon_and_survive_style_change(app):
+    """Regressione: su macOS l'icona di sistema del pulsante "»" mandava in crash
+    l'app al primo disegno dell'editor. Deve restare la nostra anche dopo un cambio
+    di stile (Qt la ripristina) e un cambio di tema."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication, QToolButton
+    from ui import theme
+    from ui.main_window import MainWindow
+    from ui.widgets import _ExtensionIconGuard
+
+    win = MainWindow(ffmpeg_ok=True, model_ok=True)
+    buttons = [b for b in win.findChildren(QToolButton)
+               if b.objectName() in ("qt_toolbar_ext_button", "qt_menubar_ext_button")]
+    assert buttons, "nessun pulsante di overflow trovato"
+
+    def assert_guarded():
+        for b in buttons:
+            guard = b.findChild(_ExtensionIconGuard)
+            assert guard is not None, b.objectName()
+            b.grab()   # forza un paint: il guard deve aver rimesso la nostra icona
+            assert b.icon().cacheKey() == guard._key, b.objectName()
+
+    assert_guarded()
+    for b in buttons:   # Qt reimposta l'icona di sistema a ogni StyleChange
+        QApplication.sendEvent(b, QEvent(QEvent.StyleChange))
+    assert_guarded()
+    theme.toggle_theme(app)
+    try:
+        assert_guarded()
+    finally:
+        theme.toggle_theme(app)

@@ -42,6 +42,7 @@ from core.audio_player import AudioPlayer
 from ui.inspector_widget import InspectorWidget
 from ui.find_replace_dialog import FindReplaceDialog
 from ui.transport_bar import RATE_STEPS
+from ui.widgets import protect_extension_buttons
 from ui import theme
 import platform_support
 
@@ -173,6 +174,8 @@ class SubtitleTimeline(QWidget):
         tb = QToolBar("TimelineToolbar", self._inner)
         tb.setMovable(False)
         self._inner.addToolBar(tb)
+        # Il pulsante "»" di overflow non deve usare l'icona di sistema (crash su macOS)
+        protect_extension_buttons(tb)
 
         # ── Undo / Redo ────────────────────────────────────────────────────────
         # Nessuna scorciatoia qui: Ctrl+Z / redo sono le azioni del menu Modifica

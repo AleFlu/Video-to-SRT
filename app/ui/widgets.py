@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QSize
+from PySide6.QtGui import QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (
+    QFrame, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+)
 
 from ui import theme
 
@@ -153,3 +156,76 @@ class DepsBanner(QFrame):
         self._body.setText("<br>".join(hints))
         self._apply_palette()
         self.setVisible(True)
+
+
+# ── Pulsante di overflow ("»") di toolbar e barra dei menu ───────────────────
+
+_EXT_BUTTON_NAMES = ("qt_toolbar_ext_button", "qt_menubar_ext_button")
+
+
+def chevron_icon(size: int = 16) -> QIcon:
+    """Icona "»" disegnata con i colori del tema corrente (nessuna icona di sistema)."""
+    scale = 2
+    pix = QPixmap(size * scale, size * scale)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    try:
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(theme.qcolor("muted"))
+        pen.setWidthF(1.6 * scale)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        u = size * scale / 16.0
+        for x0 in (4.0, 9.0):
+            p.drawPolyline([QPointF(x0 * u, 4 * u), QPointF((x0 + 3.5) * u, 8 * u),
+                            QPointF(x0 * u, 12 * u)])
+    finally:
+        p.end()
+    pix.setDevicePixelRatio(scale)
+    return QIcon(pix)
+
+
+class _ExtensionIconGuard(QObject):
+    """Mantiene l'icona disegnata sul pulsante di overflow.
+
+    Qt assegna a quel pulsante un'icona di sistema e la ripristina a ogni cambio di
+    stile. Su macOS quell'icona (SF Symbol) può sollevare un'eccezione AppKit durante
+    il disegno e chiudere l'app: la si sostituisce prima di ogni paint.
+    """
+
+    def __init__(self, button: QToolButton):
+        super().__init__(button)
+        self._button = button
+        self._key = 0
+        self.refresh()
+        theme.MANAGER.theme_changed.connect(self._on_theme_changed)
+        button.installEventFilter(self)
+
+    def refresh(self) -> None:
+        icon = chevron_icon()
+        self._key = icon.cacheKey()
+        self._button.setIcon(icon)
+
+    def _on_theme_changed(self, _name: str) -> None:
+        self.refresh()
+
+    def eventFilter(self, obj, event):  # noqa: N802 — override Qt
+        if event.type() == QEvent.Paint and self._button.icon().cacheKey() != self._key:
+            self.refresh()
+        return False
+
+
+def protect_extension_buttons(bar: QWidget) -> int:
+    """Sostituisce l'icona di sistema dei pulsanti di overflow di ``bar``.
+
+    Ritorna il numero di pulsanti protetti. Idempotente.
+    """
+    count = 0
+    for btn in bar.findChildren(QToolButton):
+        if btn.objectName() not in _EXT_BUTTON_NAMES:
+            continue
+        if btn.findChild(_ExtensionIconGuard) is None:
+            _ExtensionIconGuard(btn)
+        count += 1
+    return count

@@ -39,6 +39,7 @@ from ui.project_widget import ProjectWidget, autosave_in_use
 from ui.project_tab_bar import ProjectTabBar
 from ui import theme
 from ui.prefs import read_list, RECENT_KEY
+from ui.widgets import protect_extension_buttons
 
 _SETTINGS_RECENT = RECENT_KEY
 _SETTINGS_GEOM   = "mainwindow/geometry"
@@ -274,6 +275,7 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self):
         bar = self.menuBar()
+        protect_extension_buttons(bar)
 
         # ── File ──────────────────────────────────────────────────────────────
         m_file = bar.addMenu("&File")
