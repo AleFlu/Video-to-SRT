@@ -6,7 +6,7 @@ Racchiude TUTTA la logica che prima viveva in MainWindow per un progetto:
   - TranscriptionTab (Home / Progress / Result)
   - EditorTab (Placeholder / Workspace)
   - Stato: _segments_raw, _source_path, project, worker inline
-  - Autosave su file dedicato (~/.cache/VideoSRT/autosave_<uid>.v2srt)
+  - Autosave su file dedicato (<app_cache_dir>/autosave_<uid>.v2srt)
 
 API verso MainWindow:
   - title_changed(str)        → MainWindow aggiorna la tab del progetto
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QStackedWidget, QMessageBox,
 )
 
+import platform_support
 from core.subtitle_model import SubtitleProject
 from core.v2srt_io import load_project, is_v2srt, save_project, EXTENSION as V2SRT_EXT
 from ui.home_widget import HomeWidget
@@ -160,17 +161,17 @@ class ProjectWidget(QWidget):
         self.workspace.status_text.connect(self.status_text)
 
         # ── Shortcut esportazione (ApplicationShortcut: funzionano da qualsiasi tab) ──
-        # ⌘E → apri tab Esportazione
+        # Ctrl+E → apri tab Esportazione
         sc_exp = QShortcut(QKeySequence("Ctrl+E"), self)
         sc_exp.setContext(Qt.ApplicationShortcut)
         sc_exp.activated.connect(lambda: self.tab_bar.set_current(_TAB_EXPORT))
 
-        # ⌘S → esporta SRT (già funziona dal menu, ma anche qui per coerenza)
+        # Ctrl+S → esporta SRT (già funziona dal menu, ma anche qui per coerenza)
         sc_srt = QShortcut(QKeySequence("Ctrl+S"), self)
         sc_srt.setContext(Qt.ApplicationShortcut)
         sc_srt.activated.connect(self.do_export)
 
-        # ⌘⇧S → salva progetto .v2srt
+        # Ctrl+Shift+S → salva progetto .v2srt
         sc_v2srt = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
         sc_v2srt.setContext(Qt.ApplicationShortcut)
         sc_v2srt.activated.connect(self.save_v2srt)
@@ -678,10 +679,7 @@ class ProjectWidget(QWidget):
     # ── Autosave ──────────────────────────────────────────────────────────────
 
     def autosave_path(self) -> Path:
-        import os
-        cache = Path(os.environ.get("HOME", "/tmp")) / ".cache" / "VideoSRT"
-        cache.mkdir(parents=True, exist_ok=True)
-        return cache / f"autosave_{self._uid}.v2srt"
+        return platform_support.app_cache_dir() / f"autosave_{self._uid}.v2srt"
 
     def _autosave(self):
         subs = self.workspace.get_subtitles()

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
+import platform_support
+
 
 # ── Palette: token "Studio" ─────────────────────────────────────────────────
 # Stesse chiavi per dark e light. I soft (acc_soft, ecc.) sono pre-calcolati
@@ -150,8 +152,8 @@ def apply_theme(app, name: str):
 
 
 # ── Font ─────────────────────────────────────────────────────────────────────
-FONT_UI   = '"SF Pro Display", "SF Pro Text", -apple-system, "Helvetica Neue", sans-serif'
-FONT_MONO = '"SF Mono", "Menlo", "Roboto Mono", monospace'
+FONT_UI   = platform_support.font_stack_ui()
+FONT_MONO = platform_support.font_stack_mono()
 
 
 # ── Stylesheet globale ────────────────────────────────────────────────────────

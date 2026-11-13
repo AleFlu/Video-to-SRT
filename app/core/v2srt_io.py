@@ -18,64 +18,73 @@ Schema:
 
 from __future__ import annotations
 import json
-import os
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
+from core.srt_io import _write_text
 from core.subtitle_model import Subtitle, SubtitleProject
 
 _V2SRT_VERSION = 1
 EXTENSION = ".v2srt"
 
 
-def save_project(project: SubtitleProject, output_path: str, settings: dict | None = None):
-    """Salva il progetto in formato .v2srt."""
-    os.makedirs(str(Path(output_path).parent), exist_ok=True)
+def save_project(project: SubtitleProject, output_path: str,
+                 settings: Optional[dict] = None):
+    """Salva il progetto in formato .v2srt (scrittura atomica)."""
     data = {
         "version": _V2SRT_VERSION,
         "source_path": project.source_path or "",
         "settings": settings or {},
-        "subtitles": [
-            {"start": s.start, "end": s.end, "text": s.text}
-            for s in project.subtitles
-        ],
+        "subtitles": [s.to_dict() for s in project.subtitles],
     }
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _write_text(output_path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def load_project(path: str) -> tuple[SubtitleProject, dict]:
+def load_project(path: str) -> Tuple[SubtitleProject, Dict]:
     """
     Carica un file .v2srt.
     Restituisce (SubtitleProject, settings_dict).
-    Lancia ValueError se il formato non è valido.
+    Lancia ValueError (messaggio in italiano) se il formato non è valido.
     """
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"File JSON non valido ({e.msg}): {path}") from e
+    except UnicodeDecodeError as e:
+        raise ValueError(f"File non leggibile come testo UTF-8: {path}") from e
 
-    if not isinstance(data, dict) or data.get("version") != _V2SRT_VERSION:
-        raise ValueError(f"File non valido o versione non supportata: {path}")
+    if not isinstance(data, dict):
+        raise ValueError(f"File non valido: {path}")
+    version = data.get("version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError(f"File non valido o senza versione: {path}")
+    if version > _V2SRT_VERSION:
+        raise ValueError(
+            f"Progetto con versione non supportata ({version}): "
+            f"aggiorna l'applicazione per aprire {path}"
+        )
 
     subs_raw = data.get("subtitles", [])
     if not isinstance(subs_raw, list):
-        raise ValueError("Campo 'subtitles' non è una lista")
+        raise ValueError("Il campo 'subtitles' non è una lista")
 
     subtitles: List[Subtitle] = []
     for i, item in enumerate(subs_raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"Sottotitolo {i} non valido: non è un oggetto")
         try:
-            subtitles.append(Subtitle(
-                start=float(item["start"]),
-                end=float(item["end"]),
-                text=str(item.get("text", "")),
-            ))
-        except (KeyError, TypeError, ValueError) as e:
-            raise ValueError(f"Sottotitolo {i} non valido: {e}")
+            subtitles.append(Subtitle.from_dict(item))
+        except ValueError as e:
+            raise ValueError(f"Sottotitolo {i} non valido: {e}") from e
 
     project = SubtitleProject()
     project.subtitles = subtitles
-    project.source_path = data.get("source_path") or None
+    project.source_path = str(data.get("source_path") or "")
 
     settings = data.get("settings") or {}
+    if not isinstance(settings, dict):
+        settings = {}
     return project, settings
 
 

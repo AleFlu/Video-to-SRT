@@ -2,10 +2,10 @@
 audio_player.py — Wrapper su QMediaPlayer + QAudioOutput per la riproduzione
 di file audio/video all'interno dell'editor sottotitoli.
 
-Funziona nativamente con mp4/mov/mp3/wav/m4a via AVFoundation su macOS.
-Per MKV o formati non supportati, cade in automatico sul WAV 16 kHz
-prodotto da engine.preprocess_audio (se già presente nella stessa cartella
-o in /tmp).
+Funziona nativamente con i formati supportati dal backend multimediale della
+piattaforma (vedi platform_support.native_media_exts). Per gli altri formati
+tenta comunque di caricare il file originale: non vengono mai cercati WAV
+"vicini" o temporanei, per non rischiare di riprodurre audio non correlato.
 
 Segnali pubblici:
     position_changed(ms: int)   — posizione di riproduzione aggiornata
@@ -17,11 +17,15 @@ Segnali pubblici:
 
 from __future__ import annotations
 
-import os
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Signal, Slot, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+
+import platform_support
+
+logger = logging.getLogger(__name__)
 
 
 class AudioPlayer(QObject):
@@ -67,9 +71,8 @@ class AudioPlayer(QObject):
 
     def load(self, file_path: str) -> None:
         """
-        Carica un file audio/video. Tenta prima il file originale;
-        se il formato non è tra quelli nativi macOS, cerca il WAV
-        pre-processato da engine.preprocess_audio.
+        Carica un file audio/video. In caso di errore nella risoluzione
+        della sorgente emette error_occurred.
         """
         self._is_ready = False
         self._source_path = file_path
@@ -79,9 +82,12 @@ class AudioPlayer(QObject):
             self.error_occurred.emit(f"File non trovato: {file_path}")
             return
 
-        # Cerca WAV di pre-processing per formati non nativi
-        target = self._resolve_source(path)
-        self._player.setSource(QUrl.fromLocalFile(str(target)))
+        try:
+            target = self._resolve_source(path)
+            self._player.setSource(QUrl.fromLocalFile(str(target)))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Caricamento sorgente fallito: %s", file_path)
+            self.error_occurred.emit(f"Impossibile caricare il file: {exc}")
 
     def play(self) -> None:
         if self._is_ready:
@@ -197,24 +203,9 @@ class AudioPlayer(QObject):
     @staticmethod
     def _resolve_source(path: Path) -> Path:
         """
-        Ritorna il path effettivo da caricare:
-        - Per mp4/mov/mp3/wav/m4a/aac → il file stesso (AVFoundation nativo)
-        - Per mkv/avi/flac/ogg/... → cerca un WAV pre-processato
-          (nella stessa dir o /tmp), altrimenti tenta comunque l'originale.
+        Ritorna il path effettivo da caricare. Per i formati non nativi si
+        tenta comunque l'originale (il backend potrebbe riuscire a leggerlo).
         """
-        NATIVE = {".mp4", ".mov", ".m4a", ".m4v", ".mp3", ".wav", ".aac", ".aiff"}
-        if path.suffix.lower() in NATIVE:
-            return path
-
-        # Cerca WAV prodotto da engine.preprocess_audio
-        wav_candidates = [
-            path.with_suffix(".wav"),
-            Path(os.environ.get("TMPDIR", "/tmp")) / (path.stem + "_16k.wav"),
-            Path(os.environ.get("TMPDIR", "/tmp")) / (path.stem + ".wav"),
-        ]
-        for c in wav_candidates:
-            if c.exists():
-                return c
-
-        # Fallback: prova comunque il file originale (AVFoundation potrebbe farcela)
+        if path.suffix.lower() not in platform_support.native_media_exts():
+            logger.info("Formato %s non nativo: provo il file originale", path.suffix)
         return path

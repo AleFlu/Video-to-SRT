@@ -45,8 +45,11 @@ class EditFieldCommand(QUndoCommand):
         return -1
 
     def mergeWith(self, other: QUndoCommand) -> bool:
-        # Merge solo se stessa riga+colonna (typing continuo)
+        # Si uniscono solo edit di testo (typing continuo): ogni modifica di
+        # start/end deve restare un passo di undo separato.
         if not isinstance(other, EditFieldCommand):
+            return False
+        if self.col != COL_TEXT or other.col != COL_TEXT:
             return False
         if other.row != self.row or other.col != self.col:
             return False

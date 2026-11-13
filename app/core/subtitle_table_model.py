@@ -12,30 +12,56 @@ Colonne:
 Segnala come "problematici" (tint rosso/giallo) i sottotitoli che:
   - overlap col successivo
   - end <= start
-  - CPS > 20 (troppo veloci da leggere)
+  - CPS > MAX_CPS (troppo veloci da leggere)
   - durata < 0.5s
 """
 
 from __future__ import annotations
+import math
 import re
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import (
     Qt, QAbstractTableModel, QModelIndex, Signal
 )
 from PySide6.QtGui import QColor, QBrush
 
+from core.constants import MAX_CPS, WARN_CPS, MIN_SUBTITLE_DURATION
 from core.subtitle_model import Subtitle
+
+# Alias storico (usato da codice esistente)
+MIN_DURATION = MIN_SUBTITLE_DURATION
+
+# ---- Colori ----
+# Colori predefiniti, usati finché non viene iniettato un provider diverso
+# con set_color_provider() (es. collegato ai token del tema).
+DEFAULT_COLORS: Dict[str, QColor] = {
+    "row_error_bg":   QColor(231, 76, 60, 40),
+    "row_warning_bg": QColor(243, 156, 18, 30),
+    "cps_error_fg":   QColor("#ff6b6b"),
+    "cps_warning_fg": QColor("#f39c12"),
+    "index_fg":       QColor("#6a6a7a"),
+}
+
+ColorProvider = Callable[[str], Optional[QColor]]
+
+
+def default_color_provider(name: str) -> Optional[QColor]:
+    """Provider di default: restituisce i colori di DEFAULT_COLORS."""
+    return DEFAULT_COLORS.get(name)
+
+# ---- Codici dei problemi ----
+ISSUE_END_BEFORE_START = "end_before_start"
+ISSUE_TOO_SHORT = "too_short"
+ISSUE_TOO_FAST = "too_fast"
+ISSUE_OVERLAP = "overlap"
+ISSUE_EMPTY = "empty"
+
+# Codici che rendono la riga un errore (gli altri sono avvisi)
+ERROR_ISSUE_CODES = frozenset({ISSUE_END_BEFORE_START, ISSUE_OVERLAP, ISSUE_EMPTY})
 
 
 # ---- Parsing timestamp ----
-_TS_RE = re.compile(
-    r"^\s*(?:(\d+):)?(\d{1,2}):(\d{1,2})[\.,](\d{1,3})\s*$"
-    r"|^\s*(\d+)[\.,](\d{1,3})\s*$"              # formato "12.345" (secondi)
-    r"|^\s*(\d{1,2}):(\d{1,2})[\.,](\d{1,3})\s*$"  # mm:ss.ms
-)
-
-
 def parse_timestamp(text: str) -> Optional[float]:
     """
     Parsa formati ammessi:
@@ -43,7 +69,7 @@ def parse_timestamp(text: str) -> Optional[float]:
       - MM:SS.mmm
       - 12.345 (secondi)
       - 12,345
-    Ritorna None se non parsabile.
+    Ritorna None se non parsabile, negativo, nan o infinito.
     """
     if text is None:
         return None
@@ -71,9 +97,12 @@ def parse_timestamp(text: str) -> Optional[float]:
 
     # secondi in decimale
     try:
-        return float(s)
+        value = float(s)
     except ValueError:
         return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
 
 
 def format_timestamp(seconds: float) -> str:
@@ -103,12 +132,6 @@ COL_TEXT  = 5
 COLUMN_HEADERS = ["#", "Start", "End", "Durata", "CPS", "Testo"]
 
 
-# Soglie per warning
-MAX_CPS = 20.0           # sottotitoli più veloci di così sono difficili da leggere
-WARN_CPS = 17.0
-MIN_DURATION = 0.5
-
-
 class SubtitleTableModel(QAbstractTableModel):
     """Modello Qt per la lista di Subtitle. Editing + validazione + flag issues."""
 
@@ -119,6 +142,7 @@ class SubtitleTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._subs: List[Subtitle] = list(subtitles) if subtitles else []
         self._edit_handler = None  # Callable[[row, col, value], bool]
+        self._color_provider: ColorProvider = default_color_provider
 
     # ---- API ----
     def subtitles(self) -> List[Subtitle]:
@@ -171,44 +195,76 @@ class SubtitleTableModel(QAbstractTableModel):
                 self.dataChanged.emit(top, bot, [Qt.BackgroundRole, Qt.ToolTipRole])
 
     # ---- Problems detection ----
+    def row_issue_codes(self, row: int) -> list[str]:
+        """Codici dei problemi della riga (vedi costanti ISSUE_*), in ordine stabile."""
+        if not (0 <= row < len(self._subs)):
+            return []
+        codes: list[str] = []
+        sub = self._subs[row]
+
+        if sub.end <= sub.start:
+            codes.append(ISSUE_END_BEFORE_START)
+        if sub.duration < MIN_SUBTITLE_DURATION and sub.end > sub.start:
+            codes.append(ISSUE_TOO_SHORT)
+
+        text_len = len(sub.text.strip())
+        if sub.duration > 0 and text_len > 0 and text_len / sub.duration > MAX_CPS:
+            codes.append(ISSUE_TOO_FAST)
+
+        # Overlap col successivo
+        if row + 1 < len(self._subs):
+            if sub.end > self._subs[row + 1].start + 0.001:
+                codes.append(ISSUE_OVERLAP)
+
+        if not sub.text.strip():
+            codes.append(ISSUE_EMPTY)
+        return codes
+
+    def _issue_message(self, code: str, sub: Subtitle) -> str:
+        if code == ISSUE_END_BEFORE_START:
+            return "End precede o coincide con Start"
+        if code == ISSUE_TOO_SHORT:
+            return (f"Durata troppo breve ({sub.duration:.2f}s < "
+                    f"{MIN_SUBTITLE_DURATION}s)")
+        if code == ISSUE_TOO_FAST:
+            cps = len(sub.text.strip()) / sub.duration
+            return f"Troppo veloce ({cps:.1f} CPS, max {MAX_CPS:.0f})"
+        if code == ISSUE_OVERLAP:
+            return "Overlap con il sottotitolo successivo"
+        return "Testo vuoto"
+
     def row_issues(self, row: int) -> list[str]:
         """Restituisce lista di problemi per la riga (stringhe leggibili)."""
         if not (0 <= row < len(self._subs)):
             return []
-        issues = []
         sub = self._subs[row]
-
-        if sub.end <= sub.start:
-            issues.append("End precede o coincide con Start")
-        if sub.duration < MIN_DURATION and sub.end > sub.start:
-            issues.append(f"Durata troppo breve ({sub.duration:.2f}s < {MIN_DURATION}s)")
-
-        text_len = len(sub.text.strip())
-        if sub.duration > 0 and text_len > 0:
-            cps = text_len / sub.duration
-            if cps > MAX_CPS:
-                issues.append(f"Troppo veloce ({cps:.1f} CPS, max {MAX_CPS:.0f})")
-
-        # Overlap col successivo
-        if row + 1 < len(self._subs):
-            nxt = self._subs[row + 1]
-            if sub.end > nxt.start + 0.001:
-                issues.append("Overlap con il sottotitolo successivo")
-
-        if not sub.text.strip():
-            issues.append("Testo vuoto")
-
-        return issues
+        return [self._issue_message(c, sub) for c in self.row_issue_codes(row)]
 
     def row_severity(self, row: int) -> str:
-        """'error' | 'warning' | 'ok'."""
-        issues = self.row_issues(row)
-        if not issues:
+        """'error' | 'warning' | 'ok' (basato sui codici, non sui messaggi)."""
+        codes = self.row_issue_codes(row)
+        if not codes:
             return "ok"
-        error_keywords = ("precede", "vuoto", "Overlap")
-        if any(k in "|".join(issues) for k in error_keywords):
+        if any(c in ERROR_ISSUE_CODES for c in codes):
             return "error"
         return "warning"
+
+    # ---- Colori ----
+    def set_color_provider(self, provider: Optional[ColorProvider]):
+        """
+        Imposta il provider dei colori: `provider(name) -> QColor | None`.
+        Nomi usati: row_error_bg, row_warning_bg, cps_error_fg, cps_warning_fg, index_fg.
+        Con None si ripristina il provider di default.
+        """
+        self._color_provider = provider or default_color_provider
+        if self._subs:
+            top = self.index(0, 0)
+            bot = self.index(len(self._subs) - 1, self.columnCount() - 1)
+            self.dataChanged.emit(top, bot, [Qt.BackgroundRole, Qt.ForegroundRole])
+
+    def _brush(self, name: str) -> Optional[QBrush]:
+        color = self._color_provider(name)
+        return QBrush(color) if color is not None else None
 
     # ---- QAbstractTableModel API ----
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -266,22 +322,22 @@ class SubtitleTableModel(QAbstractTableModel):
 
         if role == Qt.ForegroundRole:
             if col == COL_INDEX:
-                return QBrush(QColor("#6a6a7a"))
+                return self._brush("index_fg")
             if col == COL_CPS:
                 t = sub.text.strip()
                 if sub.duration > 0 and t:
                     cps = len(t) / sub.duration
                     if cps > MAX_CPS:
-                        return QBrush(QColor("#ff6b6b"))
+                        return self._brush("cps_error_fg")
                     if cps > WARN_CPS:
-                        return QBrush(QColor("#f39c12"))
+                        return self._brush("cps_warning_fg")
 
         if role == Qt.BackgroundRole:
             sev = self.row_severity(row)
             if sev == "error":
-                return QBrush(QColor(231, 76, 60, 40))
+                return self._brush("row_error_bg")
             if sev == "warning":
-                return QBrush(QColor(243, 156, 18, 30))
+                return self._brush("row_warning_bg")
 
         if role == Qt.ToolTipRole:
             issues = self.row_issues(row)
@@ -323,7 +379,8 @@ class SubtitleTableModel(QAbstractTableModel):
         sub = self._subs[row]
 
         if col == COL_TEXT:
-            new_text = str(value).strip()
+            # strip solo ai bordi: gli a capo interni sono contenuto del sottotitolo
+            new_text = str(value).replace("\r\n", "\n").strip()
             if new_text == sub.text:
                 return False
             sub.text = new_text

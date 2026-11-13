@@ -30,6 +30,7 @@ from PySide6.QtWidgets import QWidget, QSizePolicy
 
 from core.subtitle_model import Subtitle
 from ui import theme
+import platform_support
 
 
 # -----------------------------------------------------------------------
@@ -307,7 +308,7 @@ class WaveformWidget(QWidget):
         if not self._status_msg:
             return
         painter.setPen(QColor(theme.c("muted")))
-        painter.setFont(QFont("SF Pro Text", 11))
+        painter.setFont(QFont(platform_support.ui_font_family(), 11))
         painter.drawText(QRect(0, 0, w, h), Qt.AlignCenter, self._status_msg)
 
     def _draw_waveform(self, painter: QPainter, w: int, h: int):
@@ -378,7 +379,7 @@ class WaveformWidget(QWidget):
 
         block_h = max(16, h // 4)
         block_y = h - block_h - 2
-        font = QFont("SF Pro Text", 9)
+        font = QFont(platform_support.ui_font_family(), 9)
         painter.setFont(font)
         fm = QFontMetrics(font)
 
@@ -462,7 +463,7 @@ class WaveformWidget(QWidget):
 
         tick_color = QColor(theme.c("faint"))
         tick_label = QColor(theme.c("muted"))
-        font = QFont("SF Pro Mono", 8)
+        font = QFont(platform_support.mono_font_family(), 8)
         painter.setFont(font)
         painter.setPen(tick_color)
 

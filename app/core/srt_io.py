@@ -1,43 +1,92 @@
 """
-srt_io.py — Lettura e scrittura file SRT.
+srt_io.py — Lettura e scrittura file di sottotitoli (SRT, VTT, TXT, ASS).
 
-Wrapper attorno alle funzioni esistenti in engine.py, così l'editor
-può rigenerare SRT dopo le modifiche dell'utente senza rifare la
-trascrizione.
+Permette all'editor di rigenerare i file dopo le modifiche dell'utente senza
+rifare la trascrizione. Tutte le scritture sono atomiche.
 """
 
 from __future__ import annotations
+import logging
 import os
+import re
+import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from core.subtitle_model import Subtitle
 from core.constants import MAX_CHARS_PER_LINE
 
+log = logging.getLogger(__name__)
 
-def format_timestamp_srt(seconds: float) -> str:
+# Timestamp SRT: ore 1+ cifre, millisecondi 1-3 cifre, separatore "," o "."
+# Dopo il secondo timestamp sono tollerati tag di posizione (es. "X1:10 Y1:20").
+_TS_RE = re.compile(
+    r"^\s*(\d+):(\d{1,2}):(\d{1,2})[,.](\d{1,3})"
+    r"\s*-->\s*"
+    r"(\d+):(\d{1,2}):(\d{1,2})[,.](\d{1,3})"
+)
+_BLOCK_SPLIT_RE = re.compile(r"\n[ \t]*\n")
+
+
+def _split_ms(seconds: float) -> Tuple[int, int, int, int]:
+    """Scompone i secondi in (ore, minuti, secondi, millisecondi), arrotondando al ms."""
     if seconds < 0:
         seconds = 0.0
-    total_ms = round(seconds * 1000)
-    ms = total_ms % 1000
-    total_secs = total_ms // 1000
-    secs = total_secs % 60
-    total_mins = total_secs // 60
-    mins = total_mins % 60
-    hrs = total_mins // 60
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
+    total_ms = int(round(seconds * 1000))
+    total_s, ms = divmod(total_ms, 1000)
+    total_m, secs = divmod(total_s, 60)
+    hrs, mins = divmod(total_m, 60)
+    return hrs, mins, secs, ms
 
 
-def wrap_subtitle_text(text: str) -> str:
-    """Spezza su max 2 righe da ~42 caratteri cercando uno spazio vicino al centro."""
-    if len(text) <= MAX_CHARS_PER_LINE:
+def _write_text(path: str, text: str) -> None:
+    """Scrive `text` in modo atomico: file temporaneo nella stessa cartella + os.replace."""
+    parent = Path(path).parent
+    os.makedirs(str(parent), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_", suffix=Path(path).suffix)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        # mkstemp crea il file con permessi 0600: si ripristinano quelli usuali
+        try:
+            mode = os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644
+            os.chmod(tmp, mode)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def format_timestamp_srt(seconds: float) -> str:
+    h, m, s, ms = _split_ms(seconds)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def wrap_subtitle_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> str:
+    """
+    Spezza il testo su massimo 2 righe.
+
+    Il testo già su più righe viene rispettato. Altrimenti, se supera `max_chars`,
+    si spezza allo spazio che rende le due righe più bilanciate.
+    """
+    if "\n" in text or len(text) <= max_chars:
         return text
-    mid = len(text) // 2
-    for offset in range(0, mid):
-        for pos in [mid + offset, mid - offset]:
-            if 0 <= pos < len(text) and text[pos] == " ":
-                return text[:pos] + "\n" + text[pos + 1:]
-    return text
+    best = -1
+    best_diff = len(text)
+    for pos, ch in enumerate(text):
+        if ch != " " or pos == 0 or pos == len(text) - 1:
+            continue
+        diff = abs(pos - (len(text) - pos - 1))
+        if diff < best_diff:
+            best, best_diff = pos, diff
+    if best < 0:
+        return text
+    return text[:best] + "\n" + text[best + 1:]
 
 
 def subtitles_to_srt(subtitles: List[Subtitle]) -> str:
@@ -55,25 +104,20 @@ def subtitles_to_srt(subtitles: List[Subtitle]) -> str:
 
 
 def write_srt(subtitles: List[Subtitle], output_path: str):
-    os.makedirs(str(Path(output_path).parent), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(subtitles_to_srt(subtitles))
+    _write_text(output_path, subtitles_to_srt(subtitles))
 
 
 # ── Formati aggiuntivi (C3) ──────────────────────────────────────────────────
 
 def format_timestamp_vtt(seconds: float) -> str:
     """HH:MM:SS.mmm per WebVTT."""
-    if seconds < 0:
-        seconds = 0.0
-    total_ms = round(seconds * 1000)
-    ms = total_ms % 1000
-    total_s = total_ms // 1000
-    secs = total_s % 60
-    total_m = total_s // 60
-    mins = total_m % 60
-    hrs = total_m // 60
-    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{ms:03d}"
+    h, m, sec, ms = _split_ms(seconds)
+    return f"{h:02d}:{m:02d}:{sec:02d}.{ms:03d}"
+
+
+def _vtt_escape(text: str) -> str:
+    """Evita che il testo sia interpretato come cue timing o markup WebVTT."""
+    return text.replace("-->", "->").replace("&", "&amp;").replace("<", "&lt;")
 
 
 def subtitles_to_vtt(subtitles: List[Subtitle]) -> str:
@@ -88,7 +132,7 @@ def subtitles_to_vtt(subtitles: List[Subtitle]) -> str:
         end   = format_timestamp_vtt(sub.end)
         lines.append(f"{idx}")
         lines.append(f"{start} --> {end}")
-        lines.append(wrap_subtitle_text(text))
+        lines.append(_vtt_escape(wrap_subtitle_text(text)))
         lines.append("")
         idx += 1
     return "\n".join(lines)
@@ -126,22 +170,17 @@ def subtitles_to_ass(subtitles: List[Subtitle], title: str = "Video → SRT") ->
     )
 
     def _ass_ts(s: float) -> str:
-        s = max(0.0, s)
-        total_cs = round(s * 100)
-        cs = total_cs % 100
-        total_sec = total_cs // 100
-        sec = total_sec % 60
-        total_min = total_sec // 60
-        mins = total_min % 60
-        hrs = total_min // 60
-        return f"{hrs}:{mins:02d}:{sec:02d}.{cs:02d}"
+        # Centisecondi: si arrotonda prima per evitare riporti a 100
+        h, m, sec, ms = _split_ms(round(max(0.0, s) * 100) / 100.0)
+        return f"{h}:{m:02d}:{sec:02d}.{ms // 10:02d}"
 
     events = []
     for sub in subtitles:
         text = sub.text.strip()
         if not text:
             continue
-        ass_text = text.replace("\n", "\\N")
+        ass_text = (text.replace("{", "\\{").replace("}", "\\}")
+                    .replace("\n", "\\N"))
         events.append(
             f"Dialogue: 0,{_ass_ts(sub.start)},{_ass_ts(sub.end)},"
             f"Default,,0,0,0,,{ass_text}"
@@ -150,21 +189,15 @@ def subtitles_to_ass(subtitles: List[Subtitle], title: str = "Video → SRT") ->
 
 
 def write_vtt(subtitles: List[Subtitle], output_path: str):
-    os.makedirs(str(Path(output_path).parent), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(subtitles_to_vtt(subtitles))
+    _write_text(output_path, subtitles_to_vtt(subtitles))
 
 
 def write_txt(subtitles: List[Subtitle], output_path: str):
-    os.makedirs(str(Path(output_path).parent), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(subtitles_to_txt(subtitles))
+    _write_text(output_path, subtitles_to_txt(subtitles))
 
 
 def write_ass(subtitles: List[Subtitle], output_path: str, title: str = ""):
-    os.makedirs(str(Path(output_path).parent), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(subtitles_to_ass(subtitles, title or Path(output_path).stem))
+    _write_text(output_path, subtitles_to_ass(subtitles, title or Path(output_path).stem))
 
 
 def unique_output_path(path: str) -> str:
@@ -183,48 +216,43 @@ def default_output_for(source: str) -> str:
     return str(Path(source).with_suffix(".srt"))
 
 
+def _ts_to_sec(h: str, m: str, s: str, frac: str) -> float:
+    """I millisecondi (1-3 cifre) sono una frazione decimale: "5" = 0,5 s."""
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(frac.ljust(3, "0")) / 1000.0
+
+
 def parse_srt(path: str) -> List[Subtitle]:
     """
     Legge un file .srt e restituisce una lista di Subtitle.
-    Formato atteso:
-        1
-        00:00:01,000 --> 00:00:03,500
-        Testo del sottotitolo
 
-    Lancia ValueError se il file non contiene blocchi validi.
+    Tollera BOM, CRLF, righe "vuote" con spazi, millisecondi a 1-3 cifre con
+    "," o ".", ore a più cifre, blocchi senza indice e tag di posizione dopo
+    il timestamp. I blocchi malformati vengono saltati.
+
+    Lancia ValueError se il file non contiene alcun sottotitolo valido.
     """
-    import re
-
-    _TS = re.compile(
-        r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})"
-        r"\s*-->\s*"
-        r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})"
-    )
-
-    def _to_sec(h, m, s, ms) -> float:
-        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
-
     with open(path, "r", encoding="utf-8-sig") as f:
         content = f.read()
+    content = content.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
 
     subtitles: List[Subtitle] = []
-    blocks = re.split(r"\n{2,}", content.strip())
-    for block in blocks:
-        lines = block.strip().splitlines()
-        if len(lines) < 2:
+    for block in _BLOCK_SPLIT_RE.split(content.strip()):
+        lines = block.strip("\n").split("\n")
+        # Il timestamp è sulla prima riga, o sulla seconda se c'è un indice
+        ts_idx = -1
+        m = None
+        for i in (0, 1):
+            if i < len(lines):
+                m = _TS_RE.match(lines[i])
+                if m:
+                    ts_idx = i
+                    break
+        if m is None:
+            log.debug("Blocco SRT senza timestamp valido, saltato")
             continue
-        # Salta indice numerico se presente
-        start_line = 0
-        if lines[0].strip().isdigit():
-            start_line = 1
-        if start_line >= len(lines):
-            continue
-        m = _TS.match(lines[start_line].strip())
-        if not m:
-            continue
-        start = _to_sec(*m.group(1, 2, 3, 4))
-        end   = _to_sec(*m.group(5, 6, 7, 8))
-        text  = "\n".join(lines[start_line + 1:]).strip()
+        start = _ts_to_sec(*m.group(1, 2, 3, 4))
+        end = _ts_to_sec(*m.group(5, 6, 7, 8))
+        text = "\n".join(ln.rstrip() for ln in lines[ts_idx + 1:]).strip()
         if text:
             subtitles.append(Subtitle(start=start, end=end, text=text))
 

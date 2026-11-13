@@ -18,6 +18,7 @@ Layout:
 """
 
 from __future__ import annotations
+import logging
 from pathlib import Path
 from typing import List
 
@@ -34,6 +35,9 @@ from core.constants import SUPPORTED_VIDEO_EXTS
 from ui.waveform_widget import WaveformWidget
 from ui.transport_bar import TransportBar
 from ui import theme
+import platform_support
+
+logger = logging.getLogger(__name__)
 
 
 _PREVIEW_VIDEO    = 0
@@ -72,7 +76,7 @@ class PreviewArea(QWidget):
         tc_layout.setSpacing(14)
 
         self.timecode_lbl = QLabel("00:00.000")
-        font = QFont("SF Mono", 14)
+        font = QFont(platform_support.mono_font_family(), 14)
         font.setStyleHint(QFont.Monospace)
         font.setWeight(QFont.DemiBold)
         self.timecode_lbl.setFont(font)
@@ -99,8 +103,8 @@ class PreviewArea(QWidget):
         if self._video_player_view is not None:
             try:
                 self.player._player.setVideoOutput(self._video_player_view.video_item())
-            except (AttributeError, Exception):
-                pass
+            except Exception:  # noqa: BLE001
+                logger.warning("Collegamento uscita video fallito", exc_info=True)
 
         # Slot 1: WaveformWidget
         self.waveform = WaveformWidget()
@@ -180,13 +184,26 @@ class PreviewArea(QWidget):
             self._subtitle_overlay = view   # stessa API: set_text()
             return view
 
-        except (ImportError, Exception):
+        except ImportError:
             self._qvideo_widget = None
             self._subtitle_overlay = None
             self._video_player_view = None
             placeholder = QLabel("Video preview non disponibile\n(PySide6-QtMultimediaWidgets non installato)")
             placeholder.setAlignment(Qt.AlignCenter)
-            placeholder.setStyleSheet("color: #5a5a6a; background: #0a0a0d;")
+            placeholder.setStyleSheet(
+                f"color: {theme.c('muted')}; background: {theme.c('surface')};"
+            )
+            return placeholder
+        except Exception:  # noqa: BLE001
+            logger.exception("Creazione del widget video fallita")
+            self._qvideo_widget = None
+            self._subtitle_overlay = None
+            self._video_player_view = None
+            placeholder = QLabel("Errore nell'inizializzazione dell'anteprima video\n(vedi il file di log)")
+            placeholder.setAlignment(Qt.AlignCenter)
+            placeholder.setStyleSheet(
+                f"color: {theme.c('muted')}; background: {theme.c('surface')};"
+            )
             return placeholder
 
     # ── API pubblica ───────────────────────────────────────────────────────────
@@ -201,6 +218,12 @@ class PreviewArea(QWidget):
         if self._subtitle_overlay is not None:
             self._subtitle_overlay.set_text("")
         self.player.load(file_path)
+        if platform_support.IS_WIN and self._video_player_view is not None:
+            # Su Windows l'uscita video va ricollegata a ogni caricamento
+            try:
+                self.player._player.setVideoOutput(self._video_player_view.video_item())
+            except Exception:  # noqa: BLE001
+                logger.warning("Ricollegamento uscita video fallito", exc_info=True)
         self.file_lbl.setText(Path(file_path).name)
 
         if _is_video(file_path) and self._qvideo_widget is not None:
@@ -208,8 +231,7 @@ class PreviewArea(QWidget):
         else:
             # Fallback waveform
             self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
-            wav_path = self._resolve_wav(file_path)
-            self.waveform.load_audio(wav_path)
+            self.waveform.load_audio(file_path)
 
     # Alias mantenuto per compatibilità con codice esistente
     def load_audio(self, file_path: str):
@@ -252,24 +274,6 @@ class PreviewArea(QWidget):
         self._subtitle_overlay.set_text(text)
 
     # ── Utility ────────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _resolve_wav(file_path: str) -> str:
-        """
-        Cerca un file WAV pre-estratto dal worker (engine.py estrae {stem}_16k.wav in TMPDIR).
-        Fallback: file originale.
-        """
-        import os
-        path = Path(file_path)
-        candidates = [
-            path.with_suffix(".wav"),
-            Path(os.environ.get("TMPDIR", "/tmp")) / (path.stem + "_16k.wav"),
-            Path(os.environ.get("TMPDIR", "/tmp")) / (path.stem + ".wav"),
-        ]
-        for c in candidates:
-            if c.exists():
-                return str(c)
-        return file_path
 
 
 class _VideoPlayerView(QGraphicsView):

@@ -42,6 +42,9 @@ from ui.find_replace_dialog import FindReplaceDialog
 from ui.transport_bar import TransportBar
 from ui.waveform_widget import WaveformWidget
 from ui import theme
+import platform_support
+
+_sl = platform_support.shortcut_label
 
 
 class SubtitleTimeline(QWidget):
@@ -129,10 +132,10 @@ class SubtitleTimeline(QWidget):
         # ── Undo / Redo ────────────────────────────────────────────────────────
         self.act_undo = self.undo_stack.createUndoAction(self, "↩")
         self.act_undo.setShortcut(QKeySequence.Undo)
-        self.act_undo.setToolTip("Annulla  ⌘Z")
+        self.act_undo.setToolTip(f"Annulla  {_sl('Ctrl+Z')}")
         self.act_redo = self.undo_stack.createRedoAction(self, "↪")
         self.act_redo.setShortcut(QKeySequence.Redo)
-        self.act_redo.setToolTip("Ripeti  ⌘⇧Z")
+        self.act_redo.setToolTip(f"Ripeti  {_sl('Ctrl+Shift+Z')}")
         tb.addAction(self.act_undo)
         tb.addAction(self.act_redo)
         tb.addSeparator()
@@ -147,15 +150,15 @@ class SubtitleTimeline(QWidget):
             self._tb_buttons.append(b)
             return b
 
-        btn_split = _tb_btn("÷ Dividi", "Dividi sottotitolo al cursore  ⌘K", "Ctrl+K")
+        btn_split = _tb_btn("÷ Dividi", f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}", "Ctrl+K")
         btn_split.clicked.connect(self._split_current)
         tb.addWidget(btn_split)
 
-        btn_merge = _tb_btn("⊔ Unisci", "Unisci al successivo  ⌘M", "Ctrl+M")
+        btn_merge = _tb_btn("⊔ Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}", "Ctrl+M")
         btn_merge.clicked.connect(self._merge_next)
         tb.addWidget(btn_merge)
 
-        btn_del = _tb_btn("× Elimina", "Elimina selezionati  ⌘⇧K", "Ctrl+Shift+K")
+        btn_del = _tb_btn("× Elimina", f"Elimina selezionati  {_sl('Ctrl+Shift+K')}", "Ctrl+Shift+K")
         btn_del.clicked.connect(self._delete_selected)
         tb.addWidget(btn_del)
 
@@ -173,7 +176,7 @@ class SubtitleTimeline(QWidget):
         self.act_toggle_insp.setCheckable(True)
         self.act_toggle_insp.setChecked(True)
         self.act_toggle_insp.setShortcut("Ctrl+I")
-        self.act_toggle_insp.setToolTip("Mostra/nascondi Ispettore  ⌘I")
+        self.act_toggle_insp.setToolTip(f"Mostra/nascondi Ispettore  {_sl('Ctrl+I')}")
         # Il toggle_insp ora controlla l'inspector esterno — segnale gestito da workspace
         tb.addAction(self.act_toggle_insp)
 
@@ -198,7 +201,7 @@ class SubtitleTimeline(QWidget):
 
         # ── Esporta (btn + freccia dropdown) ──────────────────────────────────
         self._export_btn = QPushButton("↑ Esporta SRT")
-        self._export_btn.setToolTip("Esporta SRT  ⌘S")
+        self._export_btn.setToolTip(f"Esporta SRT  {_sl('Ctrl+S')}")
         self._export_btn.setFixedHeight(28)
         tb.addWidget(self._export_btn)
 

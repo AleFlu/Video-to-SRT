@@ -7,8 +7,6 @@ Può essere aperto come finestra standalone (da MainWindow) o come widget.
 
 from __future__ import annotations
 import os
-import platform
-import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -17,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QFileDialog, QMessageBox, QComboBox
 )
 
+import platform_support
 from core.srt_io import write_srt, write_vtt, write_txt, write_ass, default_output_for, unique_output_path
 from core.v2srt_io import save_project
 
@@ -249,13 +248,4 @@ class ExportPanel(QWidget):
     def _open_folder(self):
         if not self._last_saved or not os.path.exists(self._last_saved):
             return
-        try:
-            p = platform.system()
-            if p == "Darwin":
-                subprocess.run(["open", "-R", self._last_saved])
-            elif p == "Windows":
-                subprocess.run(["explorer", "/select,", self._last_saved])
-            else:
-                subprocess.run(["xdg-open", str(Path(self._last_saved).parent)])
-        except Exception:
-            pass
+        platform_support.reveal_in_file_manager(self._last_saved)

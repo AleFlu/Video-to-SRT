@@ -5,9 +5,11 @@ Splash screen con icona → caricamento progressivo in thread → MainWindow.
 """
 
 from __future__ import annotations
+import logging
+import math
 import sys
 import threading
-import math
+import traceback
 from pathlib import Path
 
 # PATH setup
@@ -15,12 +17,16 @@ script_dir = Path(__file__).resolve().parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QRectF, QPointF
+from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QRectF, QPointF
 from PySide6.QtGui import (
     QColor, QPainter, QFont, QLinearGradient, QBrush,
     QPainterPath, QPixmap, QIcon,
 )
-from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
+
+import platform_support
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -106,7 +112,7 @@ def _draw_icon_pixmap(size: int) -> QPixmap:
 
     # Testo "SRT"
     font_size = max(8, int(s * 0.175))
-    font = QFont("Helvetica Neue", font_size)
+    font = QFont(platform_support.ui_font_family(), font_size)
     font.setBold(True)
     font.setLetterSpacing(QFont.AbsoluteSpacing, s * 0.025)
     p.setFont(font)
@@ -126,45 +132,33 @@ def _draw_icon_pixmap(size: int) -> QPixmap:
     return pix
 
 
-def _make_app_icon() -> QIcon:
-    """Costruisce un QIcon multi-risoluzione dall'icona disegnata."""
-    # Prima cerca il file .icns se già generato
-    icns = script_dir / "assets" / "app.icns"
-    if icns.exists():
-        return QIcon(str(icns))
+def _icon_file() -> Path | None:
+    """Percorso del file icona della piattaforma, se presente in assets/."""
+    return platform_support.app_icon_path(script_dir / "assets")
 
-    # Altrimenti genera in memoria
+
+def _icon_pixmap(size: int) -> QPixmap:
+    """Pixmap dell'icona dal file se esiste, altrimenti disegnata in memoria."""
+    path = _icon_file()
+    if path is not None:
+        pix = QIcon(str(path)).pixmap(size, size)
+        if not pix.isNull():
+            return pix
+    return _draw_icon_pixmap(size)
+
+
+def _make_app_icon() -> QIcon:
+    """Costruisce un QIcon: dal file se esiste, altrimenti multi-risoluzione in memoria."""
+    path = _icon_file()
+    if path is not None:
+        icon = QIcon(str(path))
+        if not icon.isNull():
+            return icon
+
     icon = QIcon()
     for sz in (16, 32, 64, 128, 256, 512):
         icon.addPixmap(_draw_icon_pixmap(sz))
     return icon
-
-
-def _set_dock_icon_macos(pixmap: QPixmap) -> None:
-    """
-    Imposta l'icona Dock di macOS a livello di processo (NSApp).
-    In modalità sviluppo (python main.py) questo sostituisce l'icona Python
-    nel Dock per tutta la durata dell'app, inclusa la fase di chiusura.
-    Fallisce silenziosamente su non-macOS o se pyobjc non è disponibile.
-    """
-    if sys.platform != "darwin":
-        return
-    try:
-        from AppKit import NSApplication, NSData, NSImage
-        from PySide6.QtCore import QBuffer, QIODevice
-
-        buf = QBuffer()
-        buf.open(QIODevice.WriteOnly)
-        pixmap.save(buf, "PNG")
-        buf.close()
-        png_bytes = bytes(buf.data())
-
-        ns_img = NSImage.alloc().initWithData_(
-            NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
-        )
-        NSApplication.sharedApplication().setApplicationIconImage_(ns_img)
-    except Exception:
-        pass  # Non critico — l'icona Dock rimarrà quella di Python
 
 
 # ============================================================
@@ -236,20 +230,20 @@ def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
     # Titolo
     text_x = icon_x + icon_size + 20
     p.setPen(QColor("#e4e4ef"))
-    p.setFont(QFont("Helvetica Neue", 26, QFont.Bold))
+    p.setFont(QFont(platform_support.ui_font_family(), 26, QFont.Bold))
     p.drawText(QRectF(text_x, icon_y + 2, w - text_x - 30, 40),
                Qt.AlignLeft | Qt.AlignVCenter, "Video → SRT")
 
     # Sottotitolo
     p.setPen(QColor("#6a6a8a"))
-    p.setFont(QFont("Helvetica Neue", 12))
+    p.setFont(QFont(platform_support.ui_font_family(), 12))
     p.drawText(QRectF(text_x, icon_y + 44, w - text_x - 30, 24),
                Qt.AlignLeft | Qt.AlignVCenter,
                "Trascrizione automatica italiana · Editor integrato")
 
     # Versione
     p.setPen(QColor("#3a3a5a"))
-    p.setFont(QFont("Helvetica Neue", 10))
+    p.setFont(QFont(platform_support.ui_font_family(), 10))
     p.drawText(QRectF(0, h - 22, w - 16, 16),
                Qt.AlignRight | Qt.AlignVCenter, "v2.0")
 
@@ -258,8 +252,10 @@ def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
 
 
 class SplashState(QObject):
+    """Segnali emessi dal thread worker; i ricevitori vivono nel thread GUI."""
+
     step_changed = Signal(int, str)
-    finished     = Signal(bool, bool)   # ffmpeg_ok, model_ok
+    finished     = Signal(bool, str)    # ok, messaggio di errore (vuoto se ok)
 
 
 class Splash(QSplashScreen):
@@ -301,7 +297,7 @@ class Splash(QSplashScreen):
 
         # Messaggio
         painter.setPen(QColor("#6a6a8a"))
-        painter.setFont(QFont("Helvetica Neue", 11))
+        painter.setFont(QFont(platform_support.ui_font_family(), 11))
         painter.drawText(
             QRectF(track_x, track_y + 12, track_w, 22),
             Qt.AlignLeft | Qt.AlignVCenter,
@@ -312,9 +308,58 @@ class Splash(QSplashScreen):
 # ============================================================
 # Main
 # ============================================================
+class _StartupController(QObject):
+    """
+    Vive nel thread GUI: riceve (in coda) i segnali del worker di avvio,
+    chiude lo splash, crea la MainWindow o mostra l'errore.
+    """
+
+    def __init__(self, app: QApplication, splash: Splash, app_icon: QIcon,
+                 result: dict, parent: QObject | None = None):
+        super().__init__(parent)
+        self._app = app
+        self._splash = splash
+        self._icon = app_icon
+        self._result = result
+        self.window = None
+
+    @Slot(int, str)
+    def on_step(self, idx: int, msg: str) -> None:
+        self._splash.set_step(idx, msg)
+
+    @Slot(bool, str)
+    def on_finished(self, ok: bool, error: str) -> None:
+        if not ok:
+            self._splash.close()
+            logger.error("Avvio fallito: %s", error)
+            QMessageBox.critical(
+                None, "Video → SRT",
+                "Impossibile avviare l'applicazione.\n\n" + (error or "Errore sconosciuto"),
+            )
+            self._app.exit(1)
+            return
+
+        from ui.main_window import MainWindow
+        win = MainWindow(ffmpeg_ok=self._result["ffmpeg"], model_ok=self._result["model"])
+        win.setWindowIcon(self._icon)
+        self.window = win
+
+        # Finestra principale solo dopo la chiusura dello splash; il dialog di
+        # ripristino autosave va mostrato dopo, con lo splash già chiuso.
+        def _show_main():
+            self._splash.close()
+            win.show()
+            QTimer.singleShot(0, win._check_autosave_restore)
+
+        QTimer.singleShot(300, _show_main)
+
+
 def main():
     import multiprocessing
     multiprocessing.freeze_support()
+
+    log_path = platform_support.configure_logging()
+    logger.info("Avvio Video → SRT (log: %s)", log_path)
 
     app = QApplication(sys.argv)
     app.setApplicationName("Video → SRT")
@@ -325,68 +370,54 @@ def main():
     app_icon = _make_app_icon()
     app.setWindowIcon(app_icon)
 
-    # Imposta icona a livello di processo NSApp — sovrascrive l'icona Python nel Dock
-    # in modalità sviluppo (python main.py) e la mantiene fino alla chiusura del processo.
-    _set_dock_icon_macos(_draw_icon_pixmap(512))
+    # Icona Dock a livello di processo (solo macOS; no-op altrove)
+    platform_support.set_dock_icon(_icon_pixmap(512))
 
     # Stylesheet globale — applica il tema salvato (default scuro)
     from PySide6.QtCore import QSettings
     from ui import theme as _theme
+    if platform_support.IS_WIN:
+        app.setStyle("Fusion")
     saved_theme = QSettings("VideoSRT", "v2").value("theme", "dark")
     if saved_theme not in ("dark", "light"):
         saved_theme = "dark"
     _theme.apply_theme(app, saved_theme)
 
     # ---- Splash ----
-    # Usa il pixmap 128px dell'icona per la splash
-    icon_pix_for_splash = _draw_icon_pixmap(128)
-    splash = Splash(icon_pix_for_splash)
+    splash = Splash(_icon_pixmap(128))
     splash.show()
     app.processEvents()
 
-    state = {"ffmpeg": False, "model": False, "done": False}
+    result = {"ffmpeg": False, "model": False}
+    splash_state = SplashState()
+    controller = _StartupController(app, splash, app_icon, result)
+    splash_state.step_changed.connect(controller.on_step, Qt.QueuedConnection)
+    splash_state.finished.connect(controller.on_finished, Qt.QueuedConnection)
 
     def _worker():
-        splash_state.step_changed.emit(1, "Caricamento interfaccia…")
+        ok, error = True, ""
+        try:
+            splash_state.step_changed.emit(1, "Caricamento interfaccia…")
 
-        splash_state.step_changed.emit(2, "Verifica FFmpeg…")
-        from engine import check_ffmpeg
-        state["ffmpeg"] = check_ffmpeg()
+            splash_state.step_changed.emit(2, "Verifica FFmpeg…")
+            from engine import check_ffmpeg
+            result["ffmpeg"] = check_ffmpeg()
 
-        splash_state.step_changed.emit(3, "Caricamento motore IA…")
-        from engine import preload_model, DEFAULT_MODEL
+            splash_state.step_changed.emit(3, "Caricamento motore IA…")
+            from engine import preload_model, DEFAULT_MODEL
 
-        splash_state.step_changed.emit(4, "Caricamento modello Whisper…")
+            splash_state.step_changed.emit(4, "Caricamento modello Whisper…")
 
-        def _on_status(msg):
-            splash_state.step_changed.emit(4, msg)
+            def _on_status(msg):
+                splash_state.step_changed.emit(4, msg)
 
-        state["model"] = preload_model(model_size=DEFAULT_MODEL, on_status=_on_status)
-
-        splash_state.step_changed.emit(5, "Pronto!")
-        state["done"] = True
-        splash_state.finished.emit(state["ffmpeg"], state["model"])
-
-    splash_state = SplashState()
-    splash_state.step_changed.connect(lambda i, m: splash.set_step(i, m))
-
-    main_window_ref = {"win": None}
-
-    def _on_ready(ffmpeg_ok: bool, model_ok: bool):
-        from ui.main_window import MainWindow
-        win = MainWindow(ffmpeg_ok=ffmpeg_ok, model_ok=model_ok)
-        win.setWindowIcon(app_icon)
-        main_window_ref["win"] = win
-
-        # Mostra la finestra principale solo dopo che la splash è chiusa:
-        # evita il flash di UI dietro la splash e garantisce una transizione pulita.
-        def _show_main():
-            splash.close()
-            win.show()
-
-        QTimer.singleShot(300, _show_main)
-
-    splash_state.finished.connect(_on_ready)
+            result["model"] = preload_model(model_size=DEFAULT_MODEL, on_status=_on_status)
+            splash_state.step_changed.emit(5, "Pronto!")
+        except BaseException as exc:  # noqa: BLE001 — qualsiasi errore deve chiudere lo splash
+            logger.error("Errore nel worker di avvio:\n%s", traceback.format_exc())
+            ok, error = False, f"{type(exc).__name__}: {exc}"
+        finally:
+            splash_state.finished.emit(ok, error)
 
     threading.Thread(target=_worker, daemon=True).start()
 

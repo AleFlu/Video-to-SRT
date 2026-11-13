@@ -27,6 +27,9 @@ import tempfile
 import zlib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import platform_support  # noqa: E402
+
 ASSETS_DIR = Path(__file__).parent
 ICONSET_DIR = ASSETS_DIR / "app.iconset"
 ICNS_PATH   = ASSETS_DIR / "app.icns"
@@ -134,7 +137,7 @@ def draw_icon(size: int) -> "QPixmap":
 
     # ---- Testo "SRT" in basso ----
     font_size = max(8, int(s * 0.175))
-    font = QFont("SF Pro Display", font_size)
+    font = QFont(platform_support.ui_font_family(), font_size)
     font.setBold(True)
     font.setLetterSpacing(QFont.AbsoluteSpacing, s * 0.025)
     p.setFont(font)
@@ -176,7 +179,7 @@ def build_iconset():
 
 def iconset_to_icns():
     """Converte l'iconset in .icns usando iconutil (nativo macOS)."""
-    if sys.platform != "darwin":
+    if not platform_support.IS_MAC:
         print("⚠️   iconutil disponibile solo su macOS — .icns non generato.")
         return False
     result = subprocess.run(

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from core.subtitle_model import Subtitle
 from core.subtitle_table_model import SubtitleTableModel, MAX_CPS, WARN_CPS
 from ui import theme
+import platform_support
 
 
 class InspectorWidget(QWidget):
@@ -134,12 +135,12 @@ class InspectorWidget(QWidget):
         stats_row.addWidget(self.cps_label)
         layout.addLayout(stats_row)
 
-        # Commit testo: solo shortcut ⌘↵ (il bottone è ridondante)
+        # Commit testo: solo shortcut Ctrl+Invio (il bottone è ridondante)
         self.commit_text_btn = QPushButton()  # hidden, per _set_enabled compatibility
         self.commit_text_btn.setVisible(False)
         self.commit_text_btn.clicked.connect(self._commit_text)
 
-        commit_hint = QLabel("⌘↵ per applicare")
+        commit_hint = QLabel(f"{platform_support.shortcut_label('Ctrl+Return')} per applicare")
         commit_hint.setObjectName("subtitle")
         commit_hint.setAlignment(Qt.AlignRight)
         layout.addWidget(commit_hint)

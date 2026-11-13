@@ -8,9 +8,34 @@ l'utente li modifica nell'editor e poi esporta.
 """
 
 from __future__ import annotations
+import logging
 import threading
+from dataclasses import dataclass, fields
+from typing import Any, Dict, Union
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TranscriptionParams:
+    """Parametri di una trascrizione (immutabili)."""
+    input_path: str
+    model_size: str = "large-v3"
+    beam_size: int = 5
+    vad_filter: bool = True
+    denoise: bool = True
+    high_accuracy: bool = False
+    language: str = "it"
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TranscriptionParams":
+        """Crea i parametri da un dict (chiavi sconosciute ignorate)."""
+        if not d.get("input_path"):
+            raise ValueError("Parametro obbligatorio mancante: 'input_path'")
+        names = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in names})
 
 
 class TranscriptionWorker(QObject):
@@ -30,8 +55,10 @@ class TranscriptionWorker(QObject):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, params: dict):
+    def __init__(self, params: Union[TranscriptionParams, Dict[str, Any]]):
         super().__init__()
+        if not isinstance(params, TranscriptionParams):
+            params = TranscriptionParams.from_dict(params)
         self.params = params
         self._cancel_event = threading.Event()
 
@@ -42,17 +69,24 @@ class TranscriptionWorker(QObject):
         try:
             # Import lazy (così QThread può partire subito)
             from engine import transcribe, post_process_timing, TranscriptionCancelled
+        except Exception as e:
+            log.exception("Impossibile caricare il motore di trascrizione")
+            self.failed.emit(str(e) or type(e).__name__)
+            return
 
+        p = self.params
+        try:
             segments = transcribe(
-                input_path=self.params["input_path"],
-                model_size=self.params.get("model_size", "large-v3"),
-                beam_size=self.params.get("beam_size", 5),
-                vad_filter=self.params.get("vad_filter", True),
-                denoise=self.params.get("denoise", True),
-                high_accuracy=self.params.get("high_accuracy", False),
+                input_path=p.input_path,
+                model_size=p.model_size,
+                beam_size=p.beam_size,
+                vad_filter=p.vad_filter,
+                denoise=p.denoise,
+                high_accuracy=p.high_accuracy,
+                language=p.language,
                 cancel_event=self._cancel_event,
                 on_status=lambda m: self.status.emit(m),
-                on_progress=lambda p: self.progress.emit(float(p)),
+                on_progress=lambda v: self.progress.emit(float(v)),
             )
 
             if self._cancel_event.is_set():
@@ -68,6 +102,5 @@ class TranscriptionWorker(QObject):
         except TranscriptionCancelled:
             self.cancelled.emit()
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            log.exception("Trascrizione fallita")
             self.failed.emit(str(e) or type(e).__name__)

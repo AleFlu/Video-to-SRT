@@ -236,3 +236,98 @@ def test_unique_output_path_conflict(tmp_path):
     result = unique_output_path(str(p))
     assert result != str(p)
     assert "out_2" in result
+
+
+# ── Task 4: nuovi comportamenti ───────────────────────────────────────────────
+
+def test_wrap_preserves_existing_newlines():
+    t = "Prima riga molto lunga che supera il limite dei quarantadue\nseconda"
+    assert wrap_subtitle_text(t) == t
+
+
+def test_wrap_balanced_two_lines_max():
+    t = "uno due tre quattro cinque sei sette otto nove dieci undici dodici"
+    result = wrap_subtitle_text(t)
+    assert len(result.split("\n")) == 2
+    a, b = result.split("\n")
+    assert abs(len(a) - len(b)) <= 8
+
+
+def test_wrap_custom_max_chars():
+    assert wrap_subtitle_text("aaa bbb", max_chars=3) == "aaa\nbbb"
+
+
+def test_split_ms_helper():
+    from core.srt_io import _split_ms
+    assert _split_ms(3725.5) == (1, 2, 5, 500)
+    assert _split_ms(-3) == (0, 0, 0, 0)
+    assert _split_ms(0.9996) == (0, 0, 1, 0)
+
+
+def _write(tmp_path, content, name="a.srt", newline=None):
+    f = tmp_path / name
+    f.write_bytes(content.encode("utf-8"))
+    return str(f)
+
+
+def test_parse_srt_whitespace_only_separator(tmp_path):
+    p = _write(tmp_path, "1\n00:00:01,000 --> 00:00:02,000\nUno\n   \n2\n"
+                         "00:00:03,000 --> 00:00:04,000\nDue\n")
+    subs = parse_srt(p)
+    assert [s.text for s in subs] == ["Uno", "Due"]
+
+
+def test_parse_srt_short_milliseconds(tmp_path):
+    p = _write(tmp_path, "1\n00:00:01,5 --> 00:00:02,25\nUno\n")
+    subs = parse_srt(p)
+    assert subs[0].start == pytest.approx(1.5)
+    assert subs[0].end == pytest.approx(2.25)
+
+
+def test_parse_srt_crlf_bom_dot_and_position_tags(tmp_path):
+    raw = "﻿1\r\n0:00:01.000 --> 100:00:02.000 X1:10 Y1:20\r\nUno\r\n\r\n2\r\n" \
+          "00:00:03,000 --> 00:00:04,000\r\nDue\r\n"
+    subs = parse_srt(_write(tmp_path, raw))
+    assert len(subs) == 2
+    assert subs[0].end == pytest.approx(360002.0)
+
+
+def test_parse_srt_block_without_index_and_malformed(tmp_path):
+    raw = "garbage\nnon timing\n\n00:00:01,000 --> 00:00:02,000\nSenza indice\n"
+    subs = parse_srt(_write(tmp_path, raw))
+    assert [s.text for s in subs] == ["Senza indice"]
+
+
+def test_parse_srt_error_message_italian(tmp_path):
+    with pytest.raises(ValueError, match="Nessun sottotitolo"):
+        parse_srt(_write(tmp_path, "niente"))
+
+
+def test_ass_escapes_braces_and_newline():
+    out = subtitles_to_ass([Subtitle(0, 1, "a {b}\nc")])
+    assert "a \\{b\\}\\Nc" in out
+
+
+def test_vtt_escapes_arrow_amp_lt():
+    out = subtitles_to_vtt([Subtitle(0, 1, "a --> b & <i>")])
+    assert "a -> b &amp; &lt;i>" in out
+
+
+def test_write_is_atomic_no_tmp_left(tmp_path):
+    out = tmp_path / "sub" / "o.srt"
+    write_srt([Subtitle(0, 1, "x")], str(out))
+    assert out.read_text(encoding="utf-8").startswith("1\n")
+    assert [p.name for p in out.parent.iterdir()] == ["o.srt"]
+
+
+def test_write_failure_keeps_original(tmp_path, monkeypatch):
+    out = tmp_path / "o.srt"
+    out.write_text("ORIGINALE", encoding="utf-8")
+    import core.srt_io as m
+    def boom(*a, **k):
+        raise OSError("disco pieno")
+    monkeypatch.setattr(m.os, "replace", boom)
+    with pytest.raises(OSError):
+        write_srt([Subtitle(0, 1, "x")], str(out))
+    assert out.read_text(encoding="utf-8") == "ORIGINALE"
+    assert [p.name for p in tmp_path.iterdir()] == ["o.srt"]

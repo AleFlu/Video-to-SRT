@@ -115,3 +115,32 @@ def test_load_missing_required_field_raises(tmp_path):
     bad.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError):
         load_project(str(bad))
+
+
+# ── Task 4 ────────────────────────────────────────────────────────────────────
+
+def test_load_missing_source_path_is_empty_string(tmp_path):
+    f = tmp_path / "a.v2srt"
+    f.write_text(json.dumps({"version": 1, "subtitles": []}), encoding="utf-8")
+    proj, _ = load_project(str(f))
+    assert proj.source_path == ""
+
+def test_load_invalid_json_raises_valueerror(tmp_path):
+    f = tmp_path / "a.v2srt"
+    f.write_text("{non json", encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON"):
+        load_project(str(f))
+
+def test_load_future_version_raises(tmp_path):
+    f = tmp_path / "a.v2srt"
+    f.write_text(json.dumps({"version": 2, "subtitles": []}), encoding="utf-8")
+    with pytest.raises(ValueError, match="versione"):
+        load_project(str(f))
+
+def test_save_keeps_confidence_and_is_atomic(tmp_path, project):
+    project.subtitles[0].confidence = 0.4
+    out = tmp_path / "x" / "p.v2srt"
+    save_project(project, str(out))
+    loaded, _ = load_project(str(out))
+    assert loaded.subtitles[0].confidence == pytest.approx(0.4)
+    assert [p.name for p in out.parent.iterdir()] == ["p.v2srt"]

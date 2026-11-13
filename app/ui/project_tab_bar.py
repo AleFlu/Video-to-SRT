@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 
 from ui import theme
+import platform_support
 
 
 _TAB_MIN_W = 110
@@ -210,7 +211,7 @@ class ProjectTabBar(QWidget):
         self._btn_new = QPushButton("+")
         self._btn_new.setFixedSize(26, 26)
         self._btn_new.setFlat(False)
-        self._btn_new.setToolTip("Nuovo progetto  (⌘⇧T)")
+        self._btn_new.setToolTip(f"Nuovo progetto  ({platform_support.shortcut_label('Ctrl+Shift+T')})")
         self._btn_new.setCursor(Qt.PointingHandCursor)
         # Font esplicito via Python — immune al tema globale Qt che sovrascrive font-size nel CSS
         _plus_font = QFont()

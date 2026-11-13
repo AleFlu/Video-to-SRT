@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from ui.source_panel import DepsBanner, SUPPORTED_EXTS, FILE_FILTERS, fmt_size
 from ui.theme import AuroraMixin
 from ui import theme
+import platform_support
 
 
 _MAX_RECENTS = 5
@@ -528,7 +529,10 @@ class _DesignDropZone(QWidget):
         self._idle_t1 = QLabel("Trascina qui un file video o audio")
         self._idle_t1.setAlignment(Qt.AlignCenter)
         lay_idle.addWidget(self._idle_t1)
-        self._idle_t2 = QLabel("oppure  ⌘O  per scegliere  ·  MP4, MOV, MKV, WAV, MP3 fino a 4 GB")
+        self._idle_t2 = QLabel(
+            f"oppure  {platform_support.shortcut_label('Ctrl+O')}  per scegliere"
+            "  ·  MP4, MOV, MKV, WAV, MP3 fino a 4 GB"
+        )
         self._idle_t2.setAlignment(Qt.AlignCenter)
         lay_idle.addWidget(self._idle_t2)
 

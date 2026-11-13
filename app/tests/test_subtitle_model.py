@@ -68,3 +68,31 @@ def test_project_load_from_segments_empty():
     p.load_from_segments([], "/video.mp4")
     assert p.subtitles == []
     assert p.source_path == "/video.mp4"
+
+
+# ── Task 4 ────────────────────────────────────────────────────────────────────
+
+def test_to_dict_includes_confidence_only_if_not_one():
+    assert "confidence" not in Subtitle(0, 1, "x").to_dict()
+    assert Subtitle(0, 1, "x", confidence=0.5).to_dict()["confidence"] == 0.5
+
+def test_from_dict_missing_start_raises_clear_error():
+    with pytest.raises(ValueError, match="start"):
+        Subtitle.from_dict({"end": 1, "text": "x"})
+    with pytest.raises(ValueError, match="end"):
+        Subtitle.from_dict({"start": 1, "text": "x"})
+
+def test_from_dict_tolerates_missing_keys_and_strings():
+    s = Subtitle.from_dict({"start": "1", "end": "2"})
+    assert s.text == "" and s.confidence == 1.0
+    s = Subtitle.from_dict({"start": 1, "end": 2, "text": None, "confidence": None})
+    assert s.text == "" and s.confidence == 1.0
+
+def test_from_dict_non_numeric_raises_valueerror():
+    with pytest.raises(ValueError):
+        Subtitle.from_dict({"start": "abc", "end": 2})
+
+def test_project_source_path_is_string():
+    assert SubtitleProject().source_path == ""
+    p = SubtitleProject(source_path=None)
+    assert p.source_path == ""

@@ -24,16 +24,29 @@ class Subtitle:
         return max(0.0, self.end - self.start)
 
     def to_dict(self) -> dict:
-        return {"start": self.start, "end": self.end, "text": self.text}
+        d = {"start": self.start, "end": self.end, "text": self.text}
+        if self.confidence != 1.0:
+            d["confidence"] = self.confidence
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Subtitle":
-        return cls(
-            start=float(d["start"]),
-            end=float(d["end"]),
-            text=str(d.get("text", "")).strip(),
-            confidence=float(d.get("confidence", 1.0)),
-        )
+        """Crea un Subtitle da un dict; `start`/`end` sono obbligatori."""
+        for key in ("start", "end"):
+            if key not in d:
+                raise ValueError(f"Campo obbligatorio mancante: '{key}'")
+        try:
+            start = float(d["start"])
+            end = float(d["end"])
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Tempo non numerico: {e}") from e
+        raw_text = d.get("text")
+        text = "" if raw_text is None else str(raw_text).strip()
+        try:
+            confidence = float(d.get("confidence", 1.0))
+        except (TypeError, ValueError):
+            confidence = 1.0
+        return cls(start=start, end=end, text=text, confidence=confidence)
 
 
 @dataclass
@@ -43,6 +56,11 @@ class SubtitleProject:
     subtitles: List[Subtitle] = field(default_factory=list)
     modified: bool = False
 
+    def __post_init__(self):
+        # source_path è sempre una stringa (mai None)
+        if self.source_path is None:
+            self.source_path = ""
+
     def clear(self):
         self.source_path = ""
         self.subtitles = []
@@ -50,6 +68,6 @@ class SubtitleProject:
 
     def load_from_segments(self, segments: list, source_path: str):
         """Carica i sottotitoli dai segmenti prodotti da engine.transcribe()."""
-        self.source_path = source_path
+        self.source_path = source_path or ""
         self.subtitles = [Subtitle.from_dict(s) for s in segments]
         self.modified = False

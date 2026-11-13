@@ -21,7 +21,6 @@ Agisce come proxy per menu e status bar verso il progetto attivo.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings, QUrl
@@ -31,7 +30,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
-import platform
+import platform_support
 
 from core.constants import SUPPORTED_ALL_EXTS, FILE_FILTER_OPEN_ANY
 from ui.project_widget import ProjectWidget
@@ -90,8 +89,7 @@ class MainWindow(QMainWindow):
         # ── Geometria ─────────────────────────────────────────────────────────
         self._restore_geometry()
 
-        # ── Ripristino autosave ───────────────────────────────────────────────
-        self._check_autosave_restore()
+        # Il ripristino autosave è invocato da main.py dopo la chiusura dello splash.
 
     # ── Progetto attivo ────────────────────────────────────────────────────────
 
@@ -277,10 +275,7 @@ class MainWindow(QMainWindow):
         # ── Vista ──────────────────────────────────────────────────────────────
         m_view = bar.addMenu("&Vista")
         self._act_fullscreen = QAction("Schermo intero", self)
-        if platform.system() == "Darwin":
-            self._act_fullscreen.setShortcut("Meta+Ctrl+F")
-        else:
-            self._act_fullscreen.setShortcut("F11")
+        self._act_fullscreen.setShortcut(platform_support.fullscreen_shortcut())
         self._act_fullscreen.setCheckable(True)
         self._act_fullscreen.triggered.connect(
             lambda checked: self.showFullScreen() if checked else self.showNormal()
@@ -308,7 +303,7 @@ class MainWindow(QMainWindow):
     # ── Tema chiaro/scuro ───────────────────────────────────────────────────────
     # Il toggle visibile vive nella TabBar di ogni ProjectWidget (la menu bar
     # macOS è nativa e non mostra corner widget). La voce menu Vista resta come
-    # scorciatoia (⌘⇧L) e applica lo stesso cambio.
+    # scorciatoia (Ctrl+Shift+L) e applica lo stesso cambio.
 
     def _toggle_theme(self):
         new = "light" if theme.get_theme() == "dark" else "dark"
@@ -433,17 +428,18 @@ class MainWindow(QMainWindow):
     # ── Autosave multi-progetto ────────────────────────────────────────────────
 
     @staticmethod
-    def _autosave_dir() -> Path:
-        cache = Path(os.environ.get("HOME", str(Path.home()))) / ".cache" / "VideoSRT"
-        cache.mkdir(parents=True, exist_ok=True)
-        return cache
+    def _autosave_dirs() -> list:
+        """Cartella di cache corrente più le vecchie cartelle (legacy) con autosave."""
+        return [platform_support.app_cache_dir()] + platform_support.legacy_cache_dirs()
 
     def _check_autosave_restore(self):
         """
         All'avvio, cerca file autosave_*.v2srt nella dir cache.
         Per ognuno chiede se ripristinarlo (uno alla volta).
         """
-        autosaves = sorted(self._autosave_dir().glob("autosave_*.v2srt"))
+        autosaves = sorted(
+            f for d in self._autosave_dirs() for f in d.glob("autosave_*.v2srt")
+        )
         if not autosaves:
             return
 
