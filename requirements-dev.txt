@@ -1,0 +1,3 @@
+# Strumenti di sviluppo (le dipendenze dell'app sono in app/requirements.txt)
+pytest>=8.0
+ruff>=0.5

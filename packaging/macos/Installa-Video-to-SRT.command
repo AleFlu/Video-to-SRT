@@ -49,7 +49,10 @@ APP_BUNDLE_DIR="/Applications/${APP_NAME}.app"
 
 # URL del tarball sorgente (da aggiornare con la release pubblica)
 # Per ora usa la directory locale se esiste
+# Layout: il .command sta in <root>/packaging/macos/; i sorgenti in <root>/app/
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+APP_DIR="$REPO_ROOT/app"
 
 mkdir -p "$LOG_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -325,7 +328,7 @@ fi
 # ── STEP 8: Copia sorgenti e creazione .app ───────────────────────────────────
 step "8/8  Installazione applicazione"
 
-[[ -f "$SCRIPT_DIR/main.py" ]] || fatal "Sorgenti non trovati. Assicurati che il .command sia nella stessa cartella del progetto."
+[[ -f "$APP_DIR/main.py" ]] || fatal "Sorgenti non trovati in $APP_DIR. Esegui il .command dal repository (packaging/macos/)."
 
 info "Creazione applicazione arm64-nativa..."
 
@@ -375,7 +378,7 @@ sudo tee "$APP_CONTENTS/MacOS/launcher.sh" > /dev/null << LAUNCHER_EOF
 export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
 source "${VENV_DIR}/bin/activate"
 export VIDEOSRT_MODEL_DIR="${MODEL_DIR}"
-exec "${VENV_DIR}/bin/python" "${SCRIPT_DIR}/main.py" "\$@"
+exec "${VENV_DIR}/bin/python" "${APP_DIR}/main.py" "\$@"
 LAUNCHER_EOF
 sudo chmod +x "$APP_CONTENTS/MacOS/launcher.sh"
 
@@ -428,8 +431,8 @@ sudo tee "$APP_CONTENTS/Info.plist" > /dev/null << PLIST_EOF
 PLIST_EOF
 
 # ── Icona ─────────────────────────────────────────────────────────────────────
-if [[ -f "$SCRIPT_DIR/assets/app.icns" ]]; then
-    sudo cp "$SCRIPT_DIR/assets/app.icns" "$APP_CONTENTS/Resources/app.icns"
+if [[ -f "$APP_DIR/assets/app.icns" ]]; then
+    sudo cp "$APP_DIR/assets/app.icns" "$APP_CONTENTS/Resources/app.icns"
 fi
 
 # ── Rimuovi quarantena ────────────────────────────────────────────────────────
@@ -447,7 +450,7 @@ cat > "$INSTALL_DIR/config.json" << CONFIG_EOF
   "arch": "${ARCH}",
   "macos": "${MACOS_VER}",
   "install_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "src_dir": "${SCRIPT_DIR}"
+  "src_dir": "${APP_DIR}"
 }
 CONFIG_EOF
 

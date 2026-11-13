@@ -40,26 +40,23 @@ La trascrizione avviene interamente in locale: nessun dato viene inviato a servi
 
 ## Struttura del repository
 
-Il progetto è organizzato in più versioni che condividono lo stesso motore di trascrizione (`engine.py`) e differiscono per piattaforma di destinazione e adattamenti dell'interfaccia.
-
-| Cartella | Piattaforma | Note |
-|---|---|---|
-| [`macos-arm/`](macos-arm/) | macOS Apple Silicon (M1/M2/M3…) | Versione di riferimento, sviluppo attivo |
-| [`macos-intel/`](macos-intel/) | macOS Intel (x86_64, anche via Rosetta) | Stesso codice, build per architettura Intel |
-| [`windows/`](windows/) | Windows 10/11 (x64) | Port Windows (font di sistema, build `.exe`, percorsi `%APPDATA%`) |
-| [`legacy-v1/`](legacy-v1/) | macOS | Prima versione storica con interfaccia minimale e CLI, conservata come riferimento |
-
-Ogni cartella contiene un proprio README con le istruzioni di setup dettagliate per quella piattaforma.
-
-Struttura tipica di una versione:
+Una sola codebase per tutte le piattaforme; gli script di build sono separati.
 
 ```
-<piattaforma>/
-├── main.py                 # Entry point dell'applicazione
-├── engine.py               # Motore di trascrizione (condiviso)
-├── requirements.txt
-├── core/                   # Modello dati, I/O sottotitoli, worker, player
-└── ui/                     # Interfaccia PySide6 (finestra, editor, anteprima, ...)
+app/                 # applicazione (macOS ARM/Intel e Windows)
+├── main.py          # entry point
+├── engine.py        # motore di trascrizione
+├── platform_support.py  # tutto ciò che dipende dal sistema operativo
+├── core/            # modello dati, I/O sottotitoli, worker, player
+├── ui/              # interfaccia PySide6 (finestra, editor, anteprima, ...)
+├── assets/          # icone
+├── tests/           # test pytest
+└── requirements.txt
+packaging/
+├── macos/           # build .app/.dmg/.pkg per Apple Silicon e Intel
+└── windows/         # build .exe
+docs/                # piani e riferimenti di design
+legacy-v1/           # prima versione storica con interfaccia minimale e CLI (solo riferimento)
 ```
 
 ---
@@ -67,7 +64,7 @@ Struttura tipica di una versione:
 ## Requisiti
 
 - **FFmpeg** (installato automaticamente dagli script di setup)
-- **Python 3.10+** (3.11 consigliato)
+- **Python 3.10+** (3.11 consigliato; il codice resta compatibile con 3.9)
 - **8 GB di RAM** minimo — il modello `large-v3` ne usa ~6 GB; sono selezionabili modelli più leggeri
 - **~4–10 GB di spazio libero** per modello e dipendenze
 - Connessione internet **solo** per il primo setup (download dipendenze e modello)
@@ -85,29 +82,35 @@ Struttura tipica di una versione:
 
 ## Setup e avvio
 
-Le istruzioni complete sono nel README di ciascuna cartella. In sintesi:
+**Sviluppo (tutte le piattaforme)**, dalla root del repository:
 
-**macOS (Apple Silicon)**
 ```bash
-cd macos-arm
-chmod +x install.sh
-./install.sh --run
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r app/requirements.txt -r requirements-dev.txt
+python app/main.py
 ```
 
-**macOS (Intel)**
-```bash
-cd macos-intel
-chmod +x install.sh
-./install.sh --run
-```
+FFmpeg deve essere nel `PATH` (macOS: `brew install ffmpeg`; Windows: vedi `packaging/windows/README.md`).
+Il modello Whisper `large-v3` viene scaricato al primo utilizzo.
 
-**Windows**
+**Script di setup guidato** (installano FFmpeg, venv, dipendenze e modello):
+
+```bash
+packaging/macos/install.sh --run   # macOS (ARM e Intel)
+```
 ```bat
-cd windows
-setup_windows.bat --run
+packaging\windows\setup_windows.bat --run
 ```
 
-Lo script di setup installa FFmpeg, crea l'ambiente virtuale, installa le dipendenze e scarica il modello Whisper `large-v3` al primo avvio.
+## Test e lint
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest -q    # Windows (cmd): set QT_QPA_PLATFORM=offscreen
+ruff check app
+```
+
+La CI (GitHub Actions) esegue gli stessi comandi su macOS, Windows e Linux.
 
 ---
 
@@ -122,10 +125,13 @@ Lo script di setup installa FFmpeg, crea l'ambiente virtuale, installa le dipend
 
 ## Build distribuibile
 
-- **macOS** — `python build_mac.py` → `.app` + `.dmg`
-- **Windows** — `python build_windows.py` → `.exe`
+Gli script risolvono i percorsi dalla propria posizione e scrivono in `build/` e `dist/` nella root.
 
-Dettagli nei README delle rispettive cartelle.
+- **macOS (Apple Silicon)** — `packaging/macos/install.sh --app` (o `--dmg`), oppure `python packaging/macos/build_mac.py --clean`
+- **macOS (Intel)** — `bash packaging/macos/build_intel.sh` (richiede venv x86_64 e ffmpeg statico, vedi README)
+- **Windows** — `python packaging\windows\build_windows.py` → `dist\VideoSRT\VideoSRT.exe`
+
+Dettagli in [`packaging/macos/README.md`](packaging/macos/README.md) e [`packaging/windows/README.md`](packaging/windows/README.md).
 
 ---
 

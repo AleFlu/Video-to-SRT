@@ -26,9 +26,13 @@ step() { echo -e "\n${BLUE}${BOLD}▶ $*${RESET}"; }
 info() { echo -e "   $*"; }
 
 # ── Costanti ─────────────────────────────────────────────────────────────────
+# Layout: questo script sta in <root>/packaging/macos/; l'app in <root>/app/.
+# venv (.venv), modello (_build_model/), build/ e dist/ vivono nella root del repo.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/venv"
-MODEL_DIR="$SCRIPT_DIR/_build_model"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+APP_DIR="$REPO_ROOT/app"
+VENV_DIR="$REPO_ROOT/.venv"
+MODEL_DIR="$REPO_ROOT/_build_model"
 APP_NAME="Video-to-SRT"
 PYTHON_MIN="3.10"
 MODEL_SIZE="large-v3"
@@ -123,7 +127,7 @@ ok "venv attivato: $VENV_DIR"
 step "Installazione dipendenze Python"
 pip install --quiet --upgrade pip wheel setuptools
 
-REQUIREMENTS="$SCRIPT_DIR/requirements.txt"
+REQUIREMENTS="$APP_DIR/requirements.txt"
 if [[ -f "$REQUIREMENTS" ]]; then
     pip install --quiet -r "$REQUIREMENTS"
     ok "Dipendenze installate da requirements.txt"
@@ -145,10 +149,10 @@ if [[ -d "$MODEL_DIR" ]] && [[ -n "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]]; then
 else
     info "Modello non trovato — download in corso (≈ 3 GB, potrebbe richiedere diversi minuti)…"
     mkdir -p "$MODEL_DIR"
-    python3 - <<'PYEOF'
+    python3 - "$MODEL_DIR" <<'PYEOF'
 import sys
 from pathlib import Path
-model_dir = Path(sys.argv[0]).parent / "_build_model" if len(sys.argv) < 2 else Path(sys.argv[1])
+model_dir = Path(sys.argv[1])
 
 try:
     from faster_whisper import WhisperModel
@@ -187,8 +191,8 @@ ok "Importazioni verificate"
 if $RUN_DEV; then
     step "Avvio in modalità sviluppo"
     ok "Avvio Video → SRT..."
-    cd "$SCRIPT_DIR"
-    exec python main.py
+    cd "$REPO_ROOT"
+    exec python "$APP_DIR/main.py"
 fi
 
 if $BUILD_APP; then
@@ -208,13 +212,13 @@ if $BUILD_APP; then
         python "$SCRIPT_DIR/build_mac.py" --clean --no-dmg
     fi
 
-    APP_PATH="$SCRIPT_DIR/dist/$APP_NAME.app"
+    APP_PATH="$REPO_ROOT/dist/$APP_NAME.app"
     if [[ -d "$APP_PATH" ]]; then
         echo ""
         ok "Build completata!"
         info "App:  $APP_PATH"
         if $BUILD_DMG; then
-            DMG_PATH="$(ls "$SCRIPT_DIR/dist/"*.dmg 2>/dev/null | head -1)"
+            DMG_PATH="$(ls "$REPO_ROOT/dist/"*.dmg 2>/dev/null | head -1)"
             [[ -n "$DMG_PATH" ]] && info "DMG:  $DMG_PATH"
         fi
         echo ""
@@ -231,12 +235,12 @@ else
     echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
     info "Per avviare l'app in modalità sviluppo:"
-    info "  source venv/bin/activate && python main.py"
+    info "  source .venv/bin/activate && python app/main.py"
     echo ""
     info "Per costruire il file .app distribuibile:"
-    info "  ./install.sh --app"
+    info "  packaging/macos/install.sh --app"
     echo ""
     info "Per costruire .app + .dmg:"
-    info "  ./install.sh --dmg"
+    info "  packaging/macos/install.sh --dmg"
     echo ""
 fi

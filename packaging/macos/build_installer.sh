@@ -9,7 +9,7 @@
 #      dist/Video-to-SRT-Installer.pkg   ← file da condividere
 #
 #  Prerequisiti sviluppatore:
-#      python build_mac.py --clean       ← crea dist/Video-to-SRT.app
+#      python packaging/macos/build_mac.py --clean  ← crea dist/Video-to-SRT.app
 #      (opzionale) export SIGN_APP="Developer ID Application: Nome (XXXXXXXX)"
 #      (opzionale) export SIGN_PKG="Developer ID Installer: Nome (XXXXXXXX)"
 #
@@ -33,15 +33,18 @@ step() { echo -e "\n${BLUE}${BOLD}▶ $*${RESET}"; }
 info() { echo -e "   $*"; }
 
 # ── Configurazione ────────────────────────────────────────────────────────────
+# Layout: script in <root>/packaging/macos/; build_mac.py scrive in <root>/dist/
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DIST_DIR="$REPO_ROOT/dist"
 APP_NAME="Video-to-SRT"
 APP_VERSION="2.0.0"
 BUNDLE_ID="it.videosrt.app"
-APP_PATH="$SCRIPT_DIR/dist/$APP_NAME.app"
-PKG_STAGING="$SCRIPT_DIR/dist/_pkg_staging"
-PKG_SCRIPTS="$SCRIPT_DIR/dist/_pkg_scripts"
-PKG_RESOURCES="$SCRIPT_DIR/dist/_pkg_resources"
-PKG_OUT="$SCRIPT_DIR/dist/${APP_NAME}-${APP_VERSION}-Installer.pkg"
+APP_PATH="$DIST_DIR/$APP_NAME.app"
+PKG_STAGING="$DIST_DIR/_pkg_staging"
+PKG_SCRIPTS="$DIST_DIR/_pkg_scripts"
+PKG_RESOURCES="$DIST_DIR/_pkg_resources"
+PKG_OUT="$DIST_DIR/${APP_NAME}-${APP_VERSION}-Installer.pkg"
 SIGN_APP="${SIGN_APP:-}"
 SIGN_PKG="${SIGN_PKG:-}"
 
@@ -54,7 +57,7 @@ echo ""
 # ── Verifica .app esistente ───────────────────────────────────────────────────
 step "Verifica .app"
 if [[ ! -d "$APP_PATH" ]]; then
-    err ".app non trovato in dist/\n   Esegui prima: python build_mac.py --clean"
+    err ".app non trovato in dist/\n   Esegui prima: python packaging/macos/build_mac.py --clean"
 fi
 ok "Trovato: $APP_PATH"
 
@@ -410,8 +413,8 @@ DISTXML
 ok "distribution.xml creato"
 
 # ── Copia immagine di sfondo ──────────────────────────────────────────────────
-if [[ -f "$SCRIPT_DIR/assets/app_512.png" ]]; then
-    cp "$SCRIPT_DIR/assets/app_512.png" "$PKG_RESOURCES/background.png"
+if [[ -f "$REPO_ROOT/app/assets/app_512.png" ]]; then
+    cp "$REPO_ROOT/app/assets/app_512.png" "$PKG_RESOURCES/background.png"
     ok "Sfondo installer copiato"
 else
     # Crea un PNG placeholder se non c'è
@@ -421,7 +424,7 @@ fi
 # ── Build component .pkg ──────────────────────────────────────────────────────
 step "Build component package"
 
-COMPONENT_PKG="$SCRIPT_DIR/dist/VideoToSRT-core.pkg"
+COMPONENT_PKG="$DIST_DIR/VideoToSRT-core.pkg"
 
 pkgbuild \
     --root "$PKG_STAGING" \
@@ -450,7 +453,7 @@ step "Build installer finale .pkg"
 productbuild \
     --distribution "$PKG_RESOURCES/distribution.xml" \
     --resources "$PKG_RESOURCES" \
-    --package-path "$SCRIPT_DIR/dist" \
+    --package-path "$DIST_DIR" \
     "$PKG_OUT"
 
 ok "Installer creato: $PKG_OUT"

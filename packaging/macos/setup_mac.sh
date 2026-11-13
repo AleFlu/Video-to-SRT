@@ -3,8 +3,8 @@
 # 🍎 Setup — Video → SRT v2 (macOS, PySide6)
 # ============================================================
 # Uso:
-#   chmod +x setup_mac.sh
-#   ./setup_mac.sh
+#   chmod +x packaging/macos/setup_mac.sh
+#   packaging/macos/setup_mac.sh
 # ============================================================
 
 set -e
@@ -52,8 +52,10 @@ python3 --version
 # --- 4. Venv + dipendenze ---
 echo ""
 echo "📥 [4/5] Ambiente virtuale..."
+# Layout: questo script sta in <root>/packaging/macos/; il venv va in <root>/.venv
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/venv"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+VENV_DIR="$REPO_ROOT/.venv"
 
 if [ -d "$VENV_DIR" ]; then
   rm -rf "$VENV_DIR"
@@ -88,6 +90,6 @@ echo "✅ Setup completato!"
 echo "=================================================="
 echo ""
 echo "Per avviare l'app:"
-echo "  source venv/bin/activate"
-echo "  python main.py"
+echo "  source .venv/bin/activate   # dalla root del repo"
+echo "  python app/main.py"
 echo ""

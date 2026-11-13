@@ -44,38 +44,43 @@ choco install ffmpeg
 
 ### 3. Setup e avvio
 
+Dalla root del repository:
+
 ```bat
-cd windows
-setup_windows.bat --run
+packaging\windows\setup_windows.bat --run
 ```
 
 Il setup:
-- Crea un virtualenv `venv\`
-- Installa tutte le dipendenze Python
+- Crea un virtualenv `.venv\` nella root del repository
+- Installa le dipendenze da `app\requirements.txt`
 - Scarica il modello Whisper large-v3 (~3 GB, solo al primo avvio)
-- Avvia l'app
+- Avvia l'app (con `--run`)
 
 **Avvii successivi:**
 ```bat
-venv\Scripts\activate
-python main.py
+.venv\Scripts\activate
+python app\main.py
 ```
 
 ---
 
 ## Build eseguibile (.exe)
 
+Dalla root del repository:
+
 ```bat
-venv\Scripts\activate
+.venv\Scripts\activate
 pip install pyinstaller
-python build_windows.py
+python packaging\windows\build_windows.py
 ```
 
-L'eseguibile viene generato in `dist\VideoSRT\VideoSRT.exe`.
+L'eseguibile viene generato in `dist\VideoSRT\VideoSRT.exe` (nella root del repo).
+La build usa `app\assets\app.ico` se presente; altrimenti usa l'icona di default.
+`ffmpeg.exe` viene incluso se trovato nel PATH o in `packaging\windows\`.
 
 Con `--onefile` (file singolo, più lento all'avvio):
 ```bat
-python build_windows.py --onefile
+python packaging\windows\build_windows.py --onefile
 ```
 
 **Nota:** PyInstaller su Windows può generare falsi positivi antivirus.
@@ -85,6 +90,7 @@ Se questo accade, aggiungi la cartella `dist\` alle eccezioni dell'antivirus.
 
 ## Differenze rispetto alla versione macOS
 
+
 | Funzionalità | macOS | Windows |
 |---|---|---|
 | Font UI | SF Pro / Helvetica Neue | Segoe UI |
@@ -92,12 +98,12 @@ Se questo accade, aggiungi la cartella `dist\` alle eccezioni dell'antivirus.
 | Icona Dock | NSApplication (pyobjc) | Non applicabile |
 | Formato icona | app.icns | app.ico |
 | Shortcut schermo intero | ⌃⌘F | F11 |
-| Cache autosave | `~/Library/Caches/VideoSRT` | `%APPDATA%\VideoSRT` |
+| Cache autosave | `~/Library/Caches/VideoSRT` | `%LOCALAPPDATA%\VideoSRT` |
 | File temp audio | `$TMPDIR` | `%TEMP%` |
 | Player video nativo | AVFoundation | Media Foundation / DirectShow |
 | Codec video | mp4/mov/m4a nativi | mp4 nativo; MKV richiede codec |
 | Build | PyInstaller → .app + .dmg | PyInstaller → .exe |
-| Installer | install.sh | setup_windows.bat |
+| Setup | packaging/macos/install.sh | packaging\windows\setup_windows.bat |
 
 ### Codec video su Windows
 
@@ -112,47 +118,22 @@ Per **MKV, AVI, FLAC, OGG** e altri formati:
 
 ---
 
-## Struttura cartella (differenze da macOS)
-
-```
-windows/
-├── main.py                   # Entry point adattato (no NSApp, font Windows)
-├── engine.py                 # Core trascrizione (ffmpeg.exe, logging aggiuntivo)
-├── requirements.txt          # Senza pyobjc-framework-Cocoa
-├── setup_windows.bat         # Setup venv + deps + modello
-├── build_windows.py          # PyInstaller → .exe
-├── pyi_rth_threads.py        # Runtime hook PyInstaller (identico a macOS)
-├── core/
-│   ├── audio_player.py       # Fix: tempfile.gettempdir() invece di /tmp
-│   └── ... (identici a macOS)
-└── ui/
-    ├── preview_area.py       # Fix: tempfile + logging errori player
-    ├── project_widget.py     # Fix: _app_cache_dir() cross-platform
-    ├── main_window.py        # Fix: _app_cache_dir() cross-platform
-    ├── theme.py              # Fix: font stack Windows-first (Segoe UI, Consolas)
-    └── ... (identici a macOS)
-```
-
 ---
 
 ## Debug e log
 
-L'app stampa log dettagliati su stdout. Per catturarli:
+I log vanno su console e su file (`%LOCALAPPDATA%\VideoSRT\videosrt.log`). Per catturarli:
 
 ```bat
-python main.py > log.txt 2>&1
+python app\main.py > log.txt 2>&1
 ```
 
-In caso di crash:
-1. Apri `Prompt dei comandi` nella cartella `windows\`
-2. Attiva il venv: `venv\Scripts\activate`
-3. Esegui: `python main.py`
-4. Leggi l'output — ogni errore ha il modulo e la causa esatta
+In caso di crash: attiva il venv (`.venv\Scripts\activate`) dalla root del repo, esegui `python app\main.py` e leggi l'output.
 
 ### Problemi comuni
 
 **`ModuleNotFoundError: No module named 'ctranslate2'`**
-→ Reinstalla le dipendenze: `pip install -r requirements.txt`
+→ Reinstalla le dipendenze: `pip install -r app\requirements.txt`
 
 **`ffmpeg non trovato nel PATH`**
 → Installa ffmpeg e aggiungilo al PATH (vedi sezione Setup)
@@ -165,20 +146,3 @@ In caso di crash:
 
 **Antivirus blocca il .exe**
 → Aggiungi `dist\VideoSRT\` alle eccezioni
-
----
-
-## Stato compatibilità
-
-| Componente | Status |
-|---|---|
-| UI (PySide6) | ✅ Funziona su Windows |
-| Trascrizione (faster-whisper) | ✅ Wheel Windows su PyPI |
-| VAD (onnxruntime) | ✅ Wheel Windows su PyPI |
-| Waveform (soundfile + numpy) | ✅ Funziona |
-| Player audio (Qt Multimedia) | ✅ Funziona |
-| Player video (Qt Multimedia) | ✅ MP4; MKV con fallback WAV |
-| Export SRT/VTT/TXT/ASS | ✅ Funziona |
-| Salva/carica .v2srt | ✅ Funziona |
-| Autosave | ✅ Usa %APPDATA% |
-| Build .exe | ✅ PyInstaller |

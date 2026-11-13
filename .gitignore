@@ -2,6 +2,7 @@
 venv/
 venv_intel/
 .venv/
+.venv-intel/
 env/
 
 # Build PyInstaller
@@ -45,3 +46,9 @@ autosave_*.v2srt
 # Modelli Whisper scaricati localmente
 _build_model/
 models/
+
+# ffmpeg statico x86_64 per la build Intel (binario GPL, non ridistribuito)
+packaging/macos/bin/
+
+# Cache tool
+.ruff_cache/

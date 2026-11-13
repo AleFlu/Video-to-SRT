@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """
-build_mac.py — Build script professionale per Video → SRT v2 (macOS, Apple Silicon).
+build_mac.py — Build script professionale per Video → SRT v2 (macOS, ARM e Intel).
 
-Uso:
-    python build_mac.py [--clean] [--no-dmg] [--sign "Developer ID"]
+Va eseguito con il Python del venv della root del repository; la cartella di
+lavoro non conta (i percorsi sono risolti a partire dalla posizione di questo file).
 
-Output:
-    dist/Video-to-SRT.app     — applicazione standalone
-    dist/Video-to-SRT.dmg     — installer drag-to-Applications (se create_dmg è disponibile)
+Uso (dalla root del repo):
+    .venv/bin/python packaging/macos/build_mac.py [--clean] [--no-dmg] [--sign "Developer ID"]
+
+Architettura: rilevata con platform.machine() (arm64 / x86_64) e usata per
+scegliere l'ffmpeg da includere. Per la build Intel su un Mac ARM usa
+packaging/macos/build_intel.sh (esegue questo script sotto Rosetta).
+
+Output (nella root del repository):
+    dist/Video-to-SRT.app             — applicazione standalone
+    dist/Video-to-SRT-<versione>.dmg  — installer drag-to-Applications (se create-dmg è disponibile)
 
 Requisiti:
     pip install pyinstaller
     brew install ffmpeg create-dmg   # opzionale: create-dmg solo per il .dmg
 
-Il modello Whisper viene copiato da _build_model/ (deve essere già scaricato
-tramite ./setup_mac.sh oppure manualmente con faster-whisper / huggingface-cli).
+Il modello Whisper viene copiato da <root>/_build_model/ (deve essere già scaricato
+tramite install.sh oppure manualmente con faster-whisper / huggingface-cli).
 
 Struttura file risultante nell'app:
     Video-to-SRT.app/Contents/
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -42,15 +50,27 @@ from pathlib import Path
 APP_NAME        = "Video-to-SRT"
 APP_VERSION     = "2.0.0"
 BUNDLE_ID       = "it.videoSRT.app"
-ENTRY_POINT     = "main.py"
-ICON_FILE       = "assets/app.icns"           # crea con: iconutil -c icns assets/app.iconset
-MODEL_SRC_DIR   = "_build_model"              # cartella con il modello scaricato
-DIST_DIR        = Path("dist")
-BUILD_DIR       = Path("build")
+
+# Percorsi: tutto è risolto dalla posizione di questo file, quindi lo script
+# funziona da qualsiasi cartella di lavoro.
+HERE            = Path(__file__).resolve().parent        # packaging/macos/
+REPO_ROOT       = HERE.parent.parent
+APP_DIR         = REPO_ROOT / "app"                      # sorgenti dell'app
+ENTRY_POINT     = APP_DIR / "main.py"
+ASSETS_DIR      = APP_DIR / "assets"
+ICON_FILE       = ASSETS_DIR / "app.icns"
+RUNTIME_HOOK    = APP_DIR / "pyi_rth_threads.py"
+ENTITLEMENTS    = ASSETS_DIR / "entitlements.plist"      # opzionale
+MODEL_SRC_DIR   = REPO_ROOT / "_build_model"             # modello scaricato (ignorato da git)
+BUNDLED_FFMPEG  = HERE / "bin" / "ffmpeg"                # ffmpeg statico x86_64 (build Intel)
+DIST_DIR        = REPO_ROOT / "dist"
+BUILD_DIR       = REPO_ROOT / "build"
 
 
 def find_ffmpeg() -> str | None:
-    """Cerca ffmpeg nel PATH e in percorsi Homebrew comuni."""
+    """Cerca ffmpeg: prima quello statico in packaging/macos/bin/ (solo x86_64), poi PATH/Homebrew."""
+    if platform.machine() == "x86_64" and BUNDLED_FFMPEG.exists():
+        return str(BUNDLED_FFMPEG)
     for candidate in (
         shutil.which("ffmpeg"),
         "/opt/homebrew/bin/ffmpeg",  # Apple Silicon
@@ -63,7 +83,7 @@ def find_ffmpeg() -> str | None:
 
 def find_model() -> Path | None:
     """Cerca il modello Whisper in _build_model/ oppure nella cache HuggingFace."""
-    local = Path(MODEL_SRC_DIR)
+    local = MODEL_SRC_DIR
     if local.exists() and any(local.iterdir()):
         return local
 
@@ -93,8 +113,9 @@ def clean():
 
 
 def build(sign_id: str | None = None):
-    here = Path(__file__).parent.resolve()
-    os.chdir(here)
+    # Lavoriamo dalla root del repo (il .spec generato finisce in build/).
+    os.chdir(REPO_ROOT)
+    print(f"Architettura: {platform.machine()}  |  root: {REPO_ROOT}")
 
     # ---- Verifica prerequisiti ----
     if not shutil.which("pyinstaller"):
@@ -107,10 +128,10 @@ def build(sign_id: str | None = None):
     model_dir = find_model()
     if not model_dir:
         print(
-            "⚠️   Modello Whisper non trovato in '_build_model/'.\n"
+            f"⚠️   Modello Whisper non trovato in '{MODEL_SRC_DIR}'.\n"
             "    Esegui: python -c \"from faster_whisper import WhisperModel; "
-            "WhisperModel('large-v3', download_root='_build_model')\"\n"
-            "    oppure ./setup_mac.sh per scaricarlo automaticamente.\n"
+            f"WhisperModel('large-v3', download_root='{MODEL_SRC_DIR}')\"\n"
+            "    oppure packaging/macos/install.sh per scaricarlo automaticamente.\n"
             "    Il build continua, ma l'app non potrà trascrivere."
         )
 
@@ -123,10 +144,15 @@ def build(sign_id: str | None = None):
         "--clean",
         "--distpath", str(DIST_DIR),
         "--workpath", str(BUILD_DIR),
-        "--runtime-hook", "pyi_rth_threads.py",
-        "--add-data", f"engine.py{os.pathsep}.",
-        "--add-data", f"ui{os.pathsep}ui",
-        "--add-data", f"core{os.pathsep}core",
+        # app/ nel path di analisi: main.py importa engine, platform_support, core, ui
+        # (platform_support.py viene quindi incluso dall'analisi degli import).
+        "--paths", str(APP_DIR),
+        "--specpath", str(BUILD_DIR),
+        "--runtime-hook", str(RUNTIME_HOOK),
+        "--add-data", f"{APP_DIR / 'engine.py'}{os.pathsep}.",
+        "--add-data", f"{APP_DIR / 'ui'}{os.pathsep}ui",
+        "--add-data", f"{APP_DIR / 'core'}{os.pathsep}core",
+        "--add-data", f"{ASSETS_DIR}{os.pathsep}assets",
         "--collect-all", "PySide6",
         "--collect-all", "shiboken6",
         "--collect-all", "onnxruntime",
@@ -151,8 +177,8 @@ def build(sign_id: str | None = None):
     ]
 
     # Icona
-    if Path(ICON_FILE).exists():
-        cmd += ["--icon", ICON_FILE]
+    if ICON_FILE.exists():
+        cmd += ["--icon", str(ICON_FILE)]
     else:
         print(f"⚠️   Icona non trovata ({ICON_FILE}) — verrà usata l'icona di default.")
 
@@ -164,7 +190,7 @@ def build(sign_id: str | None = None):
     if model_dir:
         cmd += ["--add-data", f"{model_dir}{os.pathsep}whisper_model"]
 
-    cmd.append(ENTRY_POINT)
+    cmd.append(str(ENTRY_POINT))
 
     run(cmd)
 
@@ -227,7 +253,7 @@ def _sign(app_path: Path, sign_id: str):
         print("⚠️   codesign non trovato — firma saltata.")
         return
 
-    entitlements = Path("assets/entitlements.plist")
+    entitlements = ENTITLEMENTS
     sign_cmd = [
         "codesign", "--deep", "--force", "--verbose",
         "--sign", sign_id,
@@ -253,7 +279,7 @@ def make_dmg(app_path: Path):
     cmd = [
         "create-dmg",
         "--volname",           f"{APP_NAME} {APP_VERSION}",
-        "--volicon",           ICON_FILE if Path(ICON_FILE).exists() else app_path,
+        "--volicon",           str(ICON_FILE) if ICON_FILE.exists() else str(app_path),
         "--window-pos",        "200", "120",
         "--window-size",       "660", "400",
         "--icon-size",         "128",

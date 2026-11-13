@@ -1,0 +1,14 @@
+# Solo configurazione degli strumenti: il progetto NON è un pacchetto installabile.
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+pythonpath = ["app"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["app"]
+extend-exclude = ["legacy-v1", "packaging", "docs"]
+
+[tool.ruff.lint]
+select = ["E9", "F"]

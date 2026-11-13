@@ -1,16 +1,17 @@
 """
 build_windows.py — Build PyInstaller per Windows (.exe + cartella dist/).
 
-Uso:
-    python build_windows.py [--onefile] [--clean]
+Uso (da qualsiasi cartella; i percorsi sono risolti dalla posizione dello script):
+    python packaging\\windows\\build_windows.py [--onefile] [--clean]
 
-Output:
+Output (nella root del repository):
     dist/VideoSRT/VideoSRT.exe         (default: cartella)
     dist/VideoSRT.exe                  (con --onefile, più lento all'avvio)
 
 Requisiti:
     pip install pyinstaller
-    ffmpeg.exe nel PATH o nella stessa cartella
+    ffmpeg.exe nel PATH oppure in packaging/windows/
+    (opzionale) app/assets/app.ico — se manca la build usa l'icona di default
 
 Note Windows specifiche:
     - UPX disabilitato (causa falsi positivi antivirus)
@@ -26,7 +27,12 @@ import sys
 import shutil
 from pathlib import Path
 
-script_dir = Path(__file__).resolve().parent
+script_dir = Path(__file__).resolve().parent      # packaging/windows/
+repo_root = script_dir.parent.parent
+app_dir = repo_root / "app"                       # sorgenti dell'app
+assets_dir = app_dir / "assets"
+dist_dir = repo_root / "dist"
+build_dir = repo_root / "build"
 
 
 def find_ffmpeg() -> str | None:
@@ -37,7 +43,7 @@ def find_ffmpeg() -> str | None:
         if candidate.exists():
             print(f"[build] ffmpeg trovato: {candidate}")
             return str(candidate)
-    # Cerca nella cartella dell'app
+    # Cerca accanto a questo script (packaging/windows/)
     local = script_dir / "ffmpeg.exe"
     if local.exists():
         print(f"[build] ffmpeg locale trovato: {local}")
@@ -49,8 +55,8 @@ def find_ffmpeg() -> str | None:
 
 def build(onefile: bool = False, clean: bool = False):
     if clean:
-        for d in ("build", "dist"):
-            shutil.rmtree(script_dir / d, ignore_errors=True)
+        for d in (build_dir, dist_dir):
+            shutil.rmtree(d, ignore_errors=True)
         print("[build] cartelle build/ e dist/ pulite")
 
     pyinstaller = shutil.which("pyinstaller")
@@ -66,6 +72,11 @@ def build(onefile: bool = False, clean: bool = False):
         "--windowed",               # nessuna finestra console su Windows
         "--noconfirm",
         "--clean",
+        "--distpath", str(dist_dir),
+        "--workpath", str(build_dir),
+        "--specpath", str(build_dir),
+        # app/ nel path di analisi: main.py importa engine, platform_support, core, ui
+        "--paths", str(app_dir),
         # Raccogli tutti i moduli necessari
         "--collect-all", "PySide6",
         "--collect-all", "shiboken6",
@@ -79,9 +90,9 @@ def build(onefile: bool = False, clean: bool = False):
         "--hidden-import", "huggingface_hub",
         "--hidden-import", "tokenizers",
         # Runtime hook threading
-        "--runtime-hook", "pyi_rth_threads.py",
+        "--runtime-hook", str(app_dir / "pyi_rth_threads.py"),
         # Assets
-        "--add-data", f"assets{os.pathsep}assets",
+        "--add-data", f"{assets_dir}{os.pathsep}assets",
     ]
 
     if ffmpeg_path:
@@ -91,27 +102,26 @@ def build(onefile: bool = False, clean: bool = False):
         cmd += ["--onefile"]
 
     # Icona .ico per Windows
-    ico_path = script_dir / "assets" / "app.ico"
+    ico_path = assets_dir / "app.ico"
     if ico_path.exists():
         cmd += ["--icon", str(ico_path)]
     else:
-        print("[build] AVVISO: assets/app.ico non trovato. "
-              "Usa assets/make_icon_windows.py per generarlo.")
+        print(f"[build] AVVISO: {ico_path} non trovato — verrà usata l'icona di default.")
 
-    cmd += ["main.py"]
+    cmd += [str(app_dir / "main.py")]
 
     print(f"[build] esecuzione: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=str(script_dir))
+    result = subprocess.run(cmd, cwd=str(repo_root))
     if result.returncode != 0:
         print(f"[build] ERRORE: PyInstaller ha restituito codice {result.returncode}")
         sys.exit(result.returncode)
 
     print("\n[build] Build completata.")
     if onefile:
-        exe = script_dir / "dist" / "VideoSRT.exe"
+        exe = dist_dir / "VideoSRT.exe"
         print(f"[build] Eseguibile: {exe}")
     else:
-        exe_dir = script_dir / "dist" / "VideoSRT"
+        exe_dir = dist_dir / "VideoSRT"
         print(f"[build] Cartella output: {exe_dir}")
         print(f"[build] Eseguibile:      {exe_dir / 'VideoSRT.exe'}")
 
