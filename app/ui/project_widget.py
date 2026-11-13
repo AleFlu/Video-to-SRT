@@ -20,11 +20,10 @@ solo tramite segnali.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import List
 
 from PySide6.QtCore import Qt, QSettings, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QStackedWidget, QMessageBox,
 )
@@ -40,6 +39,8 @@ from ui.editor_tab import EditorTab
 from ui.export_panel import ExportPanel
 from ui.export_tab import ExportTab
 
+logger = logging.getLogger(__name__)
+
 # Sotto-stati TranscriptionTab
 _TRANS_DROP     = 0
 _TRANS_PROGRESS = 1
@@ -49,9 +50,6 @@ _TRANS_RESULT   = 2
 _TAB_TRANSCRIPTION = 0
 _TAB_EDITOR        = 1
 _TAB_EXPORT        = 2
-
-# Limite autosave
-_AUTOSAVE_DIR_ENV = "HOME"
 
 
 class ProjectWidget(QWidget):
@@ -155,26 +153,15 @@ class ProjectWidget(QWidget):
             lambda: self.tab_bar.set_current(_TAB_TRANSCRIPTION)
         )
         self.editor_tab.import_requested.connect(self.open_path)
+        self.workspace.import_requested.connect(self.open_path)
 
         self.workspace.subtitles_changed.connect(self._on_subtitles_changed)
         self.workspace.export_requested.connect(self.do_export)
         self.workspace.status_text.connect(self.status_text)
 
-        # ── Shortcut esportazione (ApplicationShortcut: funzionano da qualsiasi tab) ──
-        # Ctrl+E → apri tab Esportazione
-        sc_exp = QShortcut(QKeySequence("Ctrl+E"), self)
-        sc_exp.setContext(Qt.ApplicationShortcut)
-        sc_exp.activated.connect(lambda: self.tab_bar.set_current(_TAB_EXPORT))
-
-        # Ctrl+S → esporta SRT (già funziona dal menu, ma anche qui per coerenza)
-        sc_srt = QShortcut(QKeySequence("Ctrl+S"), self)
-        sc_srt.setContext(Qt.ApplicationShortcut)
-        sc_srt.activated.connect(self.do_export)
-
-        # Ctrl+Shift+S → salva progetto .v2srt
-        sc_v2srt = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
-        sc_v2srt.setContext(Qt.ApplicationShortcut)
-        sc_v2srt.activated.connect(self.save_v2srt)
+        # Le scorciatoie (Ctrl+E, Ctrl+S, Ctrl+Shift+S…) sono azioni di menu della
+        # MainWindow che chiamano i metodi pubblici del progetto attivo: registrarle
+        # anche qui (una copia per progetto) le renderebbe ambigue.
 
         # Formati alternativi dalla timeline
         tl = self.workspace.timeline
@@ -201,10 +188,10 @@ class ProjectWidget(QWidget):
             elif self._segments_raw and not self._editor_loaded:
                 # Trascrizione completata ma editor non ancora aperto:
                 # caricali automaticamente quando l'utente clicca la tab
-                self.workspace.load_result(self._segments_raw, self._source_path)
-                self._editor_loaded = True
-                self.editor_tab.show_workspace()
-                self._refresh_editor_badge()
+                if self._load_raw_into_editor():
+                    self.editor_tab.show_workspace()
+                else:
+                    self.editor_tab.show_placeholder()
             else:
                 # Nessun sub da nessuna parte → placeholder
                 self.editor_tab.show_placeholder()
@@ -259,17 +246,28 @@ class ProjectWidget(QWidget):
 
     # ── ResultWidget handlers ──────────────────────────────────────────────────
 
+    def _load_raw_into_editor(self) -> bool:
+        """
+        Carica i segmenti dell'ultima trascrizione nell'editor, chiedendo conferma
+        se l'editor contiene modifiche non salvate. False se l'utente annulla.
+        """
+        if not self.confirm_discard_changes():
+            return False
+        self.workspace.load_result(self._segments_raw, self._source_path)
+        self._editor_loaded = True
+        self._refresh_editor_badge()
+        return True
+
     def _on_open_editor(self):
-        if not self._editor_loaded:
-            self.workspace.load_result(self._segments_raw, self._source_path)
-            self._editor_loaded = True
+        if not self._editor_loaded and not self._load_raw_into_editor():
+            return
         self.editor_tab.show_workspace()
         self.tab_bar.set_current(_TAB_EDITOR)
         self._main_stack.setCurrentIndex(_TAB_EDITOR)
         self._refresh_editor_badge()
 
     def _on_new_transcription_from_result(self):
-        if not self._confirm_discard_editor():
+        if not self.confirm_discard_changes():
             return
         self._reset_project()
         self._lock_tabs()
@@ -278,23 +276,20 @@ class ProjectWidget(QWidget):
     # ── Load v2srt / srt ──────────────────────────────────────────────────────
 
     def load_v2srt(self, path: str):
-        """Carica un .v2srt direttamente nell'editor."""
+        """Carica un .v2srt direttamente nell'editor (chiede conferma se modificato)."""
+        if not self.confirm_discard_changes():
+            return
         try:
             project, _ = load_project(path)
         except Exception as e:
+            logger.warning("Apertura progetto fallita: %s", path, exc_info=True)
             QMessageBox.critical(self, "Errore apertura",
                                  f"Impossibile aprire il progetto:\n{e}")
             return
 
-        self.project = project
-        self._segments_raw = list(project.subtitles)
-        self._editor_loaded = True
-
-        self.workspace.timeline.load_subtitles(project.subtitles)
-        self.workspace.inspector.bind_model(self.workspace.timeline.model)
+        self._apply_loaded_project(project)
 
         if project.source_path and Path(project.source_path).exists():
-            self.workspace.preview.load_media(project.source_path)
             media_name = Path(project.source_path).stem
         else:
             media_name = Path(path).stem
@@ -311,11 +306,25 @@ class ProjectWidget(QWidget):
         self._refresh_editor_badge()
         self._refresh_export_badge()
 
+    def _apply_loaded_project(self, project: SubtitleProject):
+        """
+        Installa un progetto caricato da file (.v2srt o autosave): stato, editor e
+        preview risincronizzati. `_segments_raw` resta sempre una lista di dict.
+        """
+        self.project = project
+        self._source_path = project.source_path
+        self._segments_raw = [s.to_dict() for s in project.subtitles]
+        self._editor_loaded = True
+        self.workspace.load_content(project.subtitles, project.source_path)
+
     def _load_srt(self, path: str):
+        if not self.confirm_discard_changes():
+            return
         try:
             from core.srt_io import parse_srt
             subtitles = parse_srt(path)
         except Exception as e:
+            logger.warning("Lettura SRT fallita: %s", path, exc_info=True)
             QMessageBox.critical(self, "Errore apertura SRT",
                                  f"Impossibile leggere il file SRT:\n{e}")
             return
@@ -613,25 +622,48 @@ class ProjectWidget(QWidget):
         self.workspace.timeline.load_subtitles([])
         self.workspace.mark_saved()
 
-    def _confirm_discard_editor(self) -> bool:
-        subs = self.workspace.get_subtitles()
-        if subs and self.workspace.is_modified():
-            ans = QMessageBox.question(
-                self, "Modifiche non esportate",
-                f"Hai {len(subs)} sottotitoli con modifiche non esportate. Continuare?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            return ans == QMessageBox.Yes
-        return True
+    def confirm_discard_changes(self) -> bool:
+        """
+        Punto UNICO di conferma prima di sostituire/scartare il contenuto dell'editor.
+
+        Se l'editor non ha modifiche non salvate ritorna True senza chiedere.
+        Altrimenti chiede Salva / Non salvare / Annulla:
+          - Salva       → salva il progetto .v2srt; True solo se il salvataggio riesce
+          - Non salvare → True (le modifiche verranno scartate dal chiamante)
+          - Annulla     → False (il chiamante non deve toccare l'editor)
+        """
+        if not self.workspace.is_modified():
+            return True
+        n = len(self.workspace.get_subtitles())
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Modifiche non salvate")
+        box.setText("L'editor contiene modifiche non salvate.")
+        box.setInformativeText(
+            f"{n} sottotitoli. Vuoi salvare il progetto prima di continuare?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setDefaultButton(QMessageBox.Save)
+        box.setEscapeButton(QMessageBox.Cancel)
+        for btn, label in ((QMessageBox.Save, "Salva…"),
+                           (QMessageBox.Discard, "Non salvare"),
+                           (QMessageBox.Cancel, "Annulla")):
+            b = box.button(btn)
+            if b is not None:
+                b.setText(label)
+        ans = box.exec()
+        if ans == QMessageBox.Save:
+            self.save_v2srt()
+            return not self.workspace.is_modified()
+        return ans == QMessageBox.Discard
 
     def can_close(self) -> bool:
         """
-        Verifica se il progetto può essere chiuso.
-        Se ci sono modifiche, chiede conferma all'utente.
+        Verifica se il progetto può essere chiuso (chiede conferma all'utente).
+        Non ferma nulla: il worker viene annullato solo in teardown(), dopo che
+        TUTTE le conferme sono state date.
         """
-        # Trascrizione nella tab Progress?
-        if self._trans_stack.currentIndex() == _TRANS_PROGRESS and self.progress.is_running():
+        if self.progress.is_running():
             ans = QMessageBox.question(
                 self, "Trascrizione in corso",
                 "La trascrizione è in corso. Chiudere comunque?",
@@ -640,26 +672,19 @@ class ProjectWidget(QWidget):
             )
             if ans != QMessageBox.Yes:
                 return False
-            self.progress.request_stop()
 
-        # Modifiche non salvate?
-        if self.workspace.is_modified():
-            ans = QMessageBox.question(
-                self, "Modifiche non salvate",
-                "Ci sono modifiche non esportate. Chiudere comunque?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if ans != QMessageBox.Yes:
-                return False
-
-        return True
+        return self.confirm_discard_changes()
 
     def teardown(self):
-        """Chiamato da MainWindow prima di rimuovere il widget. Ferma timer e thread."""
+        """
+        Chiamato da MainWindow prima di rimuovere il widget: ferma timer, annulla
+        il worker di trascrizione (sganciandolo: il chiamante attende i thread
+        sganciati con wait_detached_threads) e chiude il pannello export flottante.
+        """
         self._autosave_timer.stop()
         # Sgancia il QThread dal widget: distruggerlo mentre gira = crash Qt
         self.progress.detach_and_stop()
+        self._export_panel.close()
         self._delete_autosave()
 
     # ── File recenti ──────────────────────────────────────────────────────────
@@ -682,45 +707,80 @@ class ProjectWidget(QWidget):
         return platform_support.app_cache_dir() / f"autosave_{self._uid}.v2srt"
 
     def _autosave(self):
+        """Salva una copia di sicurezza solo se ci sono modifiche non salvate."""
         subs = self.workspace.get_subtitles()
-        if not subs:
+        if not subs or not self.workspace.is_modified():
             return
         try:
-            self.project.subtitles = subs
+            self.project.subtitles = list(subs)
             save_project(self.project, str(self.autosave_path()))
         except Exception:
-            pass
+            logger.warning("Scrittura autosave fallita: %s", self.autosave_path(),
+                           exc_info=True)
 
     def _delete_autosave(self):
         try:
             self.autosave_path().unlink(missing_ok=True)
         except Exception:
-            pass
+            logger.warning("Eliminazione autosave fallita: %s", self.autosave_path(),
+                           exc_info=True)
 
-    def restore_from_autosave(self, path: str):
-        """Carica da un file autosave senza chiedere conferma."""
+    def restore_from_autosave(self, path: str) -> bool:
+        """
+        Carica un file autosave senza chiedere conferma.
+        Ritorna True solo se il ripristino è riuscito: il chiamante elimina il
+        file di autosave SOLO in quel caso. Il progetto ripristinato è marcato
+        modificato (non è mai stato salvato dall'utente).
+        """
         try:
             project, _ = load_project(path)
-            self.project = project
-            self._segments_raw = list(project.subtitles)
-            self._editor_loaded = True
-            self.workspace.timeline.load_subtitles(project.subtitles)
-            self.workspace.inspector.bind_model(self.workspace.timeline.model)
-            if project.source_path and Path(project.source_path).exists():
-                self.workspace.preview.load_media(project.source_path)
-                self._set_title(Path(project.source_path).stem)
-            else:
-                self._set_title(f"Progetto {self._project_number} (ripristinato)")
-            self.editor_tab.show_workspace()
-            self._unlock_tabs()
-            self.tab_bar.set_current(_TAB_EDITOR)
-            self._main_stack.setCurrentIndex(_TAB_EDITOR)
-            self._refresh_editor_badge()
         except Exception:
-            pass   # autosave corrotto → ignora silenziosamente
+            logger.warning("Ripristino autosave fallito: %s", path, exc_info=True)
+            return False
+
+        self._apply_loaded_project(project)
+        self.workspace.timeline.mark_modified()
+        if project.source_path and Path(project.source_path).exists():
+            self._set_title(Path(project.source_path).stem)
+        else:
+            self._set_title(f"Progetto {self._project_number} (ripristinato)")
+        self.editor_tab.show_workspace()
+        self._unlock_tabs()
+        self.tab_bar.set_current(_TAB_EDITOR)
+        self._main_stack.setCurrentIndex(_TAB_EDITOR)
+        self._refresh_editor_badge()
+        self._refresh_export_badge()
+        self.modified_changed.emit(True)
+        return True
 
     # ── Accesso undo/redo/find (per menu MainWindow) ──────────────────────────
 
     @property
     def timeline(self):
         return self.workspace.timeline
+
+    def is_editor_current(self) -> bool:
+        """True se l'utente sta guardando l'editor con dei sottotitoli caricati."""
+        return (self.tab_bar.current() == _TAB_EDITOR
+                and bool(self.workspace.get_subtitles()))
+
+    def _show_editor_if_content(self) -> bool:
+        if not self.workspace.get_subtitles():
+            return False
+        self.tab_bar.set_current(_TAB_EDITOR)
+        return True
+
+    def find_inline(self):
+        """Ctrl+F: porta il focus sulla ricerca inline della timeline."""
+        if self._show_editor_if_content():
+            self.timeline.focus_search()
+
+    def find_replace(self):
+        """Apre il dialog Trova e sostituisci sull'editor."""
+        if self._show_editor_if_content():
+            self.timeline.open_find_replace()
+
+    def show_export_tab(self):
+        """Ctrl+E: apre la tab Esportazione (se sbloccata)."""
+        if self.tab_bar.is_unlocked():
+            self.tab_bar.set_current(_TAB_EXPORT)

@@ -11,6 +11,7 @@ Segnali:
 """
 
 from __future__ import annotations
+import warnings
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QThread, QCoreApplication
@@ -257,6 +258,20 @@ class ProgressWidget(AuroraMixin, QWidget):
         t, w = self._thread, self._worker
         self._thread = None
         self._worker = None
+        # Un segnale tardivo del worker non deve più raggiungere questo widget
+        # (es. transcription_done su un progetto già chiuso).
+        pairs = ((w.status, self._on_status), (w.progress, self._on_progress),
+                 (w.finished, self._on_finished), (w.failed, self._on_failed),
+                 (w.cancelled, self._on_cancelled), (w.finished, self._cleanup),
+                 (w.failed, self._cleanup), (w.cancelled, self._cleanup))
+        with warnings.catch_warnings():
+            # PySide6 avvisa (RuntimeWarning) se una connessione non esiste già più
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for sig, slot in pairs:
+                try:
+                    sig.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
         w.request_cancel()
         if not t.isRunning():
             t.deleteLater()

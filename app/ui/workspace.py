@@ -15,6 +15,7 @@ Layout:
 """
 
 from __future__ import annotations
+from pathlib import Path
 from typing import List
 
 from PySide6.QtCore import Qt, Signal, QSettings
@@ -51,6 +52,7 @@ class WorkspaceWidget(QWidget):
     subtitles_changed = Signal()
     export_requested  = Signal()
     status_text       = Signal(str)
+    import_requested  = Signal(str)   # "+ Importa" dalla toolbar della timeline
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -88,9 +90,9 @@ class WorkspaceWidget(QWidget):
         self._hsplit.addWidget(self._vsplit)
 
         # ── Inspector — colonna destra full height ────────────────────────────
-        from ui.inspector_widget import InspectorWidget
-        self.inspector = InspectorWidget()
-        self.inspector.bind_model(self.timeline.model)
+        # Istanza UNICA: è quella della timeline, già collegata all'undo stack
+        # in SubtitleTimeline._wire(). Qui viene solo inserita nel layout.
+        self.inspector = self.timeline.inspector
         self.inspector.setMinimumWidth(240)
         self.inspector.setMaximumWidth(420)
         self.inspector.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -102,9 +104,6 @@ class WorkspaceWidget(QWidget):
 
         # ── Unifica player ─────────────────────────────────────────────────────
         self.timeline.set_player(self.preview.player)
-
-        # ── Inspector wiring — collega timeline → inspector esterno ───────────
-        self._wire_inspector()
 
         # ── Inspector toggle dalla toolbar timeline ────────────────────────────
         self.timeline.act_toggle_insp.triggered.connect(
@@ -123,27 +122,16 @@ class WorkspaceWidget(QWidget):
         self._hsplit.setStyleSheet(_splitter_style())
         self._vsplit.setStyleSheet(_splitter_style())
 
-    # ── Wiring inspector (ora esterno alla timeline) ───────────────────────────
-
-    def _wire_inspector(self):
-        # Segnali inspector → undo stack già connessi in SubtitleTimeline._wire().
-        # Qui colleghiamo solo la sincronizzazione selezione → inspector display.
-        self.timeline.view.selectionModel().currentRowChanged.connect(
-            lambda cur, _: self.inspector.show_row(cur.row() if cur.isValid() else None)
-        )
-        self.timeline.view.clicked.connect(
-            lambda idx: self.inspector.show_row(idx.row())
-        )
-
     # ── Wiring generale ───────────────────────────────────────────────────────
 
     def _wire(self):
         self.timeline.subtitles_changed.connect(self.subtitles_changed)
-        self.timeline.subtitles_changed.connect(self._sync_preview_subs)
+        self.timeline.subtitles_changed.connect(self.sync_preview_subs)
         self.timeline.status_text.connect(self.status_text)
-        self.timeline.model.rowsInserted.connect(self._sync_preview_subs)
-        self.timeline.model.rowsRemoved.connect(self._sync_preview_subs)
-        self.timeline.model.modelReset.connect(self._sync_preview_subs)
+        self.timeline.import_requested.connect(self.import_requested)
+        self.timeline.model.rowsInserted.connect(self.sync_preview_subs)
+        self.timeline.model.rowsRemoved.connect(self.sync_preview_subs)
+        self.timeline.model.modelReset.connect(self.sync_preview_subs)
 
         self.timeline.act_export.triggered.connect(self.export_requested)
 
@@ -164,7 +152,8 @@ class WorkspaceWidget(QWidget):
         row = current.row() if current.isValid() else -1
         self.preview.set_selected_row(row)
 
-    def _sync_preview_subs(self, *_):
+    def sync_preview_subs(self, *_):
+        """Ricopia i sottotitoli correnti su waveform e overlay video."""
         subs = self.timeline.model.subtitles()
         severity = [
             self.timeline.model.row_severity(r)
@@ -184,9 +173,22 @@ class WorkspaceWidget(QWidget):
         from core.subtitle_model import SubtitleProject
         project = SubtitleProject()
         project.load_from_segments(segments, source_path)
-        self.timeline.load_subtitles(project.subtitles)
-        self.preview.load_media(source_path)
-        self._sync_preview_subs()
+        self.load_content(project.subtitles, source_path)
+
+    def load_content(self, subtitles: List[Subtitle], source_path: str):
+        """
+        Carica sottotitoli + media nell'editor e risincronizza la preview.
+
+        `load_media` resetta waveform e overlay: per questo la sincronizzazione
+        dei sottotitoli va fatta DOPO il caricamento del media. Senza media
+        valido la preview viene svuotata (niente media del progetto precedente).
+        """
+        self.timeline.load_subtitles(subtitles)
+        if source_path and Path(source_path).exists():
+            self.preview.load_media(source_path)
+        else:
+            self.preview.clear_media()
+        self.sync_preview_subs()
 
     def get_subtitles(self) -> List[Subtitle]:
         return self.timeline.get_subtitles()

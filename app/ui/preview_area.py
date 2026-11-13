@@ -233,6 +233,16 @@ class PreviewArea(QWidget):
             self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
             self.waveform.load_audio(file_path)
 
+    def clear_media(self):
+        """Nessun media associato al progetto: svuota player, waveform e overlay."""
+        self.waveform.reset()
+        self._overlay_subs = []
+        if self._subtitle_overlay is not None:
+            self._subtitle_overlay.set_text("")
+        self.player.unload()
+        self.file_lbl.setText("")
+        self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
+
     # Alias mantenuto per compatibilità con codice esistente
     def load_audio(self, file_path: str):
         self.load_media(file_path)

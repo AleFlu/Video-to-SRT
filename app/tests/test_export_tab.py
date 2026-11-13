@@ -71,7 +71,7 @@ def test_refresh_raw_only_count(app, raw_segments):
 def test_refresh_raw_badge_not_shown(app, raw_segments):
     et = ExportTab()
     et.refresh(segments_raw=raw_segments, editor_subs=[], source_path="/v.mp4", is_modified=False)
-    assert not et._panel._badge_modified.isVisible()
+    assert et._panel._badge_modified.isHidden()
 
 
 # ── refresh: editor subs priorità su raw ──────────────────────────────────────

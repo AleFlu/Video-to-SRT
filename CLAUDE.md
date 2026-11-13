@@ -84,7 +84,7 @@ CI: stessi `ruff check app` + `pytest` su macOS/Windows/Ubuntu (Python 3.11, sen
 |---|---|
 | Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
 | Ctrl+K / Ctrl+M / Ctrl+Shift+K | Dividi / Unisci col successivo / Elimina selezionati |
-| Ctrl+F | Find & Replace |
+| Ctrl+F / Ctrl+Alt+F | Trova (ricerca inline) / Trova e sostituisci |
 | Ctrl+I | Mostra/nascondi Inspector |
 | Ctrl+O / Ctrl+N | Apri file / nuova trascrizione |
 | Ctrl+S / Ctrl+E | Esporta SRT / apri tab Esportazione |

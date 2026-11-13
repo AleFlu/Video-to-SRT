@@ -239,9 +239,8 @@ class ProjectTabBar(QWidget):
         sc_prev.setContext(Qt.ApplicationShortcut)
         sc_prev.activated.connect(self._shortcut_prev_tab)
 
-        sc_new = QShortcut(QKeySequence("Ctrl+Shift+T"), self)
-        sc_new.setContext(Qt.ApplicationShortcut)
-        sc_new.activated.connect(self._on_new_clicked)
+        # Ctrl+Shift+T (nuovo progetto) è l'azione del menu File della MainWindow:
+        # registrarla anche qui la renderebbe ambigua.
 
         self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto

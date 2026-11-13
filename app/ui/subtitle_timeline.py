@@ -12,8 +12,10 @@ API pubblica identica a EditorPanel:
   is_modified() → bool
   mark_saved()
 
-Il QUndoStack è interno; il chiamante può passarne uno esterno via
-set_undo_stack() se vuole un undo globale condiviso.
+Il QUndoStack è interno (uno per progetto). Le scorciatoie globali (undo, dividi,
+trova, esporta…) NON sono registrate qui: appartengono alle azioni di menu della
+MainWindow, che le inoltrano al progetto attivo. Qui restano solo le QShortcut
+di riproduzione, attive solo quando la timeline è visibile.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ class SubtitleTimeline(QWidget):
     subtitles_changed = Signal()
     jkl_pressed = Signal(str)   # "J" | "K" | "L"
     status_text = Signal(str)   # testo per la status bar esterna
+    import_requested = Signal(str)   # path scelto con "+ Importa" (gestito da ProjectWidget)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,8 +113,8 @@ class SubtitleTimeline(QWidget):
 
         self._inner.setCentralWidget(self.view)
 
-        # Inspector: creato ma non aggiunto come dock — gestito esternamente da WorkspaceWidget.
-        # Workspace chiama inspector.bind_model(self.model) e wira i segnali.
+        # Inspector: istanza unica, collegata qui all'undo stack (_wire). WorkspaceWidget
+        # si limita a inserirla nel proprio splitter.
         self.inspector = InspectorWidget()
         self.inspector.bind_model(self.model)
 
@@ -130,35 +133,34 @@ class SubtitleTimeline(QWidget):
         self._inner.addToolBar(tb)
 
         # ── Undo / Redo ────────────────────────────────────────────────────────
+        # Nessuna scorciatoia qui: Ctrl+Z / redo sono le azioni del menu Modifica
+        # (QUndoGroup della MainWindow), altrimenti sarebbero ambigue.
         self.act_undo = self.undo_stack.createUndoAction(self, "↩")
-        self.act_undo.setShortcut(QKeySequence.Undo)
         self.act_undo.setToolTip(f"Annulla  {_sl('Ctrl+Z')}")
         self.act_redo = self.undo_stack.createRedoAction(self, "↪")
-        self.act_redo.setShortcut(QKeySequence.Redo)
         self.act_redo.setToolTip(f"Ripeti  {_sl('Ctrl+Shift+Z')}")
         tb.addAction(self.act_undo)
         tb.addAction(self.act_redo)
         tb.addSeparator()
 
         # ── Operazioni sottotitoli ─────────────────────────────────────────────
-        def _tb_btn(text, tooltip, shortcut=None):
+        # Le scorciatoie indicate nei tooltip sono registrate dalla MainWindow.
+        def _tb_btn(text, tooltip):
             b = QPushButton(text)
             b.setToolTip(tooltip)
             b.setCursor(Qt.PointingHandCursor)
-            if shortcut:
-                b.setShortcut(shortcut)
             self._tb_buttons.append(b)
             return b
 
-        btn_split = _tb_btn("÷ Dividi", f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}", "Ctrl+K")
+        btn_split = _tb_btn("÷ Dividi", f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}")
         btn_split.clicked.connect(self._split_current)
         tb.addWidget(btn_split)
 
-        btn_merge = _tb_btn("⊔ Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}", "Ctrl+M")
+        btn_merge = _tb_btn("⊔ Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}")
         btn_merge.clicked.connect(self._merge_next)
         tb.addWidget(btn_merge)
 
-        btn_del = _tb_btn("× Elimina", f"Elimina selezionati  {_sl('Ctrl+Shift+K')}", "Ctrl+Shift+K")
+        btn_del = _tb_btn("× Elimina", f"Elimina selezionati  {_sl('Ctrl+Shift+K')}")
         btn_del.clicked.connect(self._delete_selected)
         tb.addWidget(btn_del)
 
@@ -171,11 +173,19 @@ class SubtitleTimeline(QWidget):
 
         tb.addSeparator()
 
+        # ── Trova e sostituisci ────────────────────────────────────────────────
+        self.btn_find_replace = _tb_btn(
+            "⇄ Sostituisci", f"Trova e sostituisci  {_sl('Ctrl+Alt+F')}"
+        )
+        self.btn_find_replace.clicked.connect(self.open_find_replace)
+        tb.addWidget(self.btn_find_replace)
+
+        tb.addSeparator()
+
         # ── Inspector toggle ───────────────────────────────────────────────────
         self.act_toggle_insp = QAction("◧ Ispettore", self)
         self.act_toggle_insp.setCheckable(True)
         self.act_toggle_insp.setChecked(True)
-        self.act_toggle_insp.setShortcut("Ctrl+I")
         self.act_toggle_insp.setToolTip(f"Mostra/nascondi Ispettore  {_sl('Ctrl+I')}")
         # Il toggle_insp ora controlla l'inspector esterno — segnale gestito da workspace
         tb.addAction(self.act_toggle_insp)
@@ -193,7 +203,7 @@ class SubtitleTimeline(QWidget):
         self._search_box.setClearButtonEnabled(True)
         self._search_box.textChanged.connect(self._on_search)
         self._search_box.returnPressed.connect(self._on_search_next)
-        QShortcut(QKeySequence.Find, self, activated=self._focus_search)
+        self._search_box.setToolTip(f"Cerca nel testo  {_sl('Ctrl+F')}")
         tb.addWidget(self._search_box)
         self._search_idx = -1   # indice corrente ricerca
 
@@ -218,7 +228,6 @@ class SubtitleTimeline(QWidget):
 
         # ── Actions ────────────────────────────────────────────────────────────
         self.act_export = QAction("Esporta SRT", self)
-        self.act_export.setShortcut(QKeySequence.Save)
         self._export_btn.clicked.connect(self.act_export.trigger)
 
         self.act_export_vtt   = QAction("Esporta VTT…", self)
@@ -226,11 +235,17 @@ class SubtitleTimeline(QWidget):
         self.act_export_ass   = QAction("Esporta ASS…", self)
         self.act_export_v2srt = QAction("Salva progetto .v2srt…", self)
 
-        # act_split/merge/delete/find come QAction per compatibilità
-        self.act_split  = QAction("Dividi", self); self.act_split.triggered.connect(self._split_current)
-        self.act_merge  = QAction("Unisci", self); self.act_merge.triggered.connect(self._merge_next)
-        self.act_delete = QAction("Elimina", self); self.act_delete.triggered.connect(self._delete_selected)
-        self.act_find   = QAction("Trova", self); self.act_find.triggered.connect(self._focus_search)
+        # Azioni senza scorciatoia: la MainWindow le invoca sul progetto attivo
+        self.act_split  = QAction("Dividi", self)
+        self.act_split.triggered.connect(self._split_current)
+        self.act_merge  = QAction("Unisci", self)
+        self.act_merge.triggered.connect(self._merge_next)
+        self.act_delete = QAction("Elimina", self)
+        self.act_delete.triggered.connect(self._delete_selected)
+        self.act_find   = QAction("Trova", self)
+        self.act_find.triggered.connect(self.focus_search)
+        self.act_find_replace = QAction("Trova e sostituisci…", self)
+        self.act_find_replace.triggered.connect(self.open_find_replace)
 
         self._toolbar = tb
         self._apply_toolbar_palette()
@@ -313,7 +328,8 @@ class SubtitleTimeline(QWidget):
 
     # ---- Ricerca inline ----
 
-    def _focus_search(self):
+    def focus_search(self):
+        """Porta il focus sulla casella di ricerca inline."""
         self._search_box.setFocus()
         self._search_box.selectAll()
 
@@ -352,6 +368,10 @@ class SubtitleTimeline(QWidget):
     # ---- Importa file ----
 
     def _import_file(self):
+        """
+        Sceglie il file e lo inoltra con `import_requested`: il caricamento (con la
+        conferma se l'editor è modificato) è fatto da ProjectWidget.open_path.
+        """
         path, _ = QFileDialog.getOpenFileName(
             self, "Importa file",
             "",
@@ -359,22 +379,8 @@ class SubtitleTimeline(QWidget):
             "SRT (*.srt);;"
             "Progetto V2SRT (*.v2srt)"
         )
-        if not path:
-            return
-        from pathlib import Path as _Path
-        ext = _Path(path).suffix.lower()
-        try:
-            if ext == ".srt":
-                from core.srt_io import parse_srt
-                subs = parse_srt(path)
-                self.load_subtitles(subs)
-            elif ext == ".v2srt":
-                from core.v2srt_io import load_project
-                project, _settings = load_project(path)
-                self.load_subtitles(project.subtitles)
-        except Exception as e:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Errore importazione", str(e))
+        if path:
+            self.import_requested.emit(path)
 
     # ---- Wiring ----
 
@@ -416,7 +422,6 @@ class SubtitleTimeline(QWidget):
         QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self._if_not_typing(lambda: self.player.seek_relative(1000)))
         QShortcut(QKeySequence("Shift+Left"),  self, activated=lambda: self._if_not_typing(self._go_prev_sub))
         QShortcut(QKeySequence("Shift+Right"), self, activated=lambda: self._if_not_typing(self._go_next_sub))
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.undo_stack.redo)
 
     # ---- API pubblica ----
 
@@ -441,6 +446,11 @@ class SubtitleTimeline(QWidget):
 
     def mark_saved(self):
         self.undo_stack.setClean()
+        self._update_status()
+
+    def mark_modified(self):
+        """Segna il contenuto come non salvato (es. sessione ripristinata da autosave)."""
+        self.undo_stack.resetClean()
         self._update_status()
 
     def set_player(self, player: AudioPlayer):
@@ -604,7 +614,8 @@ class SubtitleTimeline(QWidget):
 
     # ---- Find & Replace ----
 
-    def _open_find_replace(self):
+    def open_find_replace(self):
+        """Apre (o riporta in primo piano) il dialog Trova e sostituisci."""
         if self._find_dialog is None:
             self._find_dialog = FindReplaceDialog(self.model, self)
             self._find_dialog.match_found.connect(

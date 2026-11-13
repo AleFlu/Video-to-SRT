@@ -21,10 +21,11 @@ Agisce come proxy per menu e status bar verso il progetto attivo.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QUrl
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QSettings
+from PySide6.QtGui import QAction, QKeySequence, QUndoGroup
 from PySide6.QtWidgets import (
     QMainWindow, QStackedWidget, QStatusBar, QLabel, QMessageBox, QWidget, QVBoxLayout,
     QApplication,
@@ -40,7 +41,8 @@ from ui import theme
 _MAX_RECENT      = 10
 _SETTINGS_RECENT = "recent_files"
 _SETTINGS_GEOM   = "mainwindow/geometry"
-_AUTOSAVE_DIR_ENV = "HOME"
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -59,6 +61,9 @@ class MainWindow(QMainWindow):
 
         # Lista ProjectWidget (parallelo a ProjectTabBar)
         self._projects: list[ProjectWidget] = []
+
+        # Undo/redo globali: il gruppo segue lo stack del progetto attivo
+        self._undo_group = QUndoGroup(self)
 
         # ── UI ───────────────────────────────────────────────────────────────
         root = QWidget()
@@ -117,6 +122,7 @@ class MainWindow(QMainWindow):
         idx = len(self._projects)
         self._projects.append(pw)
         self._stack.addWidget(pw)
+        self._undo_group.addStack(pw.timeline.undo_stack)
 
         pw.title_changed.connect(lambda t, i=idx: self._on_project_title_changed(t, i))
         pw.modified_changed.connect(lambda m, i=idx: self._on_project_modified_changed(m, i))
@@ -152,6 +158,7 @@ class MainWindow(QMainWindow):
             if not pw.can_close():
                 return
             pw.teardown()
+            self._undo_group.removeStack(pw.timeline.undo_stack)
             # Rimuovi e ricrea un progetto vuoto fresco
             self._stack.removeWidget(pw)
             self._projects.clear()
@@ -165,6 +172,7 @@ class MainWindow(QMainWindow):
             return
 
         pw.teardown()
+        self._undo_group.removeStack(pw.timeline.undo_stack)
         self._stack.removeWidget(pw)
         self._projects.pop(index)
         pw.deleteLater()
@@ -219,58 +227,95 @@ class MainWindow(QMainWindow):
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 
+    def _add_action(self, menu, text: str, slot, shortcuts=None) -> QAction:
+        """
+        Crea un'azione della finestra. Ogni scorciatoia dell'app è registrata UNA
+        sola volta, qui: le azioni inoltrano al progetto attivo.
+        """
+        act = QAction(text, self)
+        if shortcuts is not None:
+            if isinstance(shortcuts, (list, tuple)):
+                act.setShortcuts([QKeySequence(k) for k in shortcuts])
+            else:
+                act.setShortcuts(QKeySequence.keyBindings(shortcuts)
+                                 if isinstance(shortcuts, QKeySequence.StandardKey)
+                                 else [QKeySequence(shortcuts)])
+        act.triggered.connect(slot)
+        if menu is not None:
+            menu.addAction(act)
+        return act
+
+    def _on_active(self, fn, editor_only: bool = False):
+        """Ritorna uno slot che applica `fn(progetto_attivo)` (se esiste)."""
+        def _slot(*_):
+            pw = self._active()
+            if pw is None:
+                return
+            if editor_only and not pw.is_editor_current():
+                return
+            fn(pw)
+        return _slot
+
     def _build_menu(self):
         bar = self.menuBar()
 
         # ── File ──────────────────────────────────────────────────────────────
         m_file = bar.addMenu("&File")
 
-        act_open = QAction("Apri file…", self)
-        act_open.setShortcut(QKeySequence.Open)
-        act_open.triggered.connect(self._open_any)
-        m_file.addAction(act_open)
-
-        act_open_proj = QAction("Apri progetto .v2srt…", self)
-        act_open_proj.triggered.connect(self._open_v2srt_dialog)
-        m_file.addAction(act_open_proj)
+        self._add_action(m_file, "Apri file…", self._open_any, QKeySequence.Open)
+        self._add_action(m_file, "Apri progetto .v2srt…", self._open_v2srt_dialog)
 
         self._menu_recent = m_file.addMenu("Apri recenti")
         self._menu_recent.aboutToShow.connect(self._populate_recent_menu)
 
         m_file.addSeparator()
 
-        act_new_proj = QAction("Nuovo progetto", self)
-        act_new_proj.setShortcut("Ctrl+Shift+T")
-        act_new_proj.triggered.connect(self._new_project)
-        m_file.addAction(act_new_proj)
-
-        act_new_trans = QAction("Nuova trascrizione", self)
-        act_new_trans.setShortcut("Ctrl+N")
-        act_new_trans.triggered.connect(self._new_transcription_active)
-        m_file.addAction(act_new_trans)
+        self._add_action(m_file, "Nuovo progetto", self._new_project, "Ctrl+Shift+T")
+        self._add_action(m_file, "Nuova trascrizione", self._new_transcription_active, "Ctrl+N")
 
         m_file.addSeparator()
 
-        act_save_proj = QAction("Salva progetto .v2srt…", self)
-        act_save_proj.setShortcut("Ctrl+Shift+S")
-        act_save_proj.triggered.connect(lambda: self._active() and self._active().save_v2srt())
-        m_file.addAction(act_save_proj)
-
-        act_export = QAction("Esporta sottotitoli…", self)
-        act_export.setShortcut(QKeySequence.Save)
-        act_export.triggered.connect(lambda: self._active() and self._active().do_export())
-        m_file.addAction(act_export)
+        self._add_action(m_file, "Salva progetto .v2srt…",
+                         self._on_active(lambda pw: pw.save_v2srt()), "Ctrl+Shift+S")
+        self._add_action(m_file, "Esporta sottotitoli…",
+                         self._on_active(lambda pw: pw.do_export()), QKeySequence.Save)
+        self._add_action(m_file, "Vai a Esportazione",
+                         self._on_active(lambda pw: pw.show_export_tab()), "Ctrl+E")
 
         m_file.addSeparator()
 
-        act_quit = QAction("Esci", self)
-        act_quit.setShortcut(QKeySequence.Quit)
-        act_quit.triggered.connect(self.close)
-        m_file.addAction(act_quit)
+        self._add_action(m_file, "Esci", self.close, QKeySequence.Quit)
 
-        # ── Modifica (proxy verso timeline del progetto attivo) ────────────────
-        # Il menu Modifica viene aggiornato dinamicamente da _refresh_menu_for_active
+        # ── Modifica (inoltra al progetto attivo) ─────────────────────────────
         self._menu_edit = bar.addMenu("&Modifica")
+        self.act_undo = self._undo_group.createUndoAction(self, "Annulla")
+        self.act_undo.setShortcuts(QKeySequence.keyBindings(QKeySequence.Undo))
+        self.act_redo = self._undo_group.createRedoAction(self, "Ripeti")
+        self.act_redo.setShortcuts(QKeySequence.keyBindings(QKeySequence.Redo))
+        self._menu_edit.addAction(self.act_undo)
+        self._menu_edit.addAction(self.act_redo)
+        self._menu_edit.addSeparator()
+        self.act_split = self._add_action(
+            self._menu_edit, "Dividi al cursore",
+            self._on_active(lambda pw: pw.timeline.act_split.trigger(), editor_only=True),
+            "Ctrl+K")
+        self.act_merge = self._add_action(
+            self._menu_edit, "Unisci al successivo",
+            self._on_active(lambda pw: pw.timeline.act_merge.trigger(), editor_only=True),
+            "Ctrl+M")
+        self.act_delete = self._add_action(
+            self._menu_edit, "Elimina selezionati",
+            self._on_active(lambda pw: pw.timeline.act_delete.trigger(), editor_only=True),
+            "Ctrl+Shift+K")
+        self._menu_edit.addSeparator()
+        self.act_find = self._add_action(
+            self._menu_edit, "Trova…",
+            self._on_active(lambda pw: pw.find_inline()), QKeySequence.Find)
+        # Su macOS Cmd+H è "Nascondi applicazione": lì si usa solo Ctrl+Alt+F (⌘⌥F)
+        replace_keys = ["Ctrl+Alt+F"] if platform_support.IS_MAC else ["Ctrl+Alt+F", "Ctrl+H"]
+        self.act_find_replace = self._add_action(
+            self._menu_edit, "Trova e sostituisci…",
+            self._on_active(lambda pw: pw.find_replace()), replace_keys)
 
         # ── Vista ──────────────────────────────────────────────────────────────
         m_view = bar.addMenu("&Vista")
@@ -287,6 +332,14 @@ class MainWindow(QMainWindow):
         self._act_theme.setShortcut("Ctrl+Shift+L")
         self._act_theme.triggered.connect(self._toggle_theme)
         m_view.addAction(self._act_theme)
+
+        self.act_toggle_insp = self._add_action(
+            None, "Mostra/nascondi Ispettore",
+            self._on_active(lambda pw: pw.timeline.act_toggle_insp.trigger(),
+                            editor_only=True),
+            "Ctrl+I")
+        m_view.insertAction(self._act_theme, self.act_toggle_insp)
+        m_view.insertSeparator(self._act_theme)
 
         self._menu_view = m_view
 
@@ -317,38 +370,9 @@ class MainWindow(QMainWindow):
         self._act_theme.setText("Tema chiaro" if is_dark else "Tema scuro")
 
     def _refresh_menu_for_active(self):
-        """
-        Aggiorna menu Modifica per puntare al progetto attivo.
-        Usa removeAction() esplicito invece di clear() per evitare
-        che PySide6 distrugga azioni con parent diverso dal menu.
-        """
-        # Rimuovi solo — non eliminare — le azioni precedenti
-        for act in self._menu_edit.actions():
-            self._menu_edit.removeAction(act)
-
+        """I menu sono statici: basta puntare il gruppo undo allo stack del progetto attivo."""
         active = self._active()
-        if active is None:
-            return
-
-        tl = active.timeline
-        self._menu_edit.addAction(tl.act_undo)
-        self._menu_edit.addAction(tl.act_redo)
-        self._menu_edit.addSeparator()
-        self._menu_edit.addAction(tl.act_split)
-        self._menu_edit.addAction(tl.act_merge)
-        self._menu_edit.addAction(tl.act_delete)
-        self._menu_edit.addSeparator()
-        self._menu_edit.addAction(tl.act_find)
-
-        # Vista: stesso approccio
-        for act in self._menu_view.actions():
-            self._menu_view.removeAction(act)
-
-        self._menu_view.addAction(self._act_fullscreen)
-        self._menu_view.addSeparator()
-        self._menu_view.addAction(tl.act_toggle_insp)
-        self._menu_view.addSeparator()
-        self._menu_view.addAction(self._act_theme)
+        self._undo_group.setActiveStack(active.timeline.undo_stack if active else None)
 
     # ── Status bar ─────────────────────────────────────────────────────────────
 
@@ -460,25 +484,31 @@ class MainWindow(QMainWindow):
                     pass
             return
 
-        # Ripristina: il primo progetto è già creato (_new_project nel __init__)
-        # Usiamo restore_from_autosave sul primo, poi creiamo altri se necessario
+        # Ripristina: il primo progetto è già creato (_new_project nel __init__).
+        # Il file di autosave si elimina SOLO dopo un ripristino riuscito.
+        failed = []
         first = True
         for apath in autosaves:
-            if first:
-                active = self._active()
-                if active:
-                    active.restore_from_autosave(str(apath))
-                first = False
-            else:
-                if self.proj_tab_bar.can_add():
-                    self._new_project()
-                    active = self._active()
-                    if active:
-                        active.restore_from_autosave(str(apath))
+            if not first:
+                if not self.proj_tab_bar.can_add():
+                    break   # i file non ripristinati restano per il prossimo avvio
+                self._new_project()
+            first = False
+            active = self._active()
+            if active is None or not active.restore_from_autosave(str(apath)):
+                failed.append(apath)
+                continue
             try:
                 apath.unlink()
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Impossibile eliminare l'autosave %s", apath, exc_info=True)
+
+        if failed:
+            QMessageBox.warning(
+                self, "Ripristino non riuscito",
+                "Alcune sessioni non sono state ripristinate e restano salvate in:\n"
+                + "\n".join(str(p) for p in failed),
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -555,7 +585,7 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
 
-        # Tutti ok: teardown di tutti i progetti
+        # Tutti ok: teardown di tutti i progetti (annulla i worker attivi)
         for pw in self._projects:
             pw.teardown()
 

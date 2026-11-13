@@ -278,9 +278,9 @@ class _ExportPanel(QWidget):
         self._lbl_count = QLabel("—")
         top_row.addWidget(self._lbl_count)
 
-        self._badge_mod = QLabel("● modificato nell'editor")
-        self._badge_mod.setVisible(False)
-        top_row.addWidget(self._badge_mod)
+        self._badge_modified = QLabel("● modificato nell'editor")
+        self._badge_modified.setVisible(False)
+        top_row.addWidget(self._badge_modified)
         top_row.addStretch()
         info_lay.addLayout(top_row)
 
@@ -425,7 +425,7 @@ class _ExportPanel(QWidget):
             f"color: {c('text')}; font-size: 14px; font-weight: 600;"
             " background: transparent; border: none;"
         )
-        self._badge_mod.setStyleSheet(
+        self._badge_modified.setStyleSheet(
             f"color: {c('warn')}; font-size: 11px; background: transparent; border: none;"
         )
         self._lbl_source.setStyleSheet(
@@ -514,7 +514,7 @@ class _ExportPanel(QWidget):
             "Versione dell'editor" if has_editor_subs
             else "Trascrizione originale"
         )
-        self._badge_mod.setVisible(has_editor_subs and is_modified)
+        self._badge_modified.setVisible(has_editor_subs and is_modified)
 
         preview_subs = subtitles[:self._PREVIEW_BLOCKS]
         preview_text = subtitles_to_srt(preview_subs)

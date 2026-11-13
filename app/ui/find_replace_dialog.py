@@ -67,6 +67,8 @@ class FindReplaceDialog(QDialog):
         for cb in (self.case_check, self.word_check, self.regex_check):
             cb.stateChanged.connect(self._update_count)
             opts.addWidget(cb)
+        # "Parole intere" non si applica in modalità regex: lo disabilitiamo
+        self.regex_check.toggled.connect(lambda on: self.word_check.setEnabled(not on))
         opts.addStretch(1)
         layout.addLayout(opts)
 
@@ -120,6 +122,16 @@ class FindReplaceDialog(QDialog):
         except re.error:
             return None
 
+    def _replacement(self):
+        """
+        Sostituzione da passare a `re.sub`: in modalità regex è un template
+        (con \\1, \\g<nome>…); altrimenti è testo letterale (es. "C:\\nuovo").
+        """
+        text = self.replace_edit.text()
+        if self.regex_check.isChecked():
+            return text
+        return lambda _m: text
+
     # ---- Count ----
     def _update_count(self):
         pat = self._build_pattern()
@@ -171,7 +183,7 @@ class FindReplaceDialog(QDialog):
         if sub is None:
             return
         try:
-            new_text = pat.sub(self.replace_edit.text(), sub.text, count=1)
+            new_text = pat.sub(self._replacement(), sub.text, count=1)
         except re.error:
             self._show_replace_error()
             return
@@ -183,7 +195,7 @@ class FindReplaceDialog(QDialog):
         pat = self._build_pattern()
         if pat is None:
             return
-        replacement = self.replace_edit.text()
+        replacement = self._replacement()
         changes = []
         try:
             for i, sub in enumerate(self._model.subtitles()):
