@@ -220,16 +220,16 @@ class ProjectWidget(QWidget):
 
         # Formati alternativi dalla timeline
         tl = self.workspace.timeline
-        tl.act_export_vtt.triggered.connect(lambda: self._do_export_format(".vtt"))
-        tl.act_export_txt.triggered.connect(lambda: self._do_export_format(".txt"))
-        tl.act_export_ass.triggered.connect(lambda: self._do_export_format(".ass"))
+        tl.act_export_vtt.triggered.connect(self._on_tl_export_vtt)
+        tl.act_export_txt.triggered.connect(self._on_tl_export_txt)
+        tl.act_export_ass.triggered.connect(self._on_tl_export_ass)
         tl.act_export_v2srt.triggered.connect(self.save_v2srt)
 
         # ExportTab: bottoni esportazione — usa i sub dell'ExportTab (già pronti in refresh())
-        self.export_tab.export_srt_requested.connect(lambda: self._export_tab_format(".srt"))
-        self.export_tab.export_vtt_requested.connect(lambda: self._export_tab_format(".vtt"))
-        self.export_tab.export_txt_requested.connect(lambda: self._export_tab_format(".txt"))
-        self.export_tab.export_ass_requested.connect(lambda: self._export_tab_format(".ass"))
+        self.export_tab.export_srt_requested.connect(self._on_tab_export_srt)
+        self.export_tab.export_vtt_requested.connect(self._on_tab_export_vtt)
+        self.export_tab.export_txt_requested.connect(self._on_tab_export_txt)
+        self.export_tab.export_ass_requested.connect(self._on_tab_export_ass)
         self.export_tab.save_v2srt_requested.connect(self._export_tab_v2srt)
 
     # ── Tab switching ──────────────────────────────────────────────────────────
@@ -382,8 +382,9 @@ class ProjectWidget(QWidget):
                                  f"Impossibile leggere il file SRT:\n{e}")
             return
 
-        self.workspace.timeline.load_subtitles(subtitles)
-        self._editor_loaded = True
+        # Stesso percorso del caricamento .v2srt: stato, badge, export, autosave e
+        # preview fanno riferimento all'SRT importato
+        self._apply_loaded_project(SubtitleProject(source_path=str(path), subtitles=subtitles))
         self.editor_tab.show_workspace()
 
         n = len(subtitles)
@@ -441,6 +442,28 @@ class ProjectWidget(QWidget):
         self._export_panel.show()
         self._export_panel.raise_()
         self._export_panel.activateWindow()
+
+    # Slot senza lambda (una lambda che cattura self crea cicli non raccoglibili)
+    def _on_tl_export_vtt(self, *_a) -> None:
+        self._do_export_format(".vtt")
+
+    def _on_tl_export_txt(self, *_a) -> None:
+        self._do_export_format(".txt")
+
+    def _on_tl_export_ass(self, *_a) -> None:
+        self._do_export_format(".ass")
+
+    def _on_tab_export_srt(self, *_a) -> None:
+        self._export_tab_format(".srt")
+
+    def _on_tab_export_vtt(self, *_a) -> None:
+        self._export_tab_format(".vtt")
+
+    def _on_tab_export_txt(self, *_a) -> None:
+        self._export_tab_format(".txt")
+
+    def _on_tab_export_ass(self, *_a) -> None:
+        self._export_tab_format(".ass")
 
     def _do_export_format(self, ext: str):
         from PySide6.QtWidgets import QFileDialog

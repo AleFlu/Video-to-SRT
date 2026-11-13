@@ -141,6 +141,8 @@ class ExportPanel(QWidget):
         # Percorso proposto automaticamente vs scelto dall'utente (per questo progetto)
         self._path_is_auto = True
         self._path_source = None
+        # Percorso scelto nel QFileDialog (che ha già chiesto di sovrascrivere)
+        self._dialog_confirmed_path = ""
 
     # ---- Helpers UI ----
 
@@ -204,6 +206,8 @@ class ExportPanel(QWidget):
             self, "Salva sottotitoli", initial, self._current_filter()
         )
         if path:
+            # Con l'estensione già corretta il dialog ha già chiesto conferma
+            self._dialog_confirmed_path = path if path.lower().endswith(ext) else ""
             if not path.lower().endswith(ext):
                 path += ext
             self.path_edit.setText(path)
@@ -232,7 +236,7 @@ class ExportPanel(QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
-        if os.path.exists(path):
+        if os.path.exists(path) and path != self._dialog_confirmed_path:
             path = self._resolve_existing(path)
             if not path:
                 return

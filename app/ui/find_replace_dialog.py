@@ -74,7 +74,7 @@ class FindReplaceDialog(QDialog):
             cb.stateChanged.connect(self._update_count)
             opts.addWidget(cb)
         # "Parole intere" non si applica in modalità regex: lo disabilitiamo
-        self.regex_check.toggled.connect(lambda on: self.word_check.setEnabled(not on))
+        self.regex_check.toggled.connect(self._on_regex_toggled)
         opts.addStretch(1)
         layout.addLayout(opts)
 
@@ -146,6 +146,10 @@ class FindReplaceDialog(QDialog):
         return lambda _m: text
 
     # ---- Count ----
+    def _on_regex_toggled(self, on: bool) -> None:
+        """"Parole intere" non ha senso in modalità regex."""
+        self.word_check.setEnabled(not on)
+
     def _update_count(self):
         pat = self._build_pattern()
         if pat is None:

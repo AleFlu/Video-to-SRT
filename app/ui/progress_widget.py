@@ -11,10 +11,11 @@ Segnali:
 """
 
 from __future__ import annotations
+import logging
 import warnings
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QThread, QCoreApplication
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QPainter, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
@@ -26,6 +27,8 @@ from ui.theme import AuroraMixin
 from ui.widgets import ElidedLabel
 from ui import theme
 import platform_support
+
+log = logging.getLogger(__name__)
 
 # Thread sganciati da widget distrutti (vedi detach_and_stop): le tuple (thread,
 # worker) tengono vivi i wrapper Python finché il thread non termina.
@@ -41,9 +44,23 @@ def _release_detached(t):
 
 
 def wait_detached_threads(timeout_ms: int = 3000):
-    """Attende (con timeout) i thread sganciati — da chiamare alla chiusura app."""
+    """Attende (con timeout) i thread sganciati — da chiamare alla chiusura app.
+
+    Un thread ancora in esecuzione dopo l'attesa non deve mai essere distrutto da Qt
+    ("QThread: Destroyed while thread is still running"): resta referenziato in
+    ``_DETACHED`` e senza parent, così il teardown di QApplication non lo elimina.
+    """
     for t, _w in list(_DETACHED):
-        t.wait(timeout_ms)
+        if t.wait(timeout_ms):
+            continue
+        log.warning("Thread di trascrizione ancora attivo alla chiusura: lo si lascia "
+                    "terminare con il processo")
+        t.setParent(None)
+
+
+def has_running_detached_threads() -> bool:
+    """True se esiste un thread sganciato ancora in esecuzione."""
+    return any(t.isRunning() for t, _w in _DETACHED)
 
 
 class _Spinner(QWidget):
@@ -306,7 +323,7 @@ class ProgressWidget(AuroraMixin, QWidget):
             t.deleteLater()
             w.deleteLater()
             return
-        t.setParent(QCoreApplication.instance())
+        t.setParent(None)   # niente parent: il teardown di Qt non lo distrugge mentre gira
         _DETACHED.append((t, w))
         t.quit()   # ha effetto quando worker.run ritorna al loop del thread
         t.finished.connect(lambda: _release_detached(t))
@@ -409,7 +426,7 @@ class ProgressWidget(AuroraMixin, QWidget):
         # fine), quindi l'attesa è in pratica immediata.
         if not t.wait(3000):
             # Fallback: sgancia e lascia che si autodistrugga
-            t.setParent(QCoreApplication.instance())
+            t.setParent(None)   # niente parent: il teardown di Qt non lo distrugge mentre gira
             _DETACHED.append((t, w))
             t.finished.connect(lambda: _release_detached(t))
             return

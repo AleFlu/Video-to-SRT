@@ -21,6 +21,7 @@ from typing import List
 from PySide6.QtCore import Qt, Signal, QSettings, QTimer
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QSplitter, QSizePolicy
 
+from core.constants import SUPPORTED_SUBTITLE_EXTS
 from core.subtitle_model import Subtitle
 from ui.preview_area import PreviewArea
 from ui.subtitle_timeline import SubtitleTimeline, SYNC_DEBOUNCE_MS
@@ -193,7 +194,10 @@ class WorkspaceWidget(QWidget):
         valido la preview viene svuotata (niente media del progetto precedente).
         """
         self.timeline.load_subtitles(subtitles)
-        if source_path and Path(source_path).exists():
+        # Un .srt/.v2srt come sorgente (import) non è un media da riprodurre
+        is_media = bool(source_path) and (
+            Path(source_path).suffix.lower() not in SUPPORTED_SUBTITLE_EXTS)
+        if is_media and Path(source_path).exists():
             self.preview.load_media(source_path)
         else:
             self.preview.clear_media()

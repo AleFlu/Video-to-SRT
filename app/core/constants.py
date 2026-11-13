@@ -6,6 +6,8 @@ Centralizza le definizioni che altrimenti verrebbero duplicate in più moduli.
 
 from __future__ import annotations
 
+from typing import Optional
+
 # ── Estensioni file supportate ────────────────────────────────────────────────
 
 SUPPORTED_VIDEO_EXTS: frozenset[str] = frozenset({
@@ -59,3 +61,16 @@ MAX_SUBTITLE_DURATION: float = 7.0  # secondi
 MIN_SUBTITLE_DURATION: float = 0.5  # secondi
 MAX_CPS: float = 20.0               # caratteri al secondo (soglia errore di leggibilità)
 WARN_CPS: float = 17.0              # caratteri al secondo (soglia di attenzione)
+
+
+# ── Lingua ────────────────────────────────────────────────────────────────────
+
+def normalize_language(language: Optional[str]) -> Optional[str]:
+    """Normalizza il codice lingua: "auto", "" e None diventano None (rilevamento
+    automatico); gli altri codici vengono ridotti a minuscolo senza spazi."""
+    if language is None:
+        return None
+    code = str(language).strip().lower()
+    if not code or code == "auto":
+        return None
+    return code

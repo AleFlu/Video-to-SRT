@@ -97,6 +97,18 @@ def test_reveal_windows_single_select_argument(monkeypatch):
     assert calls == [["explorer", r"/select,C:\x\a b.srt"]]
 
 
+def test_reveal_windows_normalises_forward_slashes(monkeypatch):
+    import ntpath
+    calls = []
+    monkeypatch.setattr(ps, "IS_WIN", True)
+    monkeypatch.setattr(ps, "IS_MAC", False)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(ps.os.path, "normpath", ntpath.normpath)   # come su Windows
+    monkeypatch.setattr(ps.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert ps.reveal_in_file_manager("C:/x/a b.srt") is True
+    assert calls == [["explorer", r"/select,C:\x\a b.srt"]]
+
+
 def test_reveal_mac_and_failure(monkeypatch):
     calls = []
     monkeypatch.setattr(ps, "IS_WIN", False)
@@ -116,6 +128,18 @@ def test_font_helpers_non_empty():
     assert "sans-serif" in ps.font_stack_ui()
     assert "monospace" in ps.font_stack_mono()
     assert ps.ui_font_family() and ps.mono_font_family()
+
+
+def test_mac_fonts_use_installed_families(monkeypatch):
+    monkeypatch.setattr(ps, "IS_MAC", True)
+    monkeypatch.setattr(ps, "IS_WIN", False)
+    ui = ps.font_stack_ui()
+    assert ui.startswith('".AppleSystemUIFont"')
+    assert "SF Pro" not in ui
+    assert ps.ui_font_family() == ".AppleSystemUIFont"
+    assert ps.font_stack_mono().startswith('"Menlo"')
+    assert "SF Mono" not in ps.font_stack_mono()
+    assert ps.mono_font_family() == "Menlo"
 
 
 def test_app_icon_path(tmp_path):

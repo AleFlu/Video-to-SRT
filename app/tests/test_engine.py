@@ -7,6 +7,7 @@ Usa oggetti finti (SimpleNamespace) per parole e segmenti, e moduli finti
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -247,29 +248,115 @@ def test_vad_error_classification():
     assert not engine._is_vad_unavailable_error(FileNotFoundError("video.mp4"))
 
 
+class _FakePopen:
+    """Popen finto: ``communicate`` va in timeout finché non viene terminato."""
+
+    instances = []
+
+    def __init__(self, cmd, **kwargs):
+        self.cmd = cmd
+        self.kwargs = kwargs
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+        self.stop = False
+        _FakePopen.instances.append(self)
+
+    def communicate(self, timeout=None):
+        import subprocess
+        if self.stop:
+            self.returncode = 1 if self.returncode is None else self.returncode
+            return "", "errore"
+        time.sleep(min(timeout or 0.01, 0.01))
+        raise subprocess.TimeoutExpired(self.cmd, timeout)
+
+    def terminate(self):
+        self.terminated = True
+        self.stop = True
+        self.returncode = -15
+
+    def kill(self):
+        self.killed = True
+        self.stop = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+
 def test_preprocess_audio_failure_reports_status(monkeypatch, tmp_path):
-    import subprocess
-
-    def fake_run(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 300)
-
-    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    monkeypatch.setattr(engine, "_FFMPEG_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(engine.subprocess, "Popen", _FakePopen)
     msgs = []
     assert engine.preprocess_audio(str(tmp_path / "x.mp4"), on_status=msgs.append) is None
     assert any("Pre-elaborazione audio non riuscita" in m for m in msgs)
+    assert _FakePopen.instances[-1].terminated   # ffmpeg non resta in giro dopo il timeout
 
 
 def test_preprocess_audio_uses_absolute_path(monkeypatch):
+    _FakePopen.instances.clear()
+
+    class Fail(_FakePopen):
+        def communicate(self, timeout=None):
+            self.returncode = 1
+            return "", "errore"
+
+    monkeypatch.setattr(engine.subprocess, "Popen", Fail)
+    engine.preprocess_audio("-strano.mp4")
+    cmd = _FakePopen.instances[-1].cmd
+    i = cmd.index("-i")
+    assert cmd[i + 1].startswith(("/", "\\")) or ":" in cmd[i + 1]
+
+
+def test_preprocess_audio_cancel_terminates_ffmpeg_and_removes_temp(monkeypatch):
+    _FakePopen.instances.clear()
+    created = []
+    real_ntf = engine.tempfile.NamedTemporaryFile
+
+    def tracking_ntf(*a, **k):
+        f = real_ntf(*a, **k)
+        created.append(f.name)
+        return f
+
+    monkeypatch.setattr(engine.tempfile, "NamedTemporaryFile", tracking_ntf)
+    monkeypatch.setattr(engine.subprocess, "Popen", _FakePopen)
+    ev = threading.Event()
+    threading.Timer(0.3, ev.set).start()
+    t0 = time.monotonic()
+    with pytest.raises(engine.TranscriptionCancelled):
+        engine.preprocess_audio("x.mp4", cancel_event=ev)
+    assert time.monotonic() - t0 < 3
+    proc = _FakePopen.instances[-1]
+    assert proc.terminated or proc.killed
+    assert created and not os.path.exists(created[0])
+
+
+def test_preprocess_audio_already_cancelled_does_not_leave_temp(monkeypatch):
+    _FakePopen.instances.clear()
+    monkeypatch.setattr(engine.subprocess, "Popen", _FakePopen)
+    ev = threading.Event()
+    ev.set()
+    with pytest.raises(engine.TranscriptionCancelled):
+        engine.preprocess_audio("x.mp4", cancel_event=ev)
+    assert all(p.terminated or p.killed for p in _FakePopen.instances)
+
+
+def test_transcribe_passes_cancel_event_to_preprocess(monkeypatch):
     seen = {}
 
-    def fake_run(cmd, **kwargs):
-        seen["cmd"] = cmd
-        return SimpleNamespace(returncode=1, stderr="errore", stdout="")
+    def fake_pre(path, on_status=None, cancel_event=None):
+        seen["ev"] = cancel_event
+        raise engine.TranscriptionCancelled()
 
-    monkeypatch.setattr(engine.subprocess, "run", fake_run)
-    engine.preprocess_audio("-strano.mp4")
-    i = seen["cmd"].index("-i")
-    assert seen["cmd"][i + 1].startswith(("/", "\\")) or ":" in seen["cmd"][i + 1]
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "preprocess_audio", fake_pre)
+    ev = threading.Event()
+    with pytest.raises(engine.TranscriptionCancelled):
+        engine.transcribe("x.mp4", denoise=True, cancel_event=ev)
+    assert seen["ev"] is ev
 
 
 def test_transcribe_is_keyword_only():
@@ -288,3 +375,66 @@ def test_check_ffmpeg_uses_which(monkeypatch):
     assert engine.check_ffmpeg() is False
     monkeypatch.setattr(engine.shutil, "which", lambda name: "/usr/bin/" + name)
     assert engine.check_ffmpeg() is True
+
+
+# ── Lingua "auto" ─────────────────────────────────────────────────────────────
+
+def _fake_whisper_model(detected: str, captured: dict):
+    """Modello finto che cattura i kwargs di transcribe e rileva ``detected``."""
+    word = _w("Machine", 0.0, 0.5)
+    word2 = _w("learning", 0.5, 1.0)
+    seg = _seg([word, word2], text="Machine learning", start=0.0, end=1.0)
+
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            captured.update(kwargs)
+            info = SimpleNamespace(duration=1.0, language=detected,
+                                   language_probability=0.9)
+            return iter([seg]), info
+
+    return FakeModel()
+
+
+def _run_transcribe(monkeypatch, language, detected="en"):
+    captured = {}
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_get_or_load_model",
+                        lambda *a, **k: _fake_whisper_model(detected, captured))
+    out = engine.transcribe("x.wav", denoise=False, vad_filter=False, language=language)
+    return captured, out
+
+
+@pytest.mark.parametrize("raw", ["auto", "", None])
+def test_transcribe_auto_passes_none_language(monkeypatch, raw):
+    captured, _ = _run_transcribe(monkeypatch, raw, detected="en")
+    assert captured["language"] is None
+    assert captured["initial_prompt"] is None
+
+
+def test_transcribe_italian_uses_prompt(monkeypatch):
+    captured, _ = _run_transcribe(monkeypatch, "it", detected="it")
+    assert captured["language"] == "it"
+    assert captured["initial_prompt"] == engine.ITALIAN_PROMPT
+
+
+def test_transcribe_auto_detected_italian_applies_codeswitching(monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "_postprocess_codeswitching",
+                        lambda t: calls.append(t) or t)
+    _run_transcribe(monkeypatch, "auto", detected="it")
+    assert calls
+
+
+def test_transcribe_auto_detected_english_skips_codeswitching(monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "_postprocess_codeswitching",
+                        lambda t: calls.append(t) or t)
+    _run_transcribe(monkeypatch, "auto", detected="en")
+    assert not calls
+
+
+def test_normalize_language():
+    from core.constants import normalize_language
+    assert normalize_language("auto") is None
+    assert normalize_language(None) is None
+    assert normalize_language(" IT ") == "it"

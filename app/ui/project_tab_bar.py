@@ -19,6 +19,8 @@ Segnali:
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QLabel, QScrollArea, QFrame,
@@ -348,8 +350,8 @@ class ProjectTabBar(QWidget):
 
         self._reinsert_plus_button()
 
-        tab.tab_clicked.connect(lambda i=idx: self._on_tab_clicked_by_ref(tab))
-        tab.close_clicked.connect(lambda i=idx: self._on_close_clicked_by_ref(tab))
+        tab.tab_clicked.connect(self._on_tab_clicked_by_ref)
+        tab.close_clicked.connect(self._on_close_clicked_by_ref)
 
         self.select_tab(idx)
         return idx
@@ -419,14 +421,16 @@ class ProjectTabBar(QWidget):
             return
         self.new_tab_requested.emit()
 
-    def _on_tab_clicked_by_ref(self, tab: _TabButton):
+    def _on_tab_clicked_by_ref(self, tab: Optional[_TabButton] = None):
+        tab = tab if tab is not None else self.sender()
         try:
             idx = self._tabs.index(tab)
         except ValueError:
             return
         self.select_tab(idx)
 
-    def _on_close_clicked_by_ref(self, tab: _TabButton):
+    def _on_close_clicked_by_ref(self, tab: Optional[_TabButton] = None):
+        tab = tab if tab is not None else self.sender()
         try:
             idx = self._tabs.index(tab)
         except ValueError:

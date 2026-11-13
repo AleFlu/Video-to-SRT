@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Tuple
 
@@ -39,6 +40,18 @@ def _split_ms(seconds: float) -> Tuple[int, int, int, int]:
     return hrs, mins, secs, ms
 
 
+def _replace_with_retry(src: str, dst: str, attempts: int = 3, delay: float = 0.1) -> None:
+    """``os.replace`` con retry su PermissionError (antivirus/indicizzatore su Windows)."""
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def _write_text(path: str, text: str) -> None:
     """Scrive `text` in modo atomico: file temporaneo nella stessa cartella + os.replace."""
     parent = Path(path).parent
@@ -53,7 +66,7 @@ def _write_text(path: str, text: str) -> None:
             os.chmod(tmp, mode)
         except OSError:
             pass
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

@@ -110,7 +110,8 @@ class InspectorWidget(QWidget):
             b.setStyleSheet("QPushButton { padding: 4px 6px; font-size: 12px; }")
             b.setToolTip(f"Sposta inizio e fine di {label}")
             b.setAccessibleName(f"Sposta di {label}")
-            b.clicked.connect(lambda _=False, d=delta: self._shift_both(d))
+            b.setProperty("shiftDelta", delta)
+            b.clicked.connect(self._on_shift_button)
             shift_row.addWidget(b, 1)
             self._shift_buttons.append(b)
         layout.addLayout(shift_row)
@@ -342,6 +343,11 @@ class InspectorWidget(QWidget):
         if obj is self.text_edit and event.type() == QEvent.FocusOut:
             self._commit_text()
         return super().eventFilter(obj, event)
+
+    def _on_shift_button(self, _checked: bool = False) -> None:
+        b = self.sender()
+        if b is not None:
+            self._shift_both(float(b.property("shiftDelta")))
 
     def _shift_both(self, delta: float):
         if self._current_row is None or self._model is None:

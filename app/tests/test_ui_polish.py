@@ -751,3 +751,32 @@ def test_inspector_labels_are_italian(app):
     texts = {lbl.text() for lbl in insp.findChildren(QLabel)}
     assert "Inizio" in texts and "Fine" in texts
     assert "Start" not in texts and "End" not in texts
+
+
+def test_export_panel_no_second_overwrite_prompt_after_file_dialog(app, tmp_path, monkeypatch):
+    from core.subtitle_model import SubtitleProject
+    from PySide6.QtWidgets import QFileDialog
+    from ui.export_panel import ExportPanel
+    target = tmp_path / "esistente.srt"
+    target.write_text("vecchio", encoding="utf-8")
+    proj = SubtitleProject(source_path="", subtitles=_subs(1))
+    panel = ExportPanel(get_project_callable=lambda: proj)
+    try:
+        panel.refresh_from_project()
+        asked = []
+        monkeypatch.setattr(panel, "_resolve_existing", lambda p: asked.append(p) or p)
+        monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                            staticmethod(lambda *a, **k: (str(target), "")))
+        panel._browse()
+        panel._save()
+        assert asked == []
+        assert "vecchio" not in target.read_text(encoding="utf-8")
+        # percorso digitato a mano e già esistente: la conferma serve ancora
+        other = tmp_path / "altro.srt"
+        other.write_text("x", encoding="utf-8")
+        panel.path_edit.setText(str(other))
+        panel._save()
+        assert asked == [str(other)]
+    finally:
+        panel.close()
+        panel.deleteLater()

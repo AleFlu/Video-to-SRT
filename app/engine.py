@@ -17,11 +17,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from core.constants import MAX_CHARS_PER_LINE  # noqa: F401 — riesportata per compatibilità
-from core.constants import MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION
+from core.constants import MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, normalize_language
 from platform_support import cpu_threads, ffmpeg_executable_name, subprocess_kwargs
 
 logger = logging.getLogger(__name__)
@@ -281,8 +282,34 @@ def check_ffmpeg() -> bool:
 # ============================================================
 # Pre-processing audio
 # ============================================================
-def preprocess_audio(input_path: str, on_status: Optional[Callable] = None) -> Optional[str]:
-    """Estrae l'audio a 16 kHz mono con riduzione rumore. None se non riesce."""
+_FFMPEG_TIMEOUT_S = 300.0
+_FFMPEG_POLL_S = 0.2
+
+
+def _stop_process(proc) -> None:
+    """Termina un processo figlio (terminate, poi kill se non reagisce)."""
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+    except Exception as e:  # noqa: BLE001 — pulizia best-effort
+        logger.debug("Arresto di ffmpeg non riuscito: %s", e)
+
+
+def preprocess_audio(
+    input_path: str,
+    on_status: Optional[Callable] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> Optional[str]:
+    """Estrae l'audio a 16 kHz mono con riduzione rumore. None se non riesce.
+
+    Annullabile: se ``cancel_event`` viene impostato ffmpeg è terminato, il file
+    temporaneo rimosso e viene sollevata ``TranscriptionCancelled``.
+    """
+    _check_cancel(cancel_event)
     if on_status:
         on_status("Pre-elaborazione audio (riduzione rumore)...")
 
@@ -308,20 +335,46 @@ def preprocess_audio(input_path: str, on_status: Optional[Callable] = None) -> O
         tmp_path,
     ]
 
+    def _remove_tmp() -> None:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
     ok = False
+    proc = None
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300, **subprocess_kwargs(),
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            **subprocess_kwargs(),
         )
-        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+        deadline = time.monotonic() + _FFMPEG_TIMEOUT_S
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _stop_process(proc)
+                _remove_tmp()
+                raise TranscriptionCancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, _FFMPEG_TIMEOUT_S)
+            try:
+                _out, err = proc.communicate(timeout=min(_FFMPEG_POLL_S, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if proc.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
             ok = True
         else:
-            logger.warning(
-                "ffmpeg ha restituito %s: %s", result.returncode, (result.stderr or "")[:500],
-            )
+            logger.warning("ffmpeg ha restituito %s: %s", proc.returncode, (err or "")[:500])
+    except TranscriptionCancelled:
+        raise
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            _stop_process(proc)
         logger.warning("Pre-elaborazione audio interrotta: timeout di ffmpeg")
     except Exception as e:  # noqa: BLE001 — si prosegue con l'audio originale
+        if proc is not None and proc.poll() is None:
+            _stop_process(proc)
         logger.warning("Pre-elaborazione audio non riuscita: %s", e)
 
     if ok:
@@ -792,12 +845,14 @@ def _transcribe_whisperx(
     *,
     model_size: str = DEFAULT_MODEL,
     beam_size: int = 5,
-    language: str = "it",
+    language: Optional[str] = "it",
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
 ) -> List[Dict]:
     import whisperx
+
+    language = normalize_language(language)
 
     def status(msg):
         if on_status:
@@ -831,7 +886,7 @@ def _transcribe_whisperx(
         del wx_model
         gc.collect()
 
-    detected_lang = result.get("language", language)
+    detected_lang = result.get("language") or language
     logger.info("WhisperX: lingua rilevata = %s, %d segmenti grezzi",
                 detected_lang, len(result.get("segments", [])))
 
@@ -874,7 +929,7 @@ def _transcribe_whisperx(
     all_words, seg_boundaries = collect_all_words(adapted)
     collected = segment_words_semantic(all_words, seg_boundaries)
 
-    if language == "it":
+    if language == "it" or (language is None and detected_lang == "it"):
         for seg in collected:
             seg["text"] = _postprocess_codeswitching(seg["text"])
 
@@ -913,12 +968,16 @@ def transcribe(
     vad_filter: bool = True,
     denoise: bool = True,
     high_accuracy: bool = False,
-    language: str = "it",
+    language: Optional[str] = "it",
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
 ) -> List[Dict]:
-    """Trascrive ``input_path`` e restituisce i sottotitoli come dict start/end/text."""
+    """Trascrive ``input_path`` e restituisce i sottotitoli come dict start/end/text.
+
+    ``language`` None (o "auto") = rilevamento automatico della lingua.
+    """
+    language = normalize_language(language)
 
     def status(msg):
         if on_status:
@@ -935,7 +994,9 @@ def transcribe(
     _check_cancel(cancel_event)
     preprocessed_path = None
     if denoise:
-        preprocessed_path = preprocess_audio(input_path, on_status=on_status)
+        preprocessed_path = preprocess_audio(
+            input_path, on_status=on_status, cancel_event=cancel_event,
+        )
     audio_path = preprocessed_path if preprocessed_path else input_path
     if preprocessed_path:
         status("Audio ripulito")
@@ -1038,7 +1099,7 @@ def transcribe(
         collected = segment_words_semantic(all_words, seg_boundaries)
 
         # Post-processing code-switching: corregge italianizzazioni Whisper
-        if language == "it":
+        if language == "it" or (language is None and info.language == "it"):
             for seg in collected:
                 seg["text"] = _postprocess_codeswitching(seg["text"])
 
@@ -1070,7 +1131,7 @@ def run_pipeline(
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
-    language: str = "it",
+    language: Optional[str] = "it",
 ) -> str:
     """Trascrive e scrive direttamente un file SRT. Ritorna il percorso scritto."""
     from core.srt_io import unique_output_path, write_srt
@@ -1080,6 +1141,7 @@ def run_pipeline(
         if on_status:
             on_status(msg)
 
+    language = normalize_language(language)
     if not output_path:
         output_path = str(Path(input_path).with_suffix(".srt"))
     output_path = unique_output_path(output_path)

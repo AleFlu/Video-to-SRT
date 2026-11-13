@@ -331,3 +331,40 @@ def test_write_failure_keeps_original(tmp_path, monkeypatch):
         write_srt([Subtitle(0, 1, "x")], str(out))
     assert out.read_text(encoding="utf-8") == "ORIGINALE"
     assert [p.name for p in tmp_path.iterdir()] == ["o.srt"]
+
+
+def test_write_retries_on_permission_error(tmp_path, monkeypatch):
+    import core.srt_io as m
+    out = tmp_path / "o.srt"
+    real_replace = m.os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise PermissionError("file in uso")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(m.os, "replace", flaky)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    write_srt([Subtitle(0, 1, "x")], str(out))
+    assert len(calls) == 3
+    assert out.read_text(encoding="utf-8").startswith("1\n")
+    assert [p.name for p in tmp_path.iterdir()] == ["o.srt"]
+
+
+def test_write_gives_up_after_three_permission_errors(tmp_path, monkeypatch):
+    import core.srt_io as m
+    out = tmp_path / "o.srt"
+    calls = []
+
+    def always(src, dst):
+        calls.append(1)
+        raise PermissionError("file in uso")
+
+    monkeypatch.setattr(m.os, "replace", always)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        write_srt([Subtitle(0, 1, "x")], str(out))
+    assert len(calls) == 3
+    assert list(tmp_path.iterdir()) == []   # nessun temporaneo residuo

@@ -88,8 +88,12 @@ class TestConstants:
 
     def test_constants_importable(self):
         from core.constants import (
-            MAX_CHARS_PER_LINE, MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, MAX_CPS,  # noqa: F401
+            MAX_CHARS_PER_LINE, MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, MAX_CPS,
+            WARN_CPS,
         )
+        assert MAX_CHARS_PER_LINE > 0
+        assert 0 < MIN_SUBTITLE_DURATION < MAX_SUBTITLE_DURATION
+        assert 0 < WARN_CPS < MAX_CPS
 
     def test_media_exts_union(self):
         from core.constants import SUPPORTED_VIDEO_EXTS, SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS
@@ -244,8 +248,14 @@ class TestProjectTabBarState:
         bar = ProjectTabBar()
         bar.add_tab("Vecchio titolo")
         bar.set_tab_title(0, "Nuovo titolo")
-        # Il testo nel label viene eliso — verifica via tooltip o direttamente
-        # Non crashare è sufficiente; il testo eliso è implementation detail
+        assert bar._tabs[0]._title == "Nuovo titolo"
+        assert bar._tabs[0]._lbl.text() == "Nuovo titolo"   # corto: nessuna elisione
+        long_title = "Titolo lunghissimo " * 10
+        bar.set_tab_title(0, long_title)
+        assert bar._tabs[0]._lbl.text() != long_title        # eliso
+        assert bar._tabs[0]._lbl.toolTip() == long_title     # titolo completo nel tooltip
+        bar.set_tab_title(5, "indice fuori range")           # ignorato senza errori
+        bar.deleteLater()
 
     def test_set_tab_modified_badge(self, app):
         from ui.project_tab_bar import ProjectTabBar

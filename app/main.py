@@ -7,6 +7,7 @@ Splash screen con icona → caricamento progressivo in thread → MainWindow.
 from __future__ import annotations
 import logging
 import math
+import os
 import sys
 import threading
 import traceback
@@ -421,7 +422,17 @@ def main():
 
     threading.Thread(target=_worker, daemon=True).start()
 
-    sys.exit(app.exec())
+    code = app.exec()
+
+    # Un thread di trascrizione ancora attivo (es. ffmpeg bloccato) non deve essere
+    # distrutto da Qt/interprete: si esce subito, dopo aver svuotato i log.
+    from ui.progress_widget import has_running_detached_threads
+    if has_running_detached_threads():
+        logger.warning("Uscita forzata: thread di trascrizione ancora in esecuzione")
+        logging.shutdown()
+        os._exit(code)
+
+    sys.exit(code)
 
 
 if __name__ == "__main__":

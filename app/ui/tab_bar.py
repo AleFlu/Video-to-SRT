@@ -53,7 +53,7 @@ class TabBar(QWidget):
         self._btn_transcription.setFixedHeight(bar_h)
         self._btn_transcription.setCursor(Qt.PointingHandCursor)
         self._btn_transcription.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
-        self._btn_transcription.clicked.connect(lambda: self._on_clicked(_TAB_TRANSCRIPTION))
+        self._btn_transcription.clicked.connect(self._on_transcription_clicked)
         layout.addWidget(self._btn_transcription)
 
         # ── Tab Editor (con badge ● / lucchetto) ───────────────────────────────
@@ -68,7 +68,7 @@ class TabBar(QWidget):
         self._btn_editor.setFixedHeight(bar_h)
         self._btn_editor.setCursor(Qt.PointingHandCursor)
         self._btn_editor.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
-        self._btn_editor.clicked.connect(lambda: self._on_clicked(_TAB_EDITOR))
+        self._btn_editor.clicked.connect(self._on_editor_clicked)
         ec_layout.addWidget(self._btn_editor)
 
         self._badge = QLabel("●")
@@ -90,7 +90,7 @@ class TabBar(QWidget):
         self._btn_export.setFixedHeight(bar_h)
         self._btn_export.setCursor(Qt.PointingHandCursor)
         self._btn_export.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
-        self._btn_export.clicked.connect(lambda: self._on_clicked(_TAB_EXPORT))
+        self._btn_export.clicked.connect(self._on_export_clicked)
         exp_layout.addWidget(self._btn_export)
 
         layout.addWidget(self._export_container)
@@ -160,6 +160,15 @@ class TabBar(QWidget):
         self._current = index
         self._refresh_styles()
         self.tab_changed.emit(index)
+
+    def _on_transcription_clicked(self) -> None:
+        self._on_clicked(_TAB_TRANSCRIPTION)
+
+    def _on_editor_clicked(self) -> None:
+        self._on_clicked(_TAB_EDITOR)
+
+    def _on_export_clicked(self) -> None:
+        self._on_clicked(_TAB_EXPORT)
 
     def _on_clicked(self, index: int):
         self.set_current(index)

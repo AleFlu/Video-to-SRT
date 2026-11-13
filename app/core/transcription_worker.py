@@ -11,9 +11,11 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, fields
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from PySide6.QtCore import QObject, Signal
+
+from core.constants import normalize_language
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +29,11 @@ class TranscriptionParams:
     vad_filter: bool = True
     denoise: bool = True
     high_accuracy: bool = False
-    language: str = "it"
+    language: Optional[str] = "it"   # None = rilevamento automatico
+
+    def __post_init__(self) -> None:
+        # "auto" / "" / None -> None: faster-whisper non accetta "auto" come codice lingua
+        object.__setattr__(self, "language", normalize_language(self.language))
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TranscriptionParams":

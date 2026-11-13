@@ -199,12 +199,30 @@ class TestFindReplace:
         model = SubtitleTableModel()
         model.set_subtitles([Subtitle(0.0, 1.0, "vai a casa")])
         dlg = FindReplaceDialog(model)
-        got = []
-        dlg.replace_all_requested.connect(got.append)
-        dlg.find_edit.setText("casa")
-        dlg.replace_edit.setText(r"C:\new\d")
-        dlg._replace_all()
-        assert got == [[(0, "vai a casa", r"vai a C:\new\d")]]
+        try:
+            got = []
+            dlg.replace_all_requested.connect(got.append)
+            dlg.find_edit.setText("casa")
+            dlg.replace_edit.setText(r"C:\new\d")
+            dlg._replace_all()
+            assert got == [[(0, "vai a casa", r"vai a C:\new\d")]]
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def test_regex_toggle_disables_whole_word(self, app):
+        from core.subtitle_table_model import SubtitleTableModel
+        from ui.find_replace_dialog import FindReplaceDialog
+        dlg = FindReplaceDialog(SubtitleTableModel())
+        try:
+            assert hasattr(dlg, "_on_regex_toggled")
+            dlg.regex_check.setChecked(True)
+            assert not dlg.word_check.isEnabled()
+            dlg.regex_check.setChecked(False)
+            assert dlg.word_check.isEnabled()
+        finally:
+            dlg.close()
+            dlg.deleteLater()
 
 
 # ── Conferma prima di sovrascrivere ───────────────────────────────────────────
@@ -467,3 +485,50 @@ class TestClose:
             t.wait(2000)
             pw.progress._thread = None
             pw.progress._worker = None
+
+
+# ── Thread sganciati ancora attivi alla chiusura ──────────────────────────────
+
+class TestDetachedThreads:
+    def test_running_detached_thread_is_unparented_and_kept(self, app, monkeypatch):
+        from ui import progress_widget as pwm
+
+        class FakeThread:
+            parent_set = "unset"
+
+            def wait(self, ms):
+                return False
+
+            def isRunning(self):
+                return True
+
+            def setParent(self, p):
+                self.parent_set = p
+
+        t = FakeThread()
+        monkeypatch.setattr(pwm, "_DETACHED", [(t, object())])
+        pwm.wait_detached_threads(1)
+        assert t.parent_set is None
+        assert len(pwm._DETACHED) == 1          # riferimento forte mantenuto
+        assert pwm.has_running_detached_threads() is True
+
+    def test_no_detached_running(self, app, monkeypatch):
+        from ui import progress_widget as pwm
+        monkeypatch.setattr(pwm, "_DETACHED", [])
+        assert pwm.has_running_detached_threads() is False
+
+
+# ── Import SRT: stesso percorso del .v2srt ────────────────────────────────────
+
+class TestLoadSrtState:
+    def test_srt_import_updates_project_state(self, project, tmp_path):
+        from core.srt_io import write_srt
+        srt = tmp_path / "ciao.srt"
+        write_srt([Subtitle(0.0, 1.0, "uno"), Subtitle(1.0, 2.0, "due")], str(srt))
+        project.open_path(str(srt))
+        assert project._source_path == str(srt)
+        assert project.project.source_path == str(srt)
+        assert [s["text"] for s in project._segments_raw] == ["uno", "due"]
+        assert len(project.project.subtitles) == 2
+        assert project._editor_loaded is True
+        assert len(project.workspace.get_subtitles()) == 2

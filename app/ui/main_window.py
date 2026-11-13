@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QAction, QKeySequence, QUndoGroup
@@ -119,13 +120,12 @@ class MainWindow(QMainWindow):
         pw = ProjectWidget(n, self._ffmpeg_ok, self._model_ok, parent=self)
 
         # Connetti segnali del progetto
-        idx = len(self._projects)
         self._projects.append(pw)
         self._stack.addWidget(pw)
         self._undo_group.addStack(pw.timeline.undo_stack)
 
-        pw.title_changed.connect(lambda t, i=idx: self._on_project_title_changed(t, i))
-        pw.modified_changed.connect(lambda m, i=idx: self._on_project_modified_changed(m, i))
+        pw.title_changed.connect(self._on_project_title_changed)
+        pw.modified_changed.connect(self._on_project_modified_changed)
         pw.status_text.connect(self._on_project_status)
 
         # Aggiunge tab e seleziona
@@ -200,19 +200,35 @@ class MainWindow(QMainWindow):
 
         # Riconnetti con indice corretto
         for i, pw in enumerate(self._projects):
-            pw.title_changed.connect(lambda t, idx=i: self._on_project_title_changed(t, idx))
-            pw.modified_changed.connect(lambda m, idx=i: self._on_project_modified_changed(m, idx))
+            pw.title_changed.connect(self._on_project_title_changed)
+            pw.modified_changed.connect(self._on_project_modified_changed)
             pw.status_text.connect(self._on_project_status)
 
     # ── Slot dai ProjectWidget ─────────────────────────────────────────────────
 
-    def _on_project_title_changed(self, title: str, index: int):
+    def _sender_project_index(self) -> int:
+        """Indice del ProjectWidget che ha emesso il segnale corrente (-1 se ignoto)."""
+        sender = self.sender()
+        for i, pw in enumerate(self._projects):
+            if pw is sender:
+                return i
+        return -1
+
+    def _on_project_title_changed(self, title: str, index: Optional[int] = None):
+        if index is None:
+            index = self._sender_project_index()
+        if index < 0:
+            return
         self.proj_tab_bar.set_tab_title(index, title)
         # Aggiorna titolo finestra se è il progetto attivo
         if index == self.proj_tab_bar.current_index():
             self.setWindowTitle(f"{title} — Video → SRT")
 
-    def _on_project_modified_changed(self, modified: bool, index: int):
+    def _on_project_modified_changed(self, modified: bool, index: Optional[int] = None):
+        if index is None:
+            index = self._sender_project_index()
+        if index < 0:
+            return
         self.proj_tab_bar.set_tab_modified(index, modified)
 
     def _on_project_status(self, text: str):
@@ -393,6 +409,11 @@ class MainWindow(QMainWindow):
         if path:
             self._open_path(path)
 
+    def _on_recent_action(self, _checked: bool = False):
+        act = self.sender()
+        if act is not None and act.data():
+            self._open_path(str(act.data()))
+
     def _open_path(self, path: str):
         """Apre un file nel progetto attivo (o in uno nuovo se il progetto attivo è occupato)."""
         active = self._active()
@@ -437,7 +458,7 @@ class MainWindow(QMainWindow):
             p = Path(path)
             act = QAction(f"{p.name}  —  {str(p.parent)}", self)
             act.setData(path)
-            act.triggered.connect(lambda checked=False, p=path: self._open_path(p))
+            act.triggered.connect(self._on_recent_action)
             self._menu_recent.addAction(act)
         self._menu_recent.addSeparator()
         clear_act = QAction("Cancella recenti", self)

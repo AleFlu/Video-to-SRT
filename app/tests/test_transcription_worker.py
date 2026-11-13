@@ -83,3 +83,35 @@ def test_worker_failure_emits_failed(monkeypatch):
     w.failed.connect(errs.append)
     w.run()
     assert errs == ["rotto"]
+
+
+@pytest.mark.parametrize("raw", ["auto", "AUTO", " auto ", "", None])
+def test_params_language_auto_normalised_to_none(raw):
+    assert TranscriptionParams(input_path="a.mp4", language=raw).language is None
+    assert TranscriptionParams.from_dict(
+        {"input_path": "a.mp4", "language": raw}).language is None
+
+
+def test_params_language_code_preserved():
+    assert TranscriptionParams(input_path="a.mp4", language="EN").language == "en"
+
+
+def test_worker_auto_language_passes_none_to_engine(monkeypatch):
+    seen = {}
+
+    class Cancelled(Exception):
+        pass
+
+    def fake_transcribe(**kw):
+        seen.update(kw)
+        return [{"start": 0.0, "end": 1.0, "text": "x"}]
+
+    fake = types.SimpleNamespace(
+        transcribe=fake_transcribe,
+        post_process_timing=lambda segs: segs,
+        TranscriptionCancelled=Cancelled,
+    )
+    monkeypatch.setitem(sys.modules, "engine", fake)
+    w = TranscriptionWorker({"input_path": "a.mp4", "language": "auto"})
+    w.run()
+    assert "language" in seen and seen["language"] is None

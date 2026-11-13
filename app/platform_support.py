@@ -120,7 +120,7 @@ def native_media_exts() -> frozenset:
 def font_stack_ui() -> str:
     """Stringa CSS ``font-family`` per l'interfaccia."""
     if IS_MAC:
-        return '"SF Pro Display", "SF Pro Text", -apple-system, "Helvetica Neue", sans-serif'
+        return '".AppleSystemUIFont", "Helvetica Neue", sans-serif'
     if IS_WIN:
         return '"Segoe UI", Arial, sans-serif'
     return '"Inter", "Noto Sans", "DejaVu Sans", sans-serif'
@@ -129,7 +129,7 @@ def font_stack_ui() -> str:
 def font_stack_mono() -> str:
     """Stringa CSS ``font-family`` per il testo a spaziatura fissa."""
     if IS_MAC:
-        return '"SF Mono", "Menlo", monospace'
+        return '"Menlo", "Monaco", monospace'
     if IS_WIN:
         return '"Cascadia Mono", "Consolas", monospace'
     return '"DejaVu Sans Mono", monospace'
@@ -138,7 +138,7 @@ def font_stack_mono() -> str:
 def ui_font_family() -> str:
     """Primo nome di famiglia per ``QFont`` dell'interfaccia."""
     if IS_MAC:
-        return "Helvetica Neue"
+        return ".AppleSystemUIFont"
     if IS_WIN:
         return "Segoe UI"
     return "Noto Sans"
@@ -147,7 +147,7 @@ def ui_font_family() -> str:
 def mono_font_family() -> str:
     """Famiglia monospace per ``QFont``."""
     if IS_MAC:
-        return "SF Mono"
+        return "Menlo"
     if IS_WIN:
         return "Consolas"
     return "DejaVu Sans Mono"
@@ -179,7 +179,8 @@ def reveal_in_file_manager(path: str) -> bool:
         if IS_MAC:
             cmd = ["open", "-R", path]
         elif IS_WIN:
-            cmd = ["explorer", f"/select,{path}"]
+            # Qt restituisce percorsi con "/": explorer /select vuole i backslash
+            cmd = ["explorer", f"/select,{os.path.normpath(path)}"]
         else:
             cmd = ["xdg-open", str(Path(path).parent)]
         # explorer restituisce spesso codice 1 anche con successo: non lo si controlla.
