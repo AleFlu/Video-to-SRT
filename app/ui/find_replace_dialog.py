@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QFrame
@@ -43,8 +43,11 @@ class FindReplaceDialog(QDialog):
 
         # Find
         find_row = QHBoxLayout()
-        find_row.addWidget(QLabel("Trova"))
+        find_lbl = QLabel("Trova")
+        find_row.addWidget(find_lbl)
         self.find_edit = QLineEdit()
+        self.find_edit.setAccessibleName("Testo da cercare")
+        find_lbl.setBuddy(self.find_edit)
         self.find_edit.setPlaceholderText("Testo da cercare…")
         self.find_edit.textChanged.connect(self._update_count)
         self.find_edit.returnPressed.connect(self._find_next)
@@ -53,8 +56,11 @@ class FindReplaceDialog(QDialog):
 
         # Replace
         replace_row = QHBoxLayout()
-        replace_row.addWidget(QLabel("Sostituisci"))
+        repl_lbl = QLabel("Sostituisci")
+        replace_row.addWidget(repl_lbl)
         self.replace_edit = QLineEdit()
+        self.replace_edit.setAccessibleName("Testo sostitutivo")
+        repl_lbl.setBuddy(self.replace_edit)
         self.replace_edit.setPlaceholderText("Sostituisci con…")
         replace_row.addWidget(self.replace_edit, 1)
         layout.addLayout(replace_row)
@@ -104,6 +110,13 @@ class FindReplaceDialog(QDialog):
         btn_row.addStretch(1)
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
+
+        # Ordine di tab: campi → opzioni → azioni
+        chain = [self.find_edit, self.replace_edit, self.case_check, self.word_check,
+                 self.regex_check, self.find_next_btn, self.replace_btn,
+                 self.replace_all_btn, close_btn]
+        for a, b in zip(chain, chain[1:]):
+            self.setTabOrder(a, b)
 
     # ---- Pattern builder ----
     def _build_pattern(self) -> Optional[re.Pattern]:

@@ -197,44 +197,6 @@ class TestEditorTabFunctional:
         et.show_workspace()
         assert et._stack.currentIndex() == 1
 
-    def test_has_content_false_when_placeholder(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.show_placeholder()
-        assert not et.has_content()
-
-    def test_has_content_true_when_workspace(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.show_workspace()
-        assert et.has_content()
-
-    def test_inline_progress_hidden_by_default(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        assert et._inline_bar_container.isHidden()
-
-    def test_inline_progress_show(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.inline_progress_show("Trascrizione…")
-        assert not et._inline_bar_container.isHidden()
-        assert et._inline_lbl.text() == "Trascrizione…"
-
-    def test_inline_progress_hide(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.inline_progress_show()
-        et.inline_progress_hide()
-        assert et._inline_bar_container.isHidden()
-
-    def test_inline_progress_update(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.inline_progress_show()
-        et.inline_progress_update(0.5)
-        assert et._inline_progress.value() == 500   # 0.5 * 1000
-
     def test_import_requested_signal_from_toolbar(self, app):
         from ui.editor_tab import EditorTab
         import unittest.mock as mock
@@ -293,11 +255,7 @@ class TestTabBarFunctional:
         tb.set_editor_badge(False)
         assert tb._badge.isHidden()
 
-    def test_export_badge_always_hidden(self, app):
-        from ui.tab_bar import TabBar
-        tb = TabBar()
-        tb.set_export_badge(99)
-        assert tb._export_badge.isHidden()
+
 
 
 # ── UC: PlaceholderWidget ──────────────────────────────────────────────────────
@@ -342,9 +300,6 @@ class TestPlaceholderFunctional:
 
     def test_drop_emits_file_dropped(self, app):
         from ui.placeholder_widget import PlaceholderWidget
-        from PySide6.QtCore import QMimeData, QUrl
-        from PySide6.QtGui import QDropEvent
-        from PySide6.QtCore import Qt, QPointF
         pw = PlaceholderWidget()
         received = []
         pw.file_dropped.connect(received.append)

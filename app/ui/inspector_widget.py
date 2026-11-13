@@ -13,14 +13,13 @@ per evitare cicli).
 from __future__ import annotations
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox,
     QPlainTextEdit, QFrame, QPushButton, QScrollArea
 )
 
-from core.subtitle_model import Subtitle
 from core.subtitle_table_model import SubtitleTableModel, MAX_CPS, WARN_CPS
 from ui import theme
 import platform_support
@@ -32,10 +31,6 @@ class InspectorWidget(QWidget):
     start_committed      = Signal(int, float)     # row, new_start
     end_committed        = Signal(int, float)     # row, new_end
     shift_requested      = Signal(int, float)     # row, delta_seconds (sposta start+end atomicamente)
-    split_requested      = Signal(int, int)       # row, cursor_pos
-    merge_prev_requested = Signal(int)
-    merge_next_requested = Signal(int)
-    delete_requested     = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,18 +60,20 @@ class InspectorWidget(QWidget):
         self.header.setObjectName("sectionTitle")
         layout.addWidget(self.header)
 
-        # sub_count kept for API compat but hidden (merged into header)
-        self.sub_count = QLabel("")
-        self.sub_count.setVisible(False)
-        layout.addWidget(self.sub_count)
+        # ---- Tempi ----
+        self._section(layout, "Tempi")
 
-        # ---- Timing ----
-        self._section(layout, "Timing")
+        fm = self.fontMetrics()
+        lbl_w = max(fm.horizontalAdvance("Inizio"), fm.horizontalAdvance("Fine")) + 8
 
-        # Start
+        # Inizio
         start_row = QHBoxLayout()
-        start_row.addWidget(QLabel("Start"))
+        start_lbl = QLabel("Inizio")
+        start_lbl.setMinimumWidth(lbl_w)
+        start_row.addWidget(start_lbl)
         self.start_spin = QDoubleSpinBox()
+        self.start_spin.setAccessibleName("Inizio sottotitolo (secondi)")
+        start_lbl.setBuddy(self.start_spin)
         self.start_spin.setRange(0.0, 360000.0)
         self.start_spin.setDecimals(3)
         self.start_spin.setSuffix(" s")
@@ -85,10 +82,14 @@ class InspectorWidget(QWidget):
         start_row.addWidget(self.start_spin, 1)
         layout.addLayout(start_row)
 
-        # End
+        # Fine
         end_row = QHBoxLayout()
-        end_row.addWidget(QLabel("End"))
+        end_lbl = QLabel("Fine")
+        end_lbl.setMinimumWidth(lbl_w)
+        end_row.addWidget(end_lbl)
         self.end_spin = QDoubleSpinBox()
+        self.end_spin.setAccessibleName("Fine sottotitolo (secondi)")
+        end_lbl.setBuddy(self.end_spin)
         self.end_spin.setRange(0.0, 360000.0)
         self.end_spin.setDecimals(3)
         self.end_spin.setSuffix(" s")
@@ -100,14 +101,18 @@ class InspectorWidget(QWidget):
         # Offset helpers — ordine: −100 −10 +10 +100
         shift_row = QHBoxLayout()
         shift_row.setSpacing(4)
-        for label, delta in (("−100ms", -0.1), ("−10ms", -0.01),
-                             ("+10ms", +0.01), ("+100ms", +0.1)):
+        self._shift_buttons = []
+        for label, delta in (("−100 ms", -0.1), ("−10 ms", -0.01),
+                             ("+10 ms", +0.01), ("+100 ms", +0.1)):
             b = QPushButton(label)
-            b.setFixedWidth(58)
+            # larghezza dalle metriche del font: niente testo tagliato con font grandi
+            b.setMinimumWidth(fm.horizontalAdvance(label) + 16)
+            b.setStyleSheet("QPushButton { padding: 4px 6px; font-size: 12px; }")
             b.setToolTip(f"Sposta inizio e fine di {label}")
+            b.setAccessibleName(f"Sposta di {label}")
             b.clicked.connect(lambda _=False, d=delta: self._shift_both(d))
-            shift_row.addWidget(b)
-        shift_row.addStretch(1)
+            shift_row.addWidget(b, 1)
+            self._shift_buttons.append(b)
         layout.addLayout(shift_row)
 
         # Info durata/CPS
@@ -119,9 +124,13 @@ class InspectorWidget(QWidget):
         self._section(layout, "Testo")
 
         self.text_edit = QPlainTextEdit()
-        self.text_edit.setMinimumHeight(110)
+        self.text_edit.setMinimumHeight(fm.lineSpacing() * 4 + 24)
         self.text_edit.setPlaceholderText("Testo del sottotitolo…")
+        self.text_edit.setAccessibleName("Testo del sottotitolo")
+        self.text_edit.setTabChangesFocus(True)   # Tab passa al controllo successivo
         self.text_edit.textChanged.connect(self._on_text_changed_live)
+        # Uscendo dal campo il testo viene confermato (mai perso in silenzio)
+        self.text_edit.installEventFilter(self)
         layout.addWidget(self.text_edit)
 
         # Stats testo
@@ -135,12 +144,12 @@ class InspectorWidget(QWidget):
         stats_row.addWidget(self.cps_label)
         layout.addLayout(stats_row)
 
-        # Commit testo: solo shortcut Ctrl+Invio (il bottone è ridondante)
-        self.commit_text_btn = QPushButton()  # hidden, per _set_enabled compatibility
-        self.commit_text_btn.setVisible(False)
-        self.commit_text_btn.clicked.connect(self._commit_text)
-
-        commit_hint = QLabel(f"{platform_support.shortcut_label('Ctrl+Return')} per applicare")
+        # Conferma testo: Ctrl+Invio, oppure uscendo dal campo
+        commit_hint = QLabel(
+            f"{platform_support.shortcut_label('Ctrl+Return')} per applicare"
+            "  ·  applicato anche uscendo dal campo"
+        )
+        commit_hint.setWordWrap(True)
         commit_hint.setObjectName("subtitle")
         commit_hint.setAlignment(Qt.AlignRight)
         layout.addWidget(commit_hint)
@@ -152,25 +161,12 @@ class InspectorWidget(QWidget):
         self.issues_label.setObjectName("muted")
         layout.addWidget(self.issues_label)
 
-        # Bottoni azione nascosti (usati solo per _set_enabled ma non mostrati —
-        # le azioni sono nella toolbar dell'EditorPanel)
-        self.split_btn = QPushButton()
-        self.split_btn.setVisible(False)
-        self.split_btn.clicked.connect(self._on_split)
-
-        self.merge_prev_btn = QPushButton()
-        self.merge_prev_btn.setVisible(False)
-        self.merge_prev_btn.clicked.connect(lambda: self.merge_prev_requested.emit(self._current_row))
-
-        self.merge_next_btn = QPushButton()
-        self.merge_next_btn.setVisible(False)
-        self.merge_next_btn.clicked.connect(lambda: self.merge_next_requested.emit(self._current_row))
-
-        self.delete_btn = QPushButton()
-        self.delete_btn.setVisible(False)
-        self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._current_row))
-
         layout.addStretch(1)
+
+        # Ordine di tab: Inizio → Fine → spostamenti → Testo
+        chain = [self.start_spin, self.end_spin, *self._shift_buttons, self.text_edit]
+        for a, b in zip(chain, chain[1:]):
+            QWidget.setTabOrder(a, b)
 
         # Stato iniziale: tutto disabilitato
         self._set_enabled(False)
@@ -203,9 +199,7 @@ class InspectorWidget(QWidget):
         self._sections.append((sep, lbl))
 
     def _set_enabled(self, on: bool):
-        for w in (self.start_spin, self.end_spin, self.text_edit,
-                  self.commit_text_btn, self.split_btn,
-                  self.merge_prev_btn, self.merge_next_btn, self.delete_btn):
+        for w in (self.start_spin, self.end_spin, self.text_edit, *self._shift_buttons):
             w.setEnabled(on)
 
     # ---- Interfaccia pubblica ----
@@ -217,6 +211,9 @@ class InspectorWidget(QWidget):
         model.modelReset.connect(self._on_rows_changed)
 
     def show_row(self, row: Optional[int]):
+        if row != self._current_row:
+            # Il testo non confermato della riga precedente non va perso
+            self._commit_text()
         self._current_row = row
         self._refresh()
 
@@ -276,10 +273,6 @@ class InspectorWidget(QWidget):
         self._update_text_stats(sub.text, sub.duration)
         self._update_issues()
 
-        # Abilita/disabilita merge a seconda dei vicini
-        self.merge_prev_btn.setEnabled(self._current_row > 0)
-        self.merge_next_btn.setEnabled(self._current_row < total - 1)
-
     def _update_text_stats(self, text: str, duration: float):
         txt = text.strip()
         n = len(txt)
@@ -302,11 +295,14 @@ class InspectorWidget(QWidget):
             return
         issues = self._model.row_issues(self._current_row)
         if not issues:
-            self.issues_label.setText("✅  Nessun problema rilevato")
+            self.issues_label.setText("Nessun problema rilevato")
             self.issues_label.setStyleSheet(f"color: {theme.c('ok')};")
         else:
-            self.issues_label.setText("⚠️  " + "\n⚠️  ".join(issues))
-            self.issues_label.setStyleSheet(f"color: {theme.c('warn')};")
+            self.issues_label.setText("\n".join(f"• {i}" for i in issues))
+            sev = self._model.row_severity(self._current_row)
+            self.issues_label.setStyleSheet(
+                f"color: {theme.c('err' if sev == 'error' else 'warn')};"
+            )
 
     # ---- Event handlers ----
     def _on_start_changed(self):
@@ -329,19 +325,23 @@ class InspectorWidget(QWidget):
         duration = sub.duration if sub else 0.0
         self._update_text_stats(self.text_edit.toPlainText(), duration)
 
+    def has_uncommitted_text(self) -> bool:
+        """True se il campo testo contiene modifiche non ancora confermate."""
+        if self._model is None or self._current_row is None:
+            return False
+        sub = self._model.subtitle_at(self._current_row)
+        return sub is not None and self.text_edit.toPlainText().strip() != sub.text
+
     def _commit_text(self):
-        if self._current_row is None:
+        if self._current_row is None or not self.has_uncommitted_text():
             return
         new_text = self.text_edit.toPlainText().strip()
         self.text_committed.emit(self._current_row, new_text)
 
-    def _on_split(self):
-        if self._current_row is None:
-            return
-        cur_pos = self.text_edit.textCursor().position()
-        if cur_pos <= 0 or cur_pos >= len(self.text_edit.toPlainText()):
-            return
-        self.split_requested.emit(self._current_row, cur_pos)
+    def eventFilter(self, obj, event):
+        if obj is self.text_edit and event.type() == QEvent.FocusOut:
+            self._commit_text()
+        return super().eventFilter(obj, event)
 
     def _shift_both(self, delta: float):
         if self._current_row is None or self._model is None:

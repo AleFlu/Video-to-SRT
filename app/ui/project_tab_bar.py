@@ -21,8 +21,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QPushButton, QLabel, QSizePolicy,
-    QScrollArea, QFrame,
+    QWidget, QHBoxLayout, QPushButton, QLabel, QScrollArea, QFrame,
 )
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 
@@ -40,11 +39,16 @@ class _TabButton(QWidget):
     close_clicked = Signal()
     tab_clicked   = Signal()
 
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, height: int = 34, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(34)
+        self.setFixedHeight(height)
+        self.setMinimumWidth(_TAB_MIN_W)
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
+        # Selezionabile da tastiera (Tab + Invio/Spazio); Ctrl+W chiude il progetto attivo
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("projectTab")
 
         self._active = False
         self._hovered = False
@@ -54,7 +58,6 @@ class _TabButton(QWidget):
         layout.setSpacing(5)
 
         self._lbl = QLabel(title)
-        self._lbl.setFixedHeight(34)
         self._lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         layout.addWidget(self._lbl, 1)
 
@@ -62,6 +65,7 @@ class _TabButton(QWidget):
         self._badge.setStyleSheet(
             f"color: {theme.c('warn')}; font-size: 8px; background: transparent; padding: 0;"
         )
+        self._badge.setToolTip("Modifiche non salvate")
         self._badge.setVisible(False)
         layout.addWidget(self._badge)
 
@@ -71,6 +75,9 @@ class _TabButton(QWidget):
         self._close.setFixedSize(18, 18)
         self._close.setFlat(True)
         self._close.setCursor(Qt.PointingHandCursor)
+        self._close.setToolTip(f"Chiudi progetto  {platform_support.shortcut_label('Ctrl+W')}")
+        self._close.setAccessibleName("Chiudi progetto")
+        self._close.setFocusPolicy(Qt.NoFocus)
         self._close.clicked.connect(self.close_clicked)
         self._close.setVisible(False)
         layout.addWidget(self._close)
@@ -78,13 +85,25 @@ class _TabButton(QWidget):
         self.set_active(False)
 
     def set_title(self, title: str):
+        self._title = title
         fm = QFontMetrics(self._lbl.font())
         elided = fm.elidedText(title, Qt.ElideMiddle, _TAB_MAX_W - 64)
         self._lbl.setText(elided)
         self._lbl.setToolTip(title if elided != title else "")
+        self._update_accessible()
 
     def set_modified(self, modified: bool):
         self._badge.setVisible(modified)
+        self._update_accessible()
+
+    def _update_accessible(self):
+        title = getattr(self, "_title", self._lbl.text())
+        parts = [f"Progetto {title}"]
+        if self._badge.isVisibleTo(self):
+            parts.append("modificato")
+        if self._active:
+            parts.append("selezionato")
+        self.setAccessibleName(", ".join(parts))
 
     # ── Stile chiusura (theme-aware) ─────────────────────────────────────────────
     def _close_style(self, active: bool) -> str:
@@ -111,7 +130,7 @@ class _TabButton(QWidget):
         if active:
             # Tab attiva: sfondo distinguibile, bordo accent in basso
             self.setStyleSheet(
-                "QWidget {"
+                "QWidget#projectTab {"
                 f"  background-color: {c('card_2')};"
                 f"  border-bottom: 2px solid {c('acc')};"
                 f"  border-top: 1px solid {c('line_2')};"
@@ -119,6 +138,7 @@ class _TabButton(QWidget):
                 f"  border-right: 1px solid {c('line_2')};"
                 "  border-radius: 6px 6px 0 0;"
                 "}"
+                f"QWidget#projectTab:focus {{ border: 2px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
                 f"color: {c('text')}; font-size: 12px; font-weight: 600; background: transparent;"
@@ -126,22 +146,24 @@ class _TabButton(QWidget):
             self._close.setStyleSheet(self._close_style(True))
         else:
             self.setStyleSheet(
-                "QWidget {"
+                "QWidget#projectTab {"
                 "  background-color: transparent;"
                 "  border: 1px solid transparent;"
                 "  border-bottom: 2px solid transparent;"
                 "  border-radius: 6px 6px 0 0;"
                 "}"
-                "QWidget:hover {"
-                f"  background-color: {c('card')};"
+                "QWidget#projectTab:hover {"
+                f"  background-color: {c('card_2')};"
                 f"  border: 1px solid {c('line')};"
                 "  border-bottom: 2px solid transparent;"
                 "}"
+                f"QWidget#projectTab:focus {{ border: 2px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
                 f"color: {c('muted')}; font-size: 12px; font-weight: 400; background: transparent;"
             )
             self._close.setStyleSheet(self._close_style(False))
+        self._update_accessible()
 
     def apply_palette(self):
         """Ri-applica i colori del tema corrente (chiamato su theme_changed)."""
@@ -164,10 +186,25 @@ class _TabButton(QWidget):
             self._close.setVisible(False)
         super().leaveEvent(event)
 
+    def focusInEvent(self, event):
+        self._close.setVisible(True)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        if not self._hovered:
+            self._close.setVisible(False)
+        super().focusOutEvent(event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.tab_clicked.emit()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.tab_clicked.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class ProjectTabBar(QWidget):
@@ -184,7 +221,9 @@ class ProjectTabBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(34)
+        # Altezza dalle metriche del font: niente titoli tagliati con font grandi
+        self._bar_h = max(34, self.fontMetrics().height() + 16)
+        self.setFixedHeight(self._bar_h)
 
         self._tabs: list[_TabButton] = []
         self._current = -1
@@ -195,7 +234,7 @@ class ProjectTabBar(QWidget):
 
         # Area scorribile per le tab
         self._scroll = QScrollArea()
-        self._scroll.setFixedHeight(34)
+        self._scroll.setFixedHeight(self._bar_h)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setWidgetResizable(True)
@@ -212,6 +251,7 @@ class ProjectTabBar(QWidget):
         self._btn_new.setFixedSize(26, 26)
         self._btn_new.setFlat(False)
         self._btn_new.setToolTip(f"Nuovo progetto  ({platform_support.shortcut_label('Ctrl+Shift+T')})")
+        self._btn_new.setAccessibleName("Nuovo progetto")
         self._btn_new.setCursor(Qt.PointingHandCursor)
         # Font esplicito via Python — immune al tema globale Qt che sovrascrive font-size nel CSS
         _plus_font = QFont()
@@ -269,6 +309,7 @@ class ProjectTabBar(QWidget):
             f"  border-color: {c('acc')};"
             "}"
             f"QPushButton:pressed {{ background: {c('surface')}; }}"
+            + theme.focus_rule("QPushButton", 6)
         )
         for tab in self._tabs:
             tab.apply_palette()
@@ -299,7 +340,7 @@ class ProjectTabBar(QWidget):
     def add_tab(self, title: str) -> int:
         """Aggiunge una tab e la seleziona. Restituisce l'indice."""
         idx = len(self._tabs)
-        tab = _TabButton(title)
+        tab = _TabButton(title, height=self._bar_h)
         tab.set_title(title)
 
         self._tabs_layout.insertWidget(idx, tab)

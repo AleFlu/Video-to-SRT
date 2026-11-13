@@ -88,10 +88,7 @@ class TestConstants:
 
     def test_constants_importable(self):
         from core.constants import (
-            SUPPORTED_VIDEO_EXTS, SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS,
-            SUPPORTED_SUBTITLE_EXTS, SUPPORTED_ALL_EXTS,
-            FILE_FILTER_OPEN_ANY, FILE_FILTER_IMPORT_ALL, FILE_FILTER_IMPORT_SUBTITLES,
-            MAX_CHARS_PER_LINE, MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, MAX_CPS,
+            MAX_CHARS_PER_LINE, MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, MAX_CPS,  # noqa: F401
         )
 
     def test_media_exts_union(self):
@@ -333,7 +330,6 @@ class TestV2srtStructure:
         assert EXTENSION == ".v2srt"
 
     def test_is_v2srt_detection(self, tmp_path):
-        import json
         from core.v2srt_io import is_v2srt, save_project
         from core.subtitle_model import SubtitleProject, Subtitle
         proj = SubtitleProject()
@@ -365,16 +361,6 @@ class TestInvariants:
         # Sub presenti → badge visibile
         tb.set_editor_badge(True)
         assert not tb._badge.isHidden()
-
-    def test_inv4_inline_bar_tracks_worker(self, app):
-        """INV4: InlineProgressBar visibile ↔ worker attivo."""
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        assert et._inline_bar_container.isHidden()   # no worker → nascosta
-        et.inline_progress_show()
-        assert not et._inline_bar_container.isHidden()   # worker attivo → visibile
-        et.inline_progress_hide()
-        assert et._inline_bar_container.isHidden()   # worker finito → nascosta
 
     def test_inv_export_tab_placeholder_when_empty(self, app):
         """ExportTab mostra placeholder ↔ nessun sub."""

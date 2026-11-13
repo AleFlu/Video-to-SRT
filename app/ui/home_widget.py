@@ -16,48 +16,66 @@ Layout (design system "Studio"):
   ├──────────────────────────────────────────────┤
   │  Action row: stima  ·  [Avvia]               │
   ├──────────────────────────────────────────────┤
-  │  [Recenti — solo se QSettings ha file]       │
+  │  [Recenti — solo se ci sono file]            │
   └──────────────────────────────────────────────┘
 
 Tema chiaro/scuro: i colori vengono letti da theme.c() e ri-applicati su
 theme_changed via _apply_palette().
 
-Segnale start_requested(source_path, settings) → MainWindow.
+Segnali:
+  start_requested(source_path, settings) → avvio trascrizione
+  open_requested(path)                   → file SRT/.v2srt trascinato sulla drop zone
 """
 
 from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QSettings, QTimer, QPointF
-from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient, QLinearGradient
+from PySide6.QtCore import Qt, Signal, QSettings
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QComboBox, QSpinBox, QSizePolicy,
-    QFileDialog, QScrollArea,
+    QFileDialog, QScrollArea, QStackedLayout,
 )
 
-from ui.source_panel import DepsBanner, SUPPORTED_EXTS, FILE_FILTERS, fmt_size
+from core.constants import SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS
+from ui.prefs import RECENT_KEY, add_recent, read_list
 from ui.theme import AuroraMixin
+from ui.widgets import DepsBanner, ElidedLabel, fmt_size
 from ui import theme
 import platform_support
 
 
-_MAX_RECENTS = 5
+_SHOWN_RECENTS = 3
+
+# Filtro del dialog: le estensioni accettate vengono da core.constants
+_MEDIA_GLOB = " ".join(f"*{e}" for e in sorted(SUPPORTED_MEDIA_EXTS))
+FILE_FILTER_MEDIA = f"File video o audio ({_MEDIA_GLOB});;Tutti i file (*.*)"
+_FORMATS_HINT = "MP4, MOV, MKV, WAV, MP3, M4A, FLAC…"
+
+
+def _is_media(path: str) -> bool:
+    return Path(path).suffix.lower() in SUPPORTED_MEDIA_EXTS
+
+
+def _is_subtitle(path: str) -> bool:
+    return Path(path).suffix.lower() in SUPPORTED_SUBTITLE_EXTS
 
 
 def _combo_ss() -> str:
     c = theme.c
     return (
         f"QComboBox {{ background: {c('card_2')}; border: 1px solid transparent; border-radius: 8px;"
-        f" color: {c('text')}; padding: 5px 10px; font-size: 13px; font-weight: 500; min-height: 32px; }}"
+        f" color: {c('text')}; padding: 5px 10px; font-size: 13px; font-weight: 500; min-height: 22px; }}"
         f"QComboBox:hover {{ border-color: {c('line_2')}; }}"
-        f"QComboBox:focus {{ border-color: {c('acc')}; }}"
+        f"QComboBox:focus {{ border: 2px solid {c('focus')}; }}"
         "QComboBox::drop-down { border: none; width: 22px; }"
         f"QComboBox::down-arrow {{ border-left: 4px solid transparent;"
         f" border-right: 4px solid transparent; border-top: 5px solid {c('muted')}; margin-right: 8px; }}"
         f"QComboBox QAbstractItemView {{ background: {c('card')}; border: 1px solid {c('line_2')};"
-        f" color: {c('text')}; selection-background-color: {c('acc_d')}; border-radius: 8px; }}"
+        f" color: {c('text')}; selection-background-color: {c('acc_fill')};"
+        f" selection-color: {c('acc_ink')}; border-radius: 8px; }}"
     )
 
 
@@ -65,6 +83,7 @@ class HomeWidget(AuroraMixin, QWidget):
     """Schermata iniziale: drag&drop + impostazioni + avvia."""
 
     start_requested = Signal(str, dict)   # (source_path, settings)
+    open_requested  = Signal(str)         # SRT / .v2srt da aprire nell'editor
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,7 +108,7 @@ class HomeWidget(AuroraMixin, QWidget):
         scroll.setWidget(inner)
 
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(80, 48, 80, 48)
+        lay.setContentsMargins(48, 40, 48, 40)
         lay.setSpacing(0)
         lay.addStretch(1)
 
@@ -118,8 +137,9 @@ class HomeWidget(AuroraMixin, QWidget):
         cl.addSpacing(10)
 
         self._sub = QLabel(
-            "Trascrizione automatica in italiano, interamente in locale sul tuo Mac. "
-            "Trascina un file, scegli il modello e ottieni sottotitoli pronti da rifinire nell'editor."
+            "Trascrizione automatica in italiano, interamente in locale sul tuo computer. "
+            "Trascina un file, scegli il modello e ottieni sottotitoli pronti da rifinire "
+            "nell'editor."
         )
         self._sub.setWordWrap(True)
         cl.addWidget(self._sub)
@@ -129,6 +149,7 @@ class HomeWidget(AuroraMixin, QWidget):
         self.drop = _DesignDropZone()
         self.drop.file_selected.connect(self._on_file_selected)
         self.drop.file_error.connect(self._on_file_error)
+        self.drop.open_requested.connect(self.open_requested)
         cl.addWidget(self.drop)
         cl.addSpacing(16)
 
@@ -141,19 +162,14 @@ class HomeWidget(AuroraMixin, QWidget):
         ar = QHBoxLayout()
         ar.setSpacing(12)
         self._estimate_lbl = QLabel("Stima: –")
-        ar.addWidget(self._estimate_lbl)
-        ar.addStretch(1)
-        self._preview_btn = QPushButton("Anteprima impostazioni")
-        self._preview_btn.setObjectName("secondary")
-        self._preview_btn.setMinimumHeight(44)
-        self._preview_btn.setCursor(Qt.PointingHandCursor)
-        self._preview_btn.clicked.connect(self._on_preview_settings)
-        ar.addWidget(self._preview_btn)
+        self._estimate_lbl.setWordWrap(True)
+        ar.addWidget(self._estimate_lbl, 1)
         self.start_btn = QPushButton("Avvia trascrizione")
         self.start_btn.setObjectName("primary")
         self.start_btn.setMinimumHeight(44)
         self.start_btn.setMinimumWidth(200)
         self.start_btn.setCursor(Qt.PointingHandCursor)
+        self.start_btn.setToolTip("Avvia la trascrizione  (Invio)")
         self.start_btn.clicked.connect(self._on_start)
         ar.addWidget(self.start_btn)
         cl.addLayout(ar)
@@ -163,7 +179,6 @@ class HomeWidget(AuroraMixin, QWidget):
         self._recents_widget = _RecentsWidget()
         self._recents_widget.file_selected.connect(self._on_file_selected)
         cl.addWidget(self._recents_widget)
-        self._refresh_recents()
 
         # centra content
         center_row = QHBoxLayout()
@@ -174,8 +189,15 @@ class HomeWidget(AuroraMixin, QWidget):
         lay.addLayout(center_row)
         lay.addStretch(1)
 
+        # Ordine di tab: file → impostazioni → avvio → recenti
+        chain = [self.drop, self.model_combo, self.lang_combo, self.vad_toggle,
+                 self.accuracy_toggle, self.start_btn]
+        for a, b in zip(chain, chain[1:]):
+            QWidget.setTabOrder(a, b)
+
         self._apply_palette()
         self._set_start_btn_state(False)
+        self._refresh_recents()
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
     # ── Aurora ────────────────────────────────────────────────────────────────
@@ -185,17 +207,24 @@ class HomeWidget(AuroraMixin, QWidget):
         self._aurora_paint(p)
         p.end()
 
+    def keyPressEvent(self, event):
+        # Invio avvia la trascrizione (azione principale della schermata)
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.start_btn.isEnabled():
+            self._on_start()
+            return
+        super().keyPressEvent(event)
+
     # ── Tema ────────────────────────────────────────────────────────────────
 
     def _on_theme_changed(self, _name: str):
         self._apply_palette()
         self.drop._apply_palette()
         self._recents_widget._apply_palette()
-        if hasattr(self, "model_combo"):
-            ss = _combo_ss()
-            self.model_combo.setStyleSheet(ss)
-            self.lang_combo.setStyleSheet(ss)
-        self._vad_toggle_refresh()
+        ss = _combo_ss()
+        self.model_combo.setStyleSheet(ss)
+        self.lang_combo.setStyleSheet(ss)
+        self.vad_toggle._apply_palette()
+        self.accuracy_toggle._apply_palette()
         self._set_start_btn_state(self._source_path is not None)
         self.update()
 
@@ -214,29 +243,23 @@ class HomeWidget(AuroraMixin, QWidget):
             f"font-size: 12px; color: {c('muted')}; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
-        if hasattr(self, "_settings_card"):
-            self._settings_card.setStyleSheet(
-                f"QFrame {{ background-color: {c('card')}; border: 1px solid {c('card_border')}; border-radius: 11px; }}"
-            )
-        if hasattr(self, "_head_lbl"):
-            self._head_lbl.setStyleSheet(
+        self._settings_card.setStyleSheet(
+            f"QFrame#settingsCard {{ background-color: {c('card')};"
+            f" border: 1px solid {c('card_border')}; border-radius: 11px; }}"
+        )
+        self._head_lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; color: {c('muted')};"
+            " letter-spacing: 1.2px; background: transparent;"
+        )
+        self._preset_lbl.setStyleSheet(
+            f"font-size: 11px; color: {c('muted')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
+        )
+        for lbl in self._field_labels:
+            lbl.setStyleSheet(
                 f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-                " letter-spacing: 1.2px; background: transparent;"
+                " letter-spacing: 1px; background: transparent;"
             )
-            self._preset_lbl.setStyleSheet(
-                f"font-size: 10.5px; color: {c('faint')}; background: transparent;"
-                f" font-family: {theme.FONT_MONO};"
-            )
-            for lbl in self._field_labels:
-                lbl.setStyleSheet(
-                    f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-                    " letter-spacing: 1px; background: transparent;"
-                )
-
-    def _vad_toggle_refresh(self):
-        if hasattr(self, "vad_toggle"):
-            self.vad_toggle._apply_palette()
-            self.accuracy_toggle._apply_palette()
 
     # ── Settings card ─────────────────────────────────────────────────────────
 
@@ -246,18 +269,20 @@ class HomeWidget(AuroraMixin, QWidget):
         self._model_keys = list(MODELS.keys())
 
         card = QFrame()
+        card.setObjectName("settingsCard")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(14)
 
-        # header row: titolo a sinistra, riepilogo preset a destra
+        # header row: titolo a sinistra, riepilogo impostazioni a destra
         head_row = QHBoxLayout()
         head_row.setContentsMargins(0, 0, 0, 0)
         self._head_lbl = QLabel("IMPOSTAZIONI DI TRASCRIZIONE")
         head_row.addWidget(self._head_lbl)
         head_row.addStretch()
-        self._preset_lbl = QLabel("")
-        head_row.addWidget(self._preset_lbl)
+        self._preset_lbl = ElidedLabel("", Qt.ElideRight)
+        self._preset_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        head_row.addWidget(self._preset_lbl, 1)
         lay.addLayout(head_row)
 
         # grid 4 col: Modello | Lingua | VAD | Alta precisione
@@ -267,9 +292,9 @@ class HomeWidget(AuroraMixin, QWidget):
         self._field_labels = []
         ss = _combo_ss()
 
-        # Modello
         col_m = self._col("MODELLO WHISPER")
         self.model_combo = QComboBox()
+        self.model_combo.setAccessibleName("Modello Whisper")
         self.model_combo.setStyleSheet(ss)
         for k in self._model_keys:
             self.model_combo.addItem(self._models[k]["label"], k)
@@ -279,33 +304,30 @@ class HomeWidget(AuroraMixin, QWidget):
         col_m.addWidget(self.model_combo)
         grid.addLayout(col_m, 2)
 
-        # Lingua
         col_l = self._col("LINGUA")
         self.lang_combo = QComboBox()
+        self.lang_combo.setAccessibleName("Lingua dell'audio")
         self.lang_combo.setStyleSheet(ss)
-        self.lang_combo.addItem("Italiano  auto", "it")
-        self.lang_combo.addItem("English  auto", "en")
-        self.lang_combo.addItem("Español  auto", "es")
-        self.lang_combo.addItem("Français  auto", "fr")
-        self.lang_combo.addItem("Deutsch  auto", "de")
-        self.lang_combo.addItem("Auto-detect", "auto")
+        for label, code in (("Italiano", "it"), ("Inglese", "en"), ("Spagnolo", "es"),
+                            ("Francese", "fr"), ("Tedesco", "de"),
+                            ("Rilevamento automatico", "auto")):
+            self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(0)
         self.lang_combo.currentIndexChanged.connect(self._update_preset_label)
         col_l.addWidget(self.lang_combo)
         grid.addLayout(col_l, 2)
 
-        # VAD
         col_v = self._col("FILTRO VAD")
-        self.vad_toggle = _ToggleSwitch("Attivo", "Disattivo")
+        self.vad_toggle = _ToggleSwitch("Attivo", "Disattivo", name="Filtro VAD")
+        self.vad_toggle.setToolTip("Salta i tratti senza parlato (consigliato)")
         self.vad_toggle.setChecked(True)
         self.vad_toggle.toggled.connect(self._update_preset_label)
         col_v.addWidget(self.vad_toggle)
         col_v.addStretch()
         grid.addLayout(col_v, 1)
 
-        # Alta precisione
         col_hp = self._col("ALTA PRECISIONE")
-        self.accuracy_toggle = _ToggleSwitch("Attiva", "Standard")
+        self.accuracy_toggle = _ToggleSwitch("Attiva", "Standard", name="Alta precisione")
         self.accuracy_toggle.setChecked(False)
         self.accuracy_toggle.setToolTip(
             "Usa WhisperX con allineamento fonetico.\nRichiede: pip install whisperx"
@@ -315,7 +337,7 @@ class HomeWidget(AuroraMixin, QWidget):
         col_hp.addStretch()
         grid.addLayout(col_hp, 1)
 
-        # beam_spin non visibile ma mantenuto per compatibilità con _get_settings()
+        # beam_spin non visibile: valore di default letto da _get_settings()
         self.beam_spin = QSpinBox()
         self.beam_spin.setRange(1, 15)
         self.beam_spin.setValue(5)
@@ -326,21 +348,14 @@ class HomeWidget(AuroraMixin, QWidget):
         return card
 
     def _update_preset_label(self):
-        """Aggiorna il testo riepilogo preset nell'header della card."""
-        active = 0
-        parts = []
-        if self.vad_toggle.isChecked():
-            active += 1
-        if self.accuracy_toggle.isChecked():
-            active += 1
-            parts.append("Alta qualità")
-        else:
-            parts.append("Standard")
-        lang_text = self.lang_combo.currentText().split()[0] if hasattr(self, "lang_combo") else "Italiano"
-        parts.insert(0, lang_text)
-        active += 1  # lingua sempre attiva
-        preset = "  ·  ".join(parts)
-        self._preset_lbl.setText(f'{active} attive  ·  preset "{preset}"')
+        """Riepilogo inline delle impostazioni correnti (nell'header della card)."""
+        parts = [self.lang_combo.currentText()]
+        model_key = self.model_combo.currentData()
+        if model_key:
+            parts.append(str(model_key))
+        parts.append("VAD attivo" if self.vad_toggle.isChecked() else "VAD disattivo")
+        parts.append("alta precisione" if self.accuracy_toggle.isChecked() else "standard")
+        self._preset_lbl.setText("  ·  ".join(parts))
 
     def _col(self, label: str) -> QVBoxLayout:
         col = QVBoxLayout()
@@ -353,6 +368,9 @@ class HomeWidget(AuroraMixin, QWidget):
     # ── Handlers ─────────────────────────────────────────────────────────────
 
     def _on_file_selected(self, path: str):
+        if not _is_media(path) or not os.path.isfile(path):
+            self._on_file_error(Path(path).suffix.lstrip(".").lower())
+            return
         self._source_path = path
         self.drop.show_loaded(path)
         self._set_start_btn_state(True)
@@ -367,7 +385,7 @@ class HomeWidget(AuroraMixin, QWidget):
             self.start_btn.setText("▶  Avvia trascrizione")
             self.start_btn.setStyleSheet(
                 "QPushButton {"
-                f"  background-color: {c('acc')};"
+                f"  background-color: {c('acc_fill')};"
                 f"  color: {c('acc_ink')};"
                 "  border: none;"
                 "  border-radius: 8px;"
@@ -376,8 +394,9 @@ class HomeWidget(AuroraMixin, QWidget):
                 "  padding: 0 22px;"
                 "  min-height: 44px;"
                 "}"
-                f"QPushButton:hover {{ background-color: {c('acc_h')}; }}"
-                f"QPushButton:pressed {{ background-color: {c('acc_d')}; }}"
+                f"QPushButton:hover {{ background-color: {c('acc_fill_h')}; }}"
+                f"QPushButton:pressed {{ background-color: {c('acc_fill_d')}; }}"
+                + theme.focus_rule("QPushButton", 8)
             )
         else:
             self.start_btn.setEnabled(False)
@@ -399,7 +418,9 @@ class HomeWidget(AuroraMixin, QWidget):
         self.drop.show_error(ext)
         self._source_path = None
         self._set_start_btn_state(False)
-        self._estimate_lbl.setText("Formato non supportato")
+        self._estimate_lbl.setText(
+            f"Formato .{ext} non supportato" if ext else "Formato non supportato"
+        )
 
     def _on_start(self):
         if not self._source_path:
@@ -435,38 +456,19 @@ class HomeWidget(AuroraMixin, QWidget):
         except OSError:
             self._estimate_lbl.setText("Stima: –")
 
-    def _on_preview_settings(self):
-        from PySide6.QtWidgets import QMessageBox
-        s = self._get_settings()
-        model_lbl = self._models.get(s["model_size"], {}).get("label", s["model_size"])
-        lang = self.lang_combo.currentText()
-        vad = "Attivo" if s["vad_filter"] else "Disattivo"
-        prec = "Alta qualità" if s["high_accuracy"] else "Standard"
-        QMessageBox.information(
-            self, "Impostazioni di trascrizione",
-            f"Modello:        {model_lbl}\n"
-            f"Lingua:          {lang}\n"
-            f"Filtro VAD:    {vad}\n"
-            f"Precisione:    {prec}\n"
-            f"Beam size:    {s['beam_size']}",
-        )
-
     # ── Recenti ───────────────────────────────────────────────────────────────
+    # Un'unica lista ("recent_files", condivisa con File → Apri recenti): la Home
+    # mostra i file multimediali ancora esistenti.
 
     def _add_to_recents(self, path: str):
-        s = QSettings("VideoSRT", "v2")
-        recents: list = s.value("recents", []) or []
-        if path in recents:
-            recents.remove(path)
-        recents.insert(0, path)
-        recents = [r for r in recents if os.path.isfile(r)][:_MAX_RECENTS]
-        s.setValue("recents", recents)
+        add_recent(QSettings("VideoSRT", "v2"), path)
 
     def _refresh_recents(self):
-        s = QSettings("VideoSRT", "v2")
-        recents: list = s.value("recents", []) or []
-        recents = [r for r in recents if os.path.isfile(r)][:_MAX_RECENTS]
-        self._recents_widget.set_recents(recents)
+        recents = [
+            str(r) for r in read_list(QSettings("VideoSRT", "v2"), RECENT_KEY)
+            if _is_media(str(r)) and os.path.isfile(str(r))
+        ]
+        self._recents_widget.set_recents(recents[:_SHOWN_RECENTS])
 
     # ── API pubblica ──────────────────────────────────────────────────────────
 
@@ -474,6 +476,7 @@ class HomeWidget(AuroraMixin, QWidget):
         self.deps_banner.set_status(ffmpeg_ok, model_ok)
 
     def preload_file(self, path: str):
+        """Pre-carica un file (es. da File → Apri); estensioni non media → errore visibile."""
         self._on_file_selected(path)
 
     def reset(self):
@@ -487,16 +490,22 @@ class HomeWidget(AuroraMixin, QWidget):
 # ── _DesignDropZone ───────────────────────────────────────────────────────────
 
 class _DesignDropZone(QWidget):
-    """Drop zone con widget fissi — nessun rebuild, nessuna sovrapposizione."""
+    """
+    Drop zone con widget fissi (uno per stato, nessun rebuild). Accetta click,
+    Invio/Spazio da tastiera e drag & drop; i formati non supportati vengono
+    rifiutati con un messaggio visibile.
+    """
 
-    file_selected = Signal(str)
-    file_error    = Signal(str)
+    file_selected  = Signal(str)
+    file_error     = Signal(str)   # estensione rifiutata (senza punto)
+    open_requested = Signal(str)   # SRT / .v2srt: da aprire nell'editor
 
     _IDLE   = "idle"
     _HOVER  = "hover"
     _LOADED = "loaded"
     _ERROR  = "error"
 
+    # Altezze minime di progetto; quella effettiva segue il contenuto (font grandi)
     _H_NORMAL = 196
     _H_LOADED = 78
 
@@ -506,72 +515,69 @@ class _DesignDropZone(QWidget):
         self._file_path: str | None = None
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(self._H_NORMAL)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName("Scegli il file video o audio da trascrivere")
+        self.setAccessibleDescription("Invio o Spazio per sfogliare; oppure trascina qui un file")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Stack: un QWidget per stato, sempre presenti, show/hide
-        from PySide6.QtWidgets import QStackedLayout
         stack = QStackedLayout(self)
         stack.setContentsMargins(0, 0, 0, 0)
         stack.setStackingMode(QStackedLayout.StackOne)
 
-        # ── Idle ──────────────────────────────────────────────────────────────
-        self._w_idle = QWidget()
-        lay_idle = QVBoxLayout(self._w_idle)
-        lay_idle.setAlignment(Qt.AlignCenter)
-        lay_idle.setSpacing(10)
-        lay_idle.setContentsMargins(24, 0, 24, 0)
+        def _state_page(spacing: int = 10) -> tuple:
+            w = QWidget()
+            lay = QVBoxLayout(w)
+            # solo centratura verticale: le etichette a capo usano tutta la larghezza
+            lay.setAlignment(Qt.AlignVCenter)
+            lay.setSpacing(spacing)
+            lay.setContentsMargins(24, 16, 24, 16)
+            return w, lay
 
-        self._idle_icon = QLabel("↓")
-        self._idle_icon.setAlignment(Qt.AlignCenter)
-        self._idle_icon.setFixedSize(56, 56)
+        def _icon(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setFixedSize(56, 56)
+            return lbl
+
+        def _centered(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setWordWrap(True)
+            return lbl
+
+        # ── Idle ──────────────────────────────────────────────────────────────
+        self._w_idle, lay_idle = _state_page()
+        self._idle_icon = _icon("↓")
         lay_idle.addWidget(self._idle_icon, 0, Qt.AlignCenter)
-        self._idle_t1 = QLabel("Trascina qui un file video o audio")
-        self._idle_t1.setAlignment(Qt.AlignCenter)
+        self._idle_t1 = _centered("Trascina qui un file video o audio")
         lay_idle.addWidget(self._idle_t1)
-        self._idle_t2 = QLabel(
-            f"oppure  {platform_support.shortcut_label('Ctrl+O')}  per scegliere"
-            "  ·  MP4, MOV, MKV, WAV, MP3 fino a 4 GB"
+        self._idle_t2 = _centered(
+            f"oppure clicca o premi  {platform_support.shortcut_label('Ctrl+O')}  per scegliere"
+            f"  ·  {_FORMATS_HINT}"
         )
-        self._idle_t2.setAlignment(Qt.AlignCenter)
         lay_idle.addWidget(self._idle_t2)
 
         # ── Hover ─────────────────────────────────────────────────────────────
-        self._w_hover = QWidget()
-        lay_hover = QVBoxLayout(self._w_hover)
-        lay_hover.setAlignment(Qt.AlignCenter)
-        lay_hover.setSpacing(10)
-        lay_hover.setContentsMargins(24, 0, 24, 0)
-        self._hover_icon = QLabel("↓")
-        self._hover_icon.setAlignment(Qt.AlignCenter)
-        self._hover_icon.setFixedSize(56, 56)
+        self._w_hover, lay_hover = _state_page()
+        self._hover_icon = _icon("↓")
         lay_hover.addWidget(self._hover_icon, 0, Qt.AlignCenter)
-        self._hover_t1 = QLabel("Rilascia per caricare")
-        self._hover_t1.setAlignment(Qt.AlignCenter)
+        self._hover_t1 = _centered("Rilascia per caricare")
         lay_hover.addWidget(self._hover_t1)
 
         # ── Error ─────────────────────────────────────────────────────────────
-        self._w_error = QWidget()
-        lay_error = QVBoxLayout(self._w_error)
-        lay_error.setAlignment(Qt.AlignCenter)
-        lay_error.setSpacing(10)
-        lay_error.setContentsMargins(24, 0, 24, 0)
-        self._err_icon = QLabel("!")
-        self._err_icon.setAlignment(Qt.AlignCenter)
-        self._err_icon.setFixedSize(56, 56)
+        self._w_error, lay_error = _state_page()
+        self._err_icon = _icon("!")
         lay_error.addWidget(self._err_icon, 0, Qt.AlignCenter)
-        self._err_t1 = QLabel("Formato non supportato")
-        self._err_t1.setAlignment(Qt.AlignCenter)
+        self._err_t1 = _centered("Formato non supportato")
         lay_error.addWidget(self._err_t1)
-        self._err_t2 = QLabel("Usa MP4, MOV, MKV, WAV o MP3.")
-        self._err_t2.setAlignment(Qt.AlignCenter)
+        self._err_t2 = _centered(f"Usa un file video o audio: {_FORMATS_HINT}")
         lay_error.addWidget(self._err_t2)
 
         # ── Loaded ────────────────────────────────────────────────────────────
         self._w_loaded = QWidget()
         lay_loaded = QHBoxLayout(self._w_loaded)
         lay_loaded.setSpacing(14)
-        lay_loaded.setContentsMargins(20, 0, 20, 0)
+        lay_loaded.setContentsMargins(20, 12, 20, 12)
         lay_loaded.setAlignment(Qt.AlignVCenter)
 
         self._loaded_icon = QLabel("▶")
@@ -581,25 +587,23 @@ class _DesignDropZone(QWidget):
 
         info_col = QVBoxLayout()
         info_col.setSpacing(3)
-        self._loaded_name = QLabel("")
+        self._loaded_name = ElidedLabel("")
         self._loaded_detail = QLabel("")
         info_col.addWidget(self._loaded_name)
         info_col.addWidget(self._loaded_detail)
         lay_loaded.addLayout(info_col, 1)
 
         self._change_btn = QPushButton("Cambia")
-        self._change_btn.setFixedHeight(32)
+        self._change_btn.setMinimumHeight(32)
         self._change_btn.setCursor(Qt.PointingHandCursor)
+        self._change_btn.setAccessibleName("Cambia file")
         self._change_btn.clicked.connect(self._open_dialog)
         lay_loaded.addWidget(self._change_btn)
 
-        # Aggiungi tutti al stack
-        stack.addWidget(self._w_idle)    # index 0
-        stack.addWidget(self._w_hover)   # index 1
-        stack.addWidget(self._w_error)   # index 2
-        stack.addWidget(self._w_loaded)  # index 3
+        for w in (self._w_idle, self._w_hover, self._w_error, self._w_loaded):
+            stack.addWidget(w)
         self._stack = stack
-        self._stack.setCurrentIndex(0)
+        self._set_state(self._IDLE)
 
         self._apply_palette()
 
@@ -638,92 +642,113 @@ class _DesignDropZone(QWidget):
         )
         self._change_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {c('line_2')};"
-            f" border-radius: 7px; color: {c('dim')}; font-size: 12.5px; font-weight: 500; padding: 0 13px; }}"
+            f" border-radius: 7px; color: {c('dim')}; font-size: 12.5px; font-weight: 500; padding: 4px 13px; }}"
             f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('line_2')}; color: {c('text')}; }}"
             f"QPushButton:pressed {{ background: {c('card')}; }}"
+            + theme.focus_rule("QPushButton", 7)
         )
         self.update()
 
     def _set_state(self, state: str):
         self._state = state
-        idx = {self._IDLE: 0, self._HOVER: 1, self._ERROR: 2, self._LOADED: 3}[state]
-        self._stack.setCurrentIndex(idx)
+        page = {self._IDLE: self._w_idle, self._HOVER: self._w_hover,
+                self._ERROR: self._w_error, self._LOADED: self._w_loaded}[state]
+        self._stack.setCurrentWidget(page)
+        base = self._H_LOADED if state == self._LOADED else self._H_NORMAL
+        # Altezza dal contenuto: con font grandi il testo non viene tagliato
+        self.setFixedHeight(max(base, page.sizeHint().height() + 8))
         self.update()
 
     # ── Paint ─────────────────────────────────────────────────────────────────
 
     def paintEvent(self, event):
-        c = theme.c
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = self.rect().adjusted(1, 1, -1, -1)
 
-        if self._state == self._IDLE:
-            p.setBrush(QColor(c("card")))
-            pen = QPen(QColor(c("line_2")))
+        border = {self._IDLE: "line_2", self._HOVER: "acc", self._LOADED: "line_2",
+                  self._ERROR: "err"}[self._state]
+        p.setBrush(theme.qcolor("acc_soft" if self._state == self._HOVER else "card"))
+        pen = QPen(theme.qcolor(border))
+        if self._state != self._LOADED:
             pen.setStyle(Qt.DashLine)
-            p.setPen(pen)
-            p.drawRoundedRect(r, 16, 16)
+        p.setPen(pen)
+        p.drawRoundedRect(r, 16, 16)
 
-        elif self._state == self._HOVER:
-            p.setBrush(QColor(c("acc_soft")))
-            pen = QPen(QColor(c("acc")))
-            pen.setStyle(Qt.DashLine)
-            p.setPen(pen)
-            p.drawRoundedRect(r, 16, 16)
-            glow = QColor(c("acc")); glow.setAlpha(45)
+        if self._state == self._HOVER:
+            glow = theme.qcolor("acc")
+            glow.setAlpha(45)
             glow_pen = QPen(glow)
             glow_pen.setWidth(6)
             p.setPen(glow_pen)
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(-2, -2, 2, 2), 18, 18)
 
-        elif self._state == self._LOADED:
-            p.setBrush(QColor(c("card")))
-            p.setPen(QPen(QColor(c("line_2"))))
-            p.drawRoundedRect(r, 16, 16)
-
-        elif self._state == self._ERROR:
-            p.setBrush(QColor(c("card")))
-            pen = QPen(QColor(c("err")))
-            pen.setStyle(Qt.DashLine)
-            p.setPen(pen)
-            p.drawRoundedRect(r, 16, 16)
-
+        if self.hasFocus():
+            # Anello di focus da tastiera
+            focus_pen = QPen(theme.qcolor("focus"))
+            focus_pen.setWidth(2)
+            p.setPen(focus_pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(2, 2, -2, -2), 14, 14)
         p.end()
+
+    def focusInEvent(self, event):
+        self.update()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.update()
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self._open_dialog()
+            return
+        super().keyPressEvent(event)
 
     # ── Drag & drop ───────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _local_paths(mime) -> list:
+        if not mime.hasUrls():
+            return []
+        return [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
-            path = e.mimeData().urls()[0].toLocalFile()
-            if Path(path).suffix.lower() in SUPPORTED_EXTS:
-                e.acceptProposedAction()
-                self.setFixedHeight(self._H_NORMAL)
-                self._set_state(self._HOVER)
-                return
-        e.ignore()
+        paths = self._local_paths(e.mimeData())
+        if not paths:
+            e.ignore()
+            return
+        # Si accetta sempre un drop di file: quelli non supportati vengono rifiutati
+        # al rilascio con un messaggio, invece di ignorarli in silenzio.
+        e.acceptProposedAction()
+        if any(_is_media(p) or _is_subtitle(p) for p in paths):
+            self._set_state(self._HOVER)
+        else:
+            self._err_t1.setText(f"Formato .{Path(paths[0]).suffix.lstrip('.').lower()} "
+                                 "non supportato")
+            self._set_state(self._ERROR)
 
     def dragLeaveEvent(self, e):
-        if self._file_path:
-            self.setFixedHeight(self._H_LOADED)
-            self._set_state(self._LOADED)
-        else:
-            self.setFixedHeight(self._H_NORMAL)
-            self._set_state(self._IDLE)
+        self._set_state(self._LOADED if self._file_path else self._IDLE)
 
     def dropEvent(self, e):
-        urls = e.mimeData().urls()
-        if not urls:
+        paths = self._local_paths(e.mimeData())
+        if not paths:
             self.dragLeaveEvent(e)
             return
-        path = urls[0].toLocalFile()
-        ext = Path(path).suffix.lower()
-        if ext in SUPPORTED_EXTS and os.path.isfile(path):
-            self.file_selected.emit(path)
-            e.acceptProposedAction()
-        else:
-            self.file_error.emit(ext.lstrip("."))
+        e.acceptProposedAction()
+        media = next((p for p in paths if _is_media(p) and os.path.isfile(p)), None)
+        if media:
+            self.file_selected.emit(media)
+            return
+        subtitle = next((p for p in paths if _is_subtitle(p) and os.path.isfile(p)), None)
+        if subtitle:
+            self.dragLeaveEvent(e)
+            self.open_requested.emit(subtitle)
+            return
+        self.file_error.emit(Path(paths[0]).suffix.lstrip(".").lower())
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
@@ -731,50 +756,58 @@ class _DesignDropZone(QWidget):
 
     def _open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Seleziona un file video o audio", "", FILE_FILTERS
+            self, "Seleziona un file video o audio", "", FILE_FILTER_MEDIA
         )
         if path:
-            ext = Path(path).suffix.lower()
-            if ext in SUPPORTED_EXTS:
+            if _is_media(path):
                 self.file_selected.emit(path)
             else:
-                self.file_error.emit(ext.lstrip("."))
+                self.file_error.emit(Path(path).suffix.lstrip(".").lower())
 
     # ── API ───────────────────────────────────────────────────────────────────
 
     def show_loaded(self, path: str):
         self._file_path = path
         self._loaded_name.setText(Path(path).name)
+        self._loaded_name.set_full_tooltip(path)
         ext = Path(path).suffix.upper().lstrip(".")
         self._loaded_detail.setText(f"{fmt_size(path)}  ·  {ext}")
-        self.setFixedHeight(self._H_LOADED)
+        self.setAccessibleName(f"File selezionato: {Path(path).name}. Invio per cambiarlo")
         self._set_state(self._LOADED)
 
     def show_error(self, ext: str):
         self._file_path = None
-        self.setFixedHeight(self._H_NORMAL)
+        self._err_t1.setText(f"Formato .{ext} non supportato" if ext else "Formato non supportato")
         self._set_state(self._ERROR)
 
     def reset(self):
         self._file_path = None
-        self.setFixedHeight(self._H_NORMAL)
+        self.setAccessibleName("Scegli il file video o audio da trascrivere")
         self._set_state(self._IDLE)
 
 
 # ── _ToggleSwitch ─────────────────────────────────────────────────────────────
 
 class _ToggleSwitch(QWidget):
-    """Toggle switch stile design — row con pill + label."""
+    """
+    Interruttore stile design (pill + etichetta). Usabile da tastiera
+    (Tab per il focus, Spazio/Invio per cambiare) e con nome accessibile.
+    """
 
     toggled = Signal(bool)
 
-    def __init__(self, label_on: str = "Attivo", label_off: str = "Disattivo", parent=None):
+    def __init__(self, label_on: str = "Attivo", label_off: str = "Disattivo",
+                 name: str = "", parent=None):
         super().__init__(parent)
         self._checked = False
         self._on = label_on
         self._off = label_off
+        self._name = name
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(38)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("toggleSwitch")
+        self.setMinimumHeight(max(38, self.fontMetrics().height() + 18))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         lay = QHBoxLayout(self)
@@ -784,19 +817,23 @@ class _ToggleSwitch(QWidget):
         self._pill = _SwitchPill()
         lay.addWidget(self._pill)
 
-        # larghezza fissa per la label — evita resize del layout al cambio testo
-        max_w = max(len(label_on), len(label_off)) * 8 + 8
+        # larghezza minima dell'etichetta: evita resize del layout al cambio testo
         self._lbl = QLabel(self._off)
-        self._lbl.setFixedWidth(max_w)
+        fm = self._lbl.fontMetrics()
+        self._lbl.setMinimumWidth(max(fm.horizontalAdvance(label_on),
+                                      fm.horizontalAdvance(label_off)) + 8)
         lay.addWidget(self._lbl)
         lay.addStretch()
 
         self._apply_palette()
+        self._update_accessible()
 
     def _apply_palette(self):
         c = theme.c
         self.setStyleSheet(
-            f"QWidget {{ background: {c('card_2')}; border: 1px solid transparent; border-radius: 8px; }}"
+            f"QWidget#toggleSwitch {{ background: {c('card_2')}; border: 2px solid transparent;"
+            " border-radius: 8px; }"
+            f"QWidget#toggleSwitch:focus {{ border: 2px solid {c('focus')}; }}"
         )
         self._lbl.setStyleSheet(
             f"font-size: 12.5px; font-weight: 500; color: {c('text')};"
@@ -804,18 +841,33 @@ class _ToggleSwitch(QWidget):
         )
         self._pill.update()
 
+    def _update_accessible(self):
+        state = self._on if self._checked else self._off
+        self.setAccessibleName(f"{self._name}: {state}" if self._name else state)
+
     def isChecked(self) -> bool:
         return self._checked
 
     def setChecked(self, val: bool):
-        self._checked = val
-        self._pill.set_on(val)
-        self._lbl.setText(self._on if val else self._off)
+        self._checked = bool(val)
+        self._pill.set_on(self._checked)
+        self._lbl.setText(self._on if self._checked else self._off)
+        self._update_accessible()
+
+    def _toggle(self):
+        self.setChecked(not self._checked)
+        self.toggled.emit(self._checked)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self.setChecked(not self._checked)
-            self.toggled.emit(self._checked)
+            self.setFocus(Qt.MouseFocusReason)
+            self._toggle()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._toggle()
+            return
+        super().keyPressEvent(e)
 
 
 class _SwitchPill(QWidget):
@@ -829,20 +881,85 @@ class _SwitchPill(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        c = theme.c
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor(c("acc")) if self._on else QColor(c("inset")))
-        p.setPen(QPen(QColor(c("acc")) if self._on else QColor(c("line_2"))))
+        p.setBrush(theme.qcolor("acc_fill") if self._on else theme.qcolor("inset"))
+        p.setPen(QPen(theme.qcolor("acc_fill") if self._on else theme.qcolor("line_2")))
         p.drawRoundedRect(0, 0, 32, 19, 10, 10)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#ffffff") if self._on else QColor(c("muted")))
+        p.setBrush(theme.qcolor("knob") if self._on else theme.qcolor("muted"))
         x = 14 if self._on else 1
         p.drawEllipse(x, 1, 16, 16)
         p.end()
 
 
 # ── _RecentsWidget ────────────────────────────────────────────────────────────
+
+class _RecentCard(QFrame):
+    """Scheda di un file recente: cliccabile e attivabile da tastiera (Invio/Spazio)."""
+
+    activated = Signal(str)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self._path = path
+        self.setObjectName("recentCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(f"Apri recente: {Path(path).name}")
+        self.setToolTip(path)
+        self.setMinimumHeight(max(54, self.fontMetrics().height() * 2 + 22))
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(13, 8, 13, 8)
+        lay.setSpacing(11)
+
+        self._ic = QLabel("▦")
+        self._ic.setFixedSize(32, 32)
+        self._ic.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self._ic)
+
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        self._name = ElidedLabel(Path(path).name)
+        self._name.set_full_tooltip(path)
+        self._meta = QLabel(fmt_size(path))
+        info.addWidget(self._name)
+        info.addWidget(self._meta)
+        lay.addLayout(info, 1)
+        self.apply_palette()
+
+    def apply_palette(self):
+        c = theme.c
+        self.setStyleSheet(
+            f"QFrame#recentCard {{ background: {c('card')}; border: 1px solid {c('card_border')};"
+            " border-radius: 10px; }"
+            f"QFrame#recentCard:hover {{ border-color: {c('acc')}; background: {c('card_2')}; }}"
+            f"QFrame#recentCard:focus {{ border: 2px solid {c('focus')}; }}"
+        )
+        self._ic.setStyleSheet(
+            f"background: {c('card_2')}; border: none; border-radius: 8px;"
+            f" color: {c('muted')}; font-size: 14px;"
+        )
+        self._name.setStyleSheet(
+            f"font-size: 12.5px; font-weight: 500; color: {c('text')};"
+            " background: transparent; border: none;"
+        )
+        self._meta.setStyleSheet(
+            f"font-size: 11px; color: {c('muted')}; background: transparent; border: none;"
+            f" font-family: {theme.FONT_MONO};"
+        )
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.activated.emit(self._path)
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.activated.emit(self._path)
+            return
+        super().keyPressEvent(e)
+
 
 class _RecentsWidget(QWidget):
     """Riga file recenti — visibile solo se ci sono file."""
@@ -858,80 +975,31 @@ class _RecentsWidget(QWidget):
         self.setStyleSheet("background: transparent;")
         self._paths: list = []
 
+        self._title = QLabel("RECENTI")
+        self._lay.addWidget(self._title)
+        self._row = QHBoxLayout()
+        self._row.setSpacing(12)
+        self._lay.addLayout(self._row)
+        self._cards: list = []
+        self._apply_palette()
+
     def _apply_palette(self):
-        if self._paths:
-            self.set_recents(self._paths)
+        self._title.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; color: {theme.c('muted')};"
+            " letter-spacing: 1.2px; background: transparent;"
+        )
+        for card in self._cards:
+            card.apply_palette()
 
     def set_recents(self, paths: list):
         self._paths = list(paths)
-        c = theme.c
-        while self._lay.count():
-            item = self._lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                while item.layout().count():
-                    sub = item.layout().takeAt(0)
-                    if sub.widget():
-                        sub.widget().deleteLater()
-
-        if not paths:
-            self.setVisible(False)
-            return
-
-        lbl = QLabel("RECENTI")
-        lbl.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-            " letter-spacing: 1.2px; background: transparent;"
-        )
-        self._lay.addWidget(lbl)
-
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        for path in paths[:3]:
-            row.addWidget(self._make_card(path), 1)
-        self._lay.addLayout(row)
-        self.setVisible(True)
-
-    def _make_card(self, path: str) -> QFrame:
-        c = theme.c
-        card = QFrame()
-        card.setStyleSheet(
-            f"QFrame {{ background: {c('card')}; border: 1px solid {c('card_border')}; border-radius: 10px; }}"
-            f"QFrame:hover {{ border-color: {c('acc')}; background: {c('card_2')}; }}"
-        )
-        card.setCursor(Qt.PointingHandCursor)
-        card.setFixedHeight(54)
-
-        lay = QHBoxLayout(card)
-        lay.setContentsMargins(13, 0, 13, 0)
-        lay.setSpacing(11)
-
-        ic = QLabel("▦")
-        ic.setFixedSize(32, 32)
-        ic.setAlignment(Qt.AlignCenter)
-        ic.setStyleSheet(
-            f"background: {c('card_2')}; border: none; border-radius: 8px;"
-            f" color: {c('muted')}; font-size: 14px;"
-        )
-        lay.addWidget(ic)
-
-        info = QVBoxLayout()
-        info.setSpacing(2)
-        name = QLabel(Path(path).name)
-        name.setStyleSheet(f"font-size: 12.5px; font-weight: 500; color: {c('text')}; background: transparent;")
-        try:
-            size_str = fmt_size(path)
-        except Exception:
-            size_str = ""
-        meta = QLabel(size_str)
-        meta.setStyleSheet(
-            f"font-size: 10.5px; color: {c('muted')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
-        )
-        info.addWidget(name)
-        info.addWidget(meta)
-        lay.addLayout(info, 1)
-
-        card.mousePressEvent = lambda e, p=path: self.file_selected.emit(p)
-        return card
+        for card in self._cards:
+            self._row.removeWidget(card)
+            card.deleteLater()
+        self._cards = []
+        for path in self._paths:
+            card = _RecentCard(path)
+            card.activated.connect(self.file_selected)
+            self._row.addWidget(card, 1)
+            self._cards.append(card)
+        self.setVisible(bool(self._paths))

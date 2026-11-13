@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from core.subtitle_model import Subtitle
 from ui.theme import AuroraMixin
+from ui.widgets import ElidedLabel
 from ui import theme
 
 
@@ -39,6 +40,7 @@ def _ss_btn() -> str:
         "}"
         f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('acc')}; }}"
         f"QPushButton:pressed {{ background: {c('surface')}; }}"
+        + theme.focus_rule("QPushButton", 10)
     )
 
 
@@ -51,39 +53,47 @@ def _ss_btn_accent() -> str:
         "}"
         f"QPushButton:hover {{ background: {c('acc_soft_2')}; border-color: {c('acc')}; }}"
         f"QPushButton:pressed {{ background: {c('acc_soft')}; }}"
+        + theme.focus_rule("QPushButton", 10)
     )
 
 
+class _ExportButton(QPushButton):
+    """Bottone export: titolo in grassetto + descrizione su seconda riga (label figlie)."""
+
+    def __init__(self, title: str, subtitle: str, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setCursor(Qt.PointingHandCursor)
+        # Il testo vive nelle label figlie: nome/descrizione accessibili espliciti
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(subtitle)
+        self.setToolTip(subtitle)
+
+        self._inner = QWidget(self)
+        self._inner.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay = QVBoxLayout(self._inner)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        self.title_lbl = QLabel(title)
+        self.sub_lbl = ElidedLabel(subtitle, Qt.ElideRight)
+        lay.addStretch(1)   # titolo + descrizione centrati verticalmente
+        for lbl in (self.title_lbl, self.sub_lbl):
+            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+            lay.addWidget(lbl)
+        lay.addStretch(1)
+        # Altezza dal contenuto (due righe di testo + margini), non fissa
+        self.setMinimumHeight(max(56, self._inner.sizeHint().height() + 18))
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._inner.setGeometry(16, 0, max(0, self.width() - 32), self.height())
+
+
 # kind: "normal" | "accent" | "publish"  → ricolorabili su theme_changed
-def _export_btn(title: str, subtitle: str, kind: str, store: list, height: int = 56) -> QPushButton:
-    """Bottone export con titolo bold + descrizione dim sulla seconda riga.
-    `store` raccoglie (button, kind, title_lbl, sub_lbl) per la re-tematizzazione."""
-    b = QPushButton()
-    b.setFixedHeight(height)
-    b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-    b.setCursor(Qt.PointingHandCursor)
-
-    inner = QWidget(b)
-    inner.setAttribute(Qt.WA_TransparentForMouseEvents)
-    inner_lay = QVBoxLayout(inner)
-    inner_lay.setContentsMargins(0, 0, 0, 0)
-    inner_lay.setSpacing(2)
-
-    t = QLabel(title)
-    t.setAttribute(Qt.WA_TransparentForMouseEvents)
-    inner_lay.addWidget(t)
-
-    s = QLabel(subtitle)
-    s.setAttribute(Qt.WA_TransparentForMouseEvents)
-    inner_lay.addWidget(s)
-
-    # posiziona l'inner widget quando il bottone viene ridimensionato
-    def _reposition(event=None):
-        inner.setGeometry(16, 0, b.width() - 32, b.height())
-    b.resizeEvent = lambda e: (_reposition(), QPushButton.resizeEvent(b, e))
-    _reposition()
-
-    store.append((b, kind, t, s))
+def _export_btn(title: str, subtitle: str, kind: str, store: list) -> QPushButton:
+    """Crea un _ExportButton; `store` raccoglie (button, kind, title, sub) per il tema."""
+    b = _ExportButton(title, subtitle)
+    store.append((b, kind, b.title_lbl, b.sub_lbl))
     return b
 
 
@@ -284,11 +294,17 @@ class _ExportPanel(QWidget):
         top_row.addStretch()
         info_lay.addLayout(top_row)
 
-        self._lbl_source = QLabel("")
+        self._lbl_source = ElidedLabel("")
         info_lay.addWidget(self._lbl_source)
 
         self._lbl_origin = QLabel("")
         info_lay.addWidget(self._lbl_origin)
+
+        # Avviso: ci sono sottotitoli ma con testo vuoto
+        self._lbl_empty_warn = QLabel("")
+        self._lbl_empty_warn.setWordWrap(True)
+        self._lbl_empty_warn.setVisible(False)
+        info_lay.addWidget(self._lbl_empty_warn)
 
         root.addWidget(self._info_card)
         root.addSpacing(28)
@@ -353,14 +369,14 @@ class _ExportPanel(QWidget):
 
         self._btn_youtube = _export_btn(
             "YouTube Studio",
-            "Copia il testo formattato — incollalo nelle caption manuale",
+            "Copia il testo SRT negli appunti — da incollare in YouTube Studio",
             "publish", self._btn_store,
         )
         self._btn_youtube.clicked.connect(self._publish_youtube)
 
         self._btn_vimeo = _export_btn(
             "Vimeo",
-            "Esporta SRT compatibile con Vimeo subtitle uploader",
+            "Esporta SRT da caricare nei sottotitoli di Vimeo",
             "publish", self._btn_store,
         )
         self._btn_vimeo.clicked.connect(self._publish_vimeo)
@@ -399,7 +415,8 @@ class _ExportPanel(QWidget):
 
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
-        self._preview.setFixedHeight(180)
+        self._preview.setAccessibleName("Anteprima SRT")
+        self._preview.setMinimumHeight(self._preview.fontMetrics().lineSpacing() * 10 + 24)
         root.addWidget(self._preview)
         root.addStretch(1)
 
@@ -434,6 +451,9 @@ class _ExportPanel(QWidget):
         self._lbl_origin.setStyleSheet(
             f"color: {c('acc')}; font-size: 11px; background: transparent; border: none;"
         )
+        self._lbl_empty_warn.setStyleSheet(
+            f"color: {c('warn')}; font-size: 11px; background: transparent; border: none;"
+        )
         self._preview.setStyleSheet(
             "QPlainTextEdit {"
             f"  background: {c('inset')}; color: {c('dim')};"
@@ -462,29 +482,28 @@ class _ExportPanel(QWidget):
             "oppure incolla nel campo testo temporizzato.",
         )
 
-    def _publish_vimeo(self):
-        """Esporta SRT rinominato per Vimeo."""
-        from PySide6.QtWidgets import QFileDialog
+    def _save_srt_as(self, title: str, default_name: str):
+        """Salva l'SRT corrente dove sceglie l'utente; gli errori di scrittura sono mostrati."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
         from core.srt_io import subtitles_to_srt
         if not self._current_subs:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Esporta per Vimeo", "sottotitoli_vimeo.srt", "SRT (*.srt)"
-        )
-        if path:
+        path, _ = QFileDialog.getSaveFileName(self, title, default_name, "SRT (*.srt)")
+        if not path:
+            return
+        try:
             Path(path).write_text(subtitles_to_srt(self._current_subs), encoding="utf-8")
+        except OSError as e:
+            QMessageBox.critical(self, "Errore esportazione",
+                                 f"Impossibile salvare il file:\n{e}")
+
+    def _publish_vimeo(self):
+        """Esporta SRT per l'uploader di Vimeo."""
+        self._save_srt_as("Esporta per Vimeo", "sottotitoli_vimeo.srt")
 
     def _publish_premiere(self):
-        """Esporta SRT ottimizzato per NLE (Premiere/DaVinci)."""
-        from PySide6.QtWidgets import QFileDialog
-        from core.srt_io import subtitles_to_srt
-        if not self._current_subs:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Esporta per NLE", "sottotitoli_nle.srt", "SRT (*.srt)"
-        )
-        if path:
-            Path(path).write_text(subtitles_to_srt(self._current_subs), encoding="utf-8")
+        """Esporta SRT per NLE (Premiere/DaVinci)."""
+        self._save_srt_as("Esporta per NLE", "sottotitoli_nle.srt")
 
     def _publish_clipboard(self):
         """Copia SRT completo negli appunti."""
@@ -509,7 +528,15 @@ class _ExportPanel(QWidget):
         n = len(subtitles)
         self._lbl_count.setText(f"{n} sottotitoli")
         self._lbl_source.setText(f"Fonte: {Path(source_path).name}" if source_path else "")
+        self._lbl_source.set_full_tooltip(source_path)
         self._lbl_source.setVisible(bool(source_path))
+        n_empty = sum(1 for s in subtitles if not s.text.strip())
+        if n_empty:
+            self._lbl_empty_warn.setText(
+                f"Attenzione: {n_empty} sottotitol{'o' if n_empty == 1 else 'i'} senza testo"
+                + (" — l'esportazione sarebbe vuota." if n_empty == n else ".")
+            )
+        self._lbl_empty_warn.setVisible(bool(n_empty))
         self._lbl_origin.setText(
             "Versione dell'editor" if has_editor_subs
             else "Trascrizione originale"

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from core.subtitle_model import Subtitle, SubtitleProject
-from core.v2srt_io import save_project, load_project, is_v2srt, EXTENSION
+from core.v2srt_io import save_project, load_project, is_v2srt
 
 
 @pytest.fixture

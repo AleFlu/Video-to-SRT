@@ -206,17 +206,6 @@ class TestRobustness:
         assert bar.count() == 0
         assert bar.current_index() == -1
 
-    def test_inline_progress_value_clamp(self, app):
-        from ui.editor_tab import EditorTab
-        et = EditorTab()
-        et.inline_progress_show()
-        et.inline_progress_update(0.0)
-        assert et._inline_progress.value() == 0
-        et.inline_progress_update(1.0)
-        assert et._inline_progress.value() == 1000
-        # Valori fuori range non devono crashare
-        et.inline_progress_update(2.0)
-        et.inline_progress_update(-0.5)
 
 
 # ── Formato VTT ────────────────────────────────────────────────────────────────

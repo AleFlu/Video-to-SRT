@@ -18,15 +18,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from PySide6.QtCore import Qt, Signal, QSettings
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSizePolicy,
-)
+from PySide6.QtCore import Qt, Signal, QSettings, QTimer
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QSplitter, QSizePolicy
 
 from core.subtitle_model import Subtitle
 from ui.preview_area import PreviewArea
-from ui.subtitle_timeline import SubtitleTimeline
+from ui.subtitle_timeline import SubtitleTimeline, SYNC_DEBOUNCE_MS
 from ui import theme
+from ui.prefs import read_list
 
 
 _SETTINGS_HSPLIT = "workspace/hsplit_sizes"   # [left_col, inspector]
@@ -110,6 +109,11 @@ class WorkspaceWidget(QWidget):
             lambda checked: self.inspector.setVisible(checked)
         )
 
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.setInterval(SYNC_DEBOUNCE_MS)
+        self._sync_timer.timeout.connect(self.sync_preview_subs)
+
         # ── Connessioni generali ───────────────────────────────────────────────
         self._wire()
 
@@ -126,12 +130,11 @@ class WorkspaceWidget(QWidget):
 
     def _wire(self):
         self.timeline.subtitles_changed.connect(self.subtitles_changed)
-        self.timeline.subtitles_changed.connect(self.sync_preview_subs)
+        # dataModified (→ subtitles_changed) arriva dopo ogni modifica, inclusi
+        # inserimenti, rimozioni e reset: un solo aggancio, con debounce.
+        self.timeline.subtitles_changed.connect(self._schedule_sync)
         self.timeline.status_text.connect(self.status_text)
         self.timeline.import_requested.connect(self.import_requested)
-        self.timeline.model.rowsInserted.connect(self.sync_preview_subs)
-        self.timeline.model.rowsRemoved.connect(self.sync_preview_subs)
-        self.timeline.model.modelReset.connect(self.sync_preview_subs)
 
         self.timeline.act_export.triggered.connect(self.export_requested)
 
@@ -140,8 +143,9 @@ class WorkspaceWidget(QWidget):
         )
 
         self.preview.waveform.subtitle_clicked.connect(self._on_waveform_click)
-        self.preview.player.position_changed.connect(self.timeline._on_player_pos)
+        # position_changed → timeline._on_player_pos è collegato da set_player()
         self.timeline.jkl_pressed.connect(self.preview.transport.set_jkl_key)
+        self.preview.transport.loop_toggled.connect(self.timeline.set_loop)
 
         self._hsplit.splitterMoved.connect(self._save_geometry)
         self._vsplit.splitterMoved.connect(self._save_geometry)
@@ -152,8 +156,13 @@ class WorkspaceWidget(QWidget):
         row = current.row() if current.isValid() else -1
         self.preview.set_selected_row(row)
 
+    def _schedule_sync(self, *_):
+        """Raggruppa le sincronizzazioni O(N) della preview (debounce)."""
+        self._sync_timer.start()
+
     def sync_preview_subs(self, *_):
-        """Ricopia i sottotitoli correnti su waveform e overlay video."""
+        """Ricopia subito i sottotitoli correnti su waveform e overlay video."""
+        self._sync_timer.stop()
         subs = self.timeline.model.subtitles()
         severity = [
             self.timeline.model.row_severity(r)
@@ -208,8 +217,8 @@ class WorkspaceWidget(QWidget):
 
     def _restore_geometry(self):
         s = QSettings("VideoSRT", "v2")
-        h = s.value(_SETTINGS_HSPLIT)
-        v = s.value(_SETTINGS_VSPLIT)
+        h = read_list(s, _SETTINGS_HSPLIT)
+        v = read_list(s, _SETTINGS_VSPLIT)
         try:
             if h:
                 self._hsplit.setSizes([int(x) for x in h])

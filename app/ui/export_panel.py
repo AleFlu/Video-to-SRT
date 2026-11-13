@@ -9,14 +9,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
     QLineEdit, QFileDialog, QMessageBox, QComboBox
 )
 
 import platform_support
-from core.srt_io import write_srt, write_vtt, write_txt, write_ass, default_output_for, unique_output_path
+from core.srt_io import (
+    write_srt, write_vtt, write_txt, write_ass, default_output_for, unique_output_path,
+)
 from core.v2srt_io import save_project
 
 
@@ -61,6 +63,7 @@ class ExportPanel(QWidget):
         fl.addWidget(self._section("Formato"))
 
         self.fmt_combo = QComboBox()
+        self.fmt_combo.setAccessibleName("Formato di esportazione")
         for label, ext, _ in _FORMATS:
             self.fmt_combo.addItem(label, ext)
         self.fmt_combo.currentIndexChanged.connect(self._on_format_changed)
@@ -91,6 +94,8 @@ class ExportPanel(QWidget):
         row = QHBoxLayout()
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Il file verrà salvato qui…")
+        self.path_edit.setAccessibleName("Percorso del file da salvare")
+        self.path_edit.textEdited.connect(self._on_path_edited)
         browse = QPushButton("Sfoglia…")
         browse.clicked.connect(self._browse)
         row.addWidget(self.path_edit, 1)
@@ -100,7 +105,8 @@ class ExportPanel(QWidget):
 
         # ---- Bottone salva ----
         btn_row = QHBoxLayout()
-        self.save_btn = QPushButton("↑  Salva")
+        self.save_btn = QPushButton("Salva")
+        self.save_btn.setDefault(True)
         self.save_btn.setObjectName("primary")
         self.save_btn.setMinimumHeight(40)
         self.save_btn.clicked.connect(self._save)
@@ -120,6 +126,7 @@ class ExportPanel(QWidget):
         rl.addWidget(self.result_lbl)
         self.result_detail = QLabel("")
         self.result_detail.setObjectName("muted")
+        self.result_detail.setWordWrap(True)
         rl.addWidget(self.result_detail)
 
         open_row = QHBoxLayout()
@@ -130,6 +137,10 @@ class ExportPanel(QWidget):
         rl.addLayout(open_row)
         outer.addWidget(self.result_card)
         outer.addStretch(1)
+
+        # Percorso proposto automaticamente vs scelto dall'utente (per questo progetto)
+        self._path_is_auto = True
+        self._path_source = None
 
     # ---- Helpers UI ----
 
@@ -159,12 +170,25 @@ class ExportPanel(QWidget):
 
     # ---- API pubblica ----
 
+    def _on_path_edited(self, _text: str):
+        self._path_is_auto = False
+
     def refresh_from_project(self):
+        """
+        Allinea il pannello al progetto corrente. Il percorso viene ricalcolato
+        dal sorgente ogni volta che il progetto (sorgente) cambia, o se non è stato
+        scelto dall'utente: mai un percorso rimasto da un file precedente.
+        """
         proj = self._get_project()
-        if proj and proj.source_path and not self.path_edit.text().strip():
-            base = default_output_for(proj.source_path)
-            ext = self._current_ext()
-            self.path_edit.setText(str(Path(base).with_suffix(ext)))
+        source = proj.source_path if proj else ""
+        if source != self._path_source or self._path_is_auto:
+            self._path_source = source
+            self._path_is_auto = True
+            if source:
+                base = default_output_for(source)
+                self.path_edit.setText(str(Path(base).with_suffix(self._current_ext())))
+            else:
+                self.path_edit.clear()
         self.save_btn.setEnabled(bool(proj and proj.subtitles))
         self.result_card.setVisible(False)
 
@@ -183,6 +207,7 @@ class ExportPanel(QWidget):
             if not path.lower().endswith(ext):
                 path += ext
             self.path_edit.setText(path)
+            self._path_is_auto = False
 
     # ---- Salvataggio ----
 
@@ -207,7 +232,10 @@ class ExportPanel(QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
-        path = unique_output_path(path)
+        if os.path.exists(path):
+            path = self._resolve_existing(path)
+            if not path:
+                return
 
         try:
             self._write(proj, path, ext)
@@ -217,6 +245,25 @@ class ExportPanel(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Errore salvataggio",
                                  f"Impossibile salvare il file:\n{e}")
+
+    def _resolve_existing(self, path: str) -> str:
+        """Il file esiste già: chiede se sovrascriverlo o salvare con un nuovo nome."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("File già esistente")
+        box.setText(f"«{Path(path).name}» esiste già.")
+        box.setInformativeText("Vuoi sostituirlo o salvare una copia con un nuovo nome?")
+        overwrite = box.addButton("Sostituisci", QMessageBox.DestructiveRole)
+        copy = box.addButton("Salva con nuovo nome", QMessageBox.AcceptRole)
+        box.addButton("Annulla", QMessageBox.RejectRole)
+        box.setDefaultButton(copy)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is overwrite:
+            return path
+        if clicked is copy:
+            return unique_output_path(path)
+        return ""
 
     def _write(self, proj, path: str, ext: str):
         subs = proj.subtitles
@@ -237,7 +284,7 @@ class ExportPanel(QWidget):
 
     def _show_result(self, path: str):
         self.result_card.setVisible(True)
-        self.result_lbl.setText(f"✅  Salvato: {Path(path).name}")
+        self.result_lbl.setText(f"Salvato: {Path(path).name}")
         try:
             size = os.path.getsize(path)
             size_str = f"{size/1024:.1f} KB" if size < 1024**2 else f"{size/1024**2:.2f} MB"

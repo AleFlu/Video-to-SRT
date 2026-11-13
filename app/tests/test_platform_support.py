@@ -6,7 +6,6 @@ import ast
 import subprocess
 from pathlib import Path
 
-import pytest
 
 import platform_support as ps
 

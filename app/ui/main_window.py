@@ -34,12 +34,12 @@ from PySide6.QtWidgets import (
 import platform_support
 
 from core.constants import SUPPORTED_ALL_EXTS, FILE_FILTER_OPEN_ANY
-from ui.project_widget import ProjectWidget
+from ui.project_widget import ProjectWidget, autosave_in_use
 from ui.project_tab_bar import ProjectTabBar
 from ui import theme
+from ui.prefs import read_list, RECENT_KEY
 
-_MAX_RECENT      = 10
-_SETTINGS_RECENT = "recent_files"
+_SETTINGS_RECENT = RECENT_KEY
 _SETTINGS_GEOM   = "mainwindow/geometry"
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,8 @@ class MainWindow(QMainWindow):
     def __init__(self, ffmpeg_ok: bool, model_ok: bool):
         super().__init__()
         self.setWindowTitle("Video → SRT")
-        self.resize(1440, 900)
         self.setMinimumSize(900, 600)
+        self._fit_to_screen(1440, 900)
 
         self._ffmpeg_ok = ffmpeg_ok
         self._model_ok  = model_ok
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
         pw.status_text.connect(self._on_project_status)
 
         # Aggiunge tab e seleziona
-        tab_idx = self.proj_tab_bar.add_tab(f"Progetto {n}")
+        self.proj_tab_bar.add_tab(f"Progetto {n}")
         # add_tab già chiama select_tab che emette tab_selected → _on_tab_selected
         # ma i segnali del progetto non sono ancora connessi al momento giusto,
         # quindi aggiorniamo manualmente il menu
@@ -359,9 +359,7 @@ class MainWindow(QMainWindow):
     # scorciatoia (Ctrl+Shift+L) e applica lo stesso cambio.
 
     def _toggle_theme(self):
-        new = "light" if theme.get_theme() == "dark" else "dark"
-        theme.apply_theme(QApplication.instance(), new)
-        QSettings("VideoSRT", "v2").setValue("theme", new)
+        theme.toggle_theme(QApplication.instance())
 
     def _refresh_theme_ui(self):
         """Aggiorna l'etichetta della voce di menu in base al tema corrente."""
@@ -424,7 +422,7 @@ class MainWindow(QMainWindow):
     def _populate_recent_menu(self):
         self._menu_recent.clear()
         s = QSettings("VideoSRT", "v2")
-        recent: list[str] = list(s.value(_SETTINGS_RECENT) or [])
+        recent: list[str] = [str(p) for p in read_list(s, _SETTINGS_RECENT)]
         # Esclude i file nel frattempo cancellati o spostati
         existing = [p for p in recent if Path(p).exists()]
         if existing != recent:
@@ -461,8 +459,10 @@ class MainWindow(QMainWindow):
         All'avvio, cerca file autosave_*.v2srt nella dir cache.
         Per ognuno chiede se ripristinarlo (uno alla volta).
         """
+        # Gli autosave di un'altra istanza ancora aperta non si toccano
         autosaves = sorted(
             f for d in self._autosave_dirs() for f in d.glob("autosave_*.v2srt")
+            if not autosave_in_use(f)
         )
         if not autosaves:
             return
@@ -516,10 +516,22 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Video → SRT",
             "Video → SRT v2\n\n"
-            "Trascrizione automatica italiana con faster-whisper + large-v3.\n"
-            "Editor professionale multi-progetto: undo/redo, find & replace, diagnostica CPS/overlap.\n"
-            "Esporta in SRT, VTT, TXT, ASS, V2SRT.",
+            "Trascrizione automatica in locale con faster-whisper "
+            "(modelli Whisper selezionabili nella Home).\n"
+            "Editor multi-progetto: annulla/ripeti, trova e sostituisci, "
+            "diagnostica CPS e sovrapposizioni.\n"
+            "Esporta in SRT, VTT, TXT, ASS e progetto .v2srt.",
         )
+
+    def _fit_to_screen(self, width: int, height: int):
+        """Dimensione iniziale limitata all'area disponibile dello schermo."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = min(width, int(avail.width() * 0.95))
+            height = min(height, int(avail.height() * 0.92))
+            self.setMinimumSize(min(900, width), min(600, height))
+        self.resize(width, height)
 
     def _restore_geometry(self):
         geom = QSettings("VideoSRT", "v2").value(_SETTINGS_GEOM)

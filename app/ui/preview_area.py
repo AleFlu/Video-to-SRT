@@ -18,12 +18,13 @@ Layout:
 """
 
 from __future__ import annotations
+import bisect
 import logging
 from pathlib import Path
 from typing import List
 
-from PySide6.QtCore import Qt, Signal, QRectF, QSizeF
-from PySide6.QtGui import QFont, QPainter, QColor, QFontMetrics, QBrush, QPen
+from PySide6.QtCore import Qt, QSizeF
+from PySide6.QtGui import QFont, QPainter, QFontMetrics, QBrush, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QSizePolicy, QStackedWidget, QGraphicsView, QGraphicsScene,
@@ -35,6 +36,7 @@ from core.constants import SUPPORTED_VIDEO_EXTS
 from ui.waveform_widget import WaveformWidget
 from ui.transport_bar import TransportBar
 from ui import theme
+from ui.widgets import ElidedLabel
 import platform_support
 
 logger = logging.getLogger(__name__)
@@ -51,8 +53,6 @@ def _is_video(path: str) -> bool:
 class PreviewArea(QWidget):
     """Zona preview: video o waveform + transport bar."""
 
-    seek_requested = Signal(int)   # ms
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -61,6 +61,9 @@ class PreviewArea(QWidget):
 
         # Sottotitoli correnti per l'overlay video
         self._overlay_subs: List[Subtitle] = []
+        self._overlay_index: list = []    # [(start, end, testo)] ordinati per start
+        self._overlay_starts: list = []
+        self._media_path: str = ""
         self._subtitle_overlay = None   # impostato da _build_video_widget
         self._video_player_view: _VideoPlayerView | None = None   # idem
 
@@ -70,9 +73,9 @@ class PreviewArea(QWidget):
 
         # ── Timecode bar ───────────────────────────────────────────────────────
         self._tc_bar = QWidget()
-        self._tc_bar.setFixedHeight(34)
+        self._tc_bar.setMinimumHeight(34)
         tc_layout = QHBoxLayout(self._tc_bar)
-        tc_layout.setContentsMargins(16, 0, 16, 0)
+        tc_layout.setContentsMargins(16, 4, 16, 4)
         tc_layout.setSpacing(14)
 
         self.timecode_lbl = QLabel("00:00.000")
@@ -86,8 +89,9 @@ class PreviewArea(QWidget):
         tc_layout.addWidget(self.duration_lbl)
         tc_layout.addStretch(1)
 
-        self.file_lbl = QLabel("")
-        tc_layout.addWidget(self.file_lbl)
+        self.file_lbl = ElidedLabel("")
+        self.file_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        tc_layout.addWidget(self.file_lbl, 1)
 
         layout.addWidget(self._tc_bar)
 
@@ -132,7 +136,8 @@ class PreviewArea(QWidget):
             lambda: self.waveform.set_duration(self.player.duration())
         )
         self.waveform.seek_requested.connect(self.player.seek)
-        self.waveform.seek_requested.connect(self.seek_requested)
+        # Errori di caricamento/decodifica: mai uno schermo nero muto
+        self.player.error_occurred.connect(self._on_player_error)
 
         # Aggiorna overlay sottotitoli ad ogni tick player
         self.player.position_changed.connect(self._update_subtitle_overlay)
@@ -153,10 +158,28 @@ class PreviewArea(QWidget):
             f"color: {c('muted')}; font-size: 12px; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
-        self.file_lbl.setStyleSheet(
-            f"color: {c('muted')}; font-size: 11px; background: transparent;"
-        )
+        self._style_file_lbl()
         self._sep.setStyleSheet(f"background-color: {c('line')}; max-height: 1px;")
+
+    def _style_file_lbl(self, error: bool = False):
+        self.file_lbl.setStyleSheet(
+            f"color: {theme.c('err' if error else 'muted')}; font-size: 11px;"
+            " background: transparent;"
+        )
+
+    def _on_player_error(self, msg: str):
+        """Mostra l'errore del player e ripiega sulla waveform (con messaggio)."""
+        logger.warning("Errore player: %s", msg)
+        text = f"Impossibile riprodurre il file: {msg}" if msg else "Impossibile riprodurre il file"
+        self.file_lbl.setText(text)
+        self.file_lbl.set_full_tooltip(f"{text}\n{self._media_path}")
+        self._style_file_lbl(error=True)
+        if self._preview_stack.currentIndex() == _PREVIEW_VIDEO:
+            self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
+            self.waveform.show_message(
+                "Anteprima video non disponibile per questo formato.\n"
+                "I sottotitoli restano modificabili."
+            )
 
     # ── Build video widget ─────────────────────────────────────────────────────
 
@@ -172,7 +195,7 @@ class PreviewArea(QWidget):
         Il QMediaPlayer viene collegato a QGraphicsVideoItem come output.
         """
         try:
-            from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+            from PySide6.QtMultimediaWidgets import QGraphicsVideoItem  # noqa: F401 (verifica disponibilità)
 
             view = _VideoPlayerView()
             view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -188,7 +211,9 @@ class PreviewArea(QWidget):
             self._qvideo_widget = None
             self._subtitle_overlay = None
             self._video_player_view = None
-            placeholder = QLabel("Video preview non disponibile\n(PySide6-QtMultimediaWidgets non installato)")
+            placeholder = QLabel(
+                "Anteprima video non disponibile\n(modulo PySide6 QtMultimediaWidgets assente)"
+            )
             placeholder.setAlignment(Qt.AlignCenter)
             placeholder.setStyleSheet(
                 f"color: {theme.c('muted')}; background: {theme.c('surface')};"
@@ -214,9 +239,13 @@ class PreviewArea(QWidget):
         Video → mostra QVideoWidget; audio → mostra WaveformWidget.
         """
         self.waveform.reset()
-        self._overlay_subs = []
+        self._set_overlay_subs([])
         if self._subtitle_overlay is not None:
             self._subtitle_overlay.set_text("")
+        self._media_path = file_path
+        self._style_file_lbl()
+        self.file_lbl.setText(Path(file_path).name)
+        self.file_lbl.set_full_tooltip(file_path)
         self.player.load(file_path)
         if platform_support.IS_WIN and self._video_player_view is not None:
             # Su Windows l'uscita video va ricollegata a ogni caricamento
@@ -224,7 +253,6 @@ class PreviewArea(QWidget):
                 self.player._player.setVideoOutput(self._video_player_view.video_item())
             except Exception:  # noqa: BLE001
                 logger.warning("Ricollegamento uscita video fallito", exc_info=True)
-        self.file_lbl.setText(Path(file_path).name)
 
         if _is_video(file_path) and self._qvideo_widget is not None:
             self._preview_stack.setCurrentIndex(_PREVIEW_VIDEO)
@@ -236,19 +264,23 @@ class PreviewArea(QWidget):
     def clear_media(self):
         """Nessun media associato al progetto: svuota player, waveform e overlay."""
         self.waveform.reset()
-        self._overlay_subs = []
+        self._set_overlay_subs([])
         if self._subtitle_overlay is not None:
             self._subtitle_overlay.set_text("")
         self.player.unload()
+        self._media_path = ""
         self.file_lbl.setText("")
+        self.file_lbl.set_full_tooltip("")
+        self._style_file_lbl()
         self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
 
-    # Alias mantenuto per compatibilità con codice esistente
-    def load_audio(self, file_path: str):
-        self.load_media(file_path)
+    def _set_overlay_subs(self, subs: List[Subtitle]):
+        self._overlay_subs = list(subs)
+        self._overlay_index = sorted((s.start, s.end, s.text.strip()) for s in self._overlay_subs)
+        self._overlay_starts = [e[0] for e in self._overlay_index]
 
     def set_subtitles(self, subs: List[Subtitle], severity: List[str]):
-        self._overlay_subs = list(subs)
+        self._set_overlay_subs(subs)
         self.waveform.set_subtitles(subs, severity)
         # Aggiorna subito l'overlay alla posizione corrente
         self._update_subtitle_overlay(self.player.position())
@@ -276,9 +308,11 @@ class PreviewArea(QWidget):
 
         pos_s = ms / 1000.0
         text = ""
-        for sub in self._overlay_subs:
-            if sub.start <= pos_s <= sub.end:
-                text = sub.text.strip()
+        i = bisect.bisect_right(self._overlay_starts, pos_s) - 1
+        for j in range(i, max(-1, i - 3), -1):   # O(log N); tollera sovrapposizioni
+            start, end, txt = self._overlay_index[j]
+            if start <= pos_s <= end:
+                text = txt
                 break
 
         self._subtitle_overlay.set_text(text)
@@ -311,13 +345,17 @@ class _VideoPlayerView(QGraphicsView):
         self._vitem = QGraphicsVideoItem()
         self._scene.addItem(self._vitem)
 
-        # Stile view: niente bordi, sfondo nero
-        self.setStyleSheet("background: #0a0a0d; border: none;")
+        # Stile view: niente bordi, sfondo "video" (nero in entrambi i temi)
+        self._apply_palette()
+        theme.MANAGER.theme_changed.connect(self._apply_palette)
         self.setFrameShape(QGraphicsView.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHint(QPainter.Antialiasing)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def _apply_palette(self, _name=None):
+        self.setStyleSheet(f"background: {theme.c('video_bg')}; border: none;")
 
     def video_item(self):
         """Restituisce il QGraphicsVideoItem da passare a setVideoOutput()."""
@@ -395,11 +433,11 @@ class _VideoPlayerView(QGraphicsView):
         box_x = (vp_w - box_w) // 2
         box_y = vp_h - box_h - 14   # 14px dal fondo
 
-        p.setBrush(QBrush(QColor(0, 0, 0, 178)))
+        p.setBrush(QBrush(theme.qcolor("overlay_bg")))
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(box_x, box_y, box_w, box_h, 5, 5)
 
-        p.setPen(QPen(QColor(255, 255, 255)))
+        p.setPen(QPen(theme.qcolor("overlay_fg")))
         for i, line in enumerate(lines):
             lw = fm.horizontalAdvance(line)
             lx = box_x + (box_w - lw) // 2

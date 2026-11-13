@@ -6,13 +6,15 @@ Racchiude TUTTA la logica che prima viveva in MainWindow per un progetto:
   - TranscriptionTab (Home / Progress / Result)
   - EditorTab (Placeholder / Workspace)
   - Stato: _segments_raw, _source_path, project, worker inline
-  - Autosave su file dedicato (<app_cache_dir>/autosave_<uid>.v2srt)
+  - Autosave su file dedicato (<app_cache_dir>/autosave_<pid>_<n>.v2srt): il pid
+    del processo nel nome evita che due istanze dell'app si sovrascrivano o si
+    cancellino a vicenda i file; un QLockFile per processo dice se il proprietario
+    è ancora vivo (vedi autosave_in_use).
 
 API verso MainWindow:
   - title_changed(str)        → MainWindow aggiorna la tab del progetto
   - modified_changed(bool)    → MainWindow aggiorna il badge ● nella ProjectTabBar
   - status_text(str)          → MainWindow aggiorna la status bar
-  - request_close()           → l'utente vuole chiudere questo progetto
 
 Il ProjectWidget NON conosce la ProjectTabBar né la MainWindow; comunica
 solo tramite segnali.
@@ -21,9 +23,11 @@ solo tramite segnali.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QTimer, Signal
+from PySide6.QtCore import Qt, QLockFile, QSettings, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QStackedWidget, QMessageBox,
 )
@@ -38,8 +42,59 @@ from ui.tab_bar import TabBar
 from ui.editor_tab import EditorTab
 from ui.export_panel import ExportPanel
 from ui.export_tab import ExportTab
+from ui.prefs import add_recent
 
 logger = logging.getLogger(__name__)
+
+# ── Autosave per processo ──────────────────────────────────────────────────────
+
+_AUTOSAVE_RE = re.compile(r"^autosave_(?:(\d+)_)?(\d+)\.v2srt$")
+_session_lock: QLockFile | None = None
+
+
+def _lock_path(pid: int) -> Path:
+    return platform_support.app_cache_dir() / f"session_{pid}.lock"
+
+
+def _ensure_session_lock() -> None:
+    """Crea (una volta) il lock di sessione di questo processo nella cartella cache."""
+    global _session_lock
+    path = _lock_path(os.getpid())
+    if _session_lock is not None and Path(_session_lock.fileName()) == path:
+        return
+    lock = QLockFile(str(path))
+    lock.setStaleLockTime(0)   # un processo vivo non diventa mai "stale" per età
+    if lock.tryLock(0):
+        _session_lock = lock
+    else:
+        logger.warning("Lock di sessione non acquisito: %s", path)
+
+
+def autosave_name(project_number: int) -> str:
+    return f"autosave_{os.getpid()}_{project_number}.v2srt"
+
+
+def autosave_in_use(path: Path) -> bool:
+    """
+    True se l'autosave appartiene a un'altra istanza dell'app ancora in esecuzione
+    (da non ripristinare né cancellare). I nomi storici senza pid sono liberi.
+    """
+    m = _AUTOSAVE_RE.match(Path(path).name)
+    if not m or not m.group(1):
+        return False
+    pid = int(m.group(1))
+    if pid == os.getpid():
+        return True
+    lock_file = path.parent / f"session_{pid}.lock"
+    if not lock_file.exists():
+        return False
+    probe = QLockFile(str(lock_file))
+    probe.setStaleLockTime(0)
+    if probe.tryLock(0):
+        # il proprietario non c'è più (QLockFile verifica il pid): lock orfano
+        probe.unlock()
+        return False
+    return True
 
 # Sotto-stati TranscriptionTab
 _TRANS_DROP     = 0
@@ -62,14 +117,11 @@ class ProjectWidget(QWidget):
     title_changed    = Signal(str)    # titolo suggerito per la tab
     modified_changed = Signal(bool)   # True = badge ● sulla tab progetto
     status_text      = Signal(str)    # messaggio per la status bar
-    request_close    = Signal()       # utente vuole chiudere la tab
 
     def __init__(self, project_number: int, ffmpeg_ok: bool, model_ok: bool,
                  parent=None):
         super().__init__(parent)
 
-        # Slot numerico per autosave (stabile per tutta la vita del widget)
-        self._uid = str(project_number)
         self._project_number = project_number
         self._title = f"Progetto {project_number}"
 
@@ -82,8 +134,10 @@ class ProjectWidget(QWidget):
         self.project = SubtitleProject()
         self._editor_loaded: bool = False
 
-        # Export panel (floating, uno per progetto)
-        self._export_panel = ExportPanel(get_project_callable=lambda: self.project)
+        # Export panel (finestra di dialogo figlia del progetto: chiusa con il progetto)
+        self._export_panel = ExportPanel(get_project_callable=self._current_project,
+                                         parent=self)
+        self._export_panel.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
         self._export_panel.exported.connect(self._on_exported)
 
         # ── UI ───────────────────────────────────────────────────────────────
@@ -140,6 +194,7 @@ class ProjectWidget(QWidget):
         self.tab_bar.tab_changed.connect(self._on_tab_changed)
 
         self.home.start_requested.connect(self._on_start_requested)
+        self.home.open_requested.connect(self.open_path)
 
         self.progress.transcription_done.connect(self._on_transcription_done)
         self.progress.transcription_cancelled.connect(self._go_drop)
@@ -239,7 +294,6 @@ class ProjectWidget(QWidget):
         self._go_result()
         self._unlock_tabs()
         self._refresh_editor_badge()
-        self._refresh_export_badge()
 
     def _on_transcription_failed(self, err: str):
         self.status_text.emit(f"Errore: {err}")
@@ -304,7 +358,6 @@ class ProjectWidget(QWidget):
         self.tab_bar.set_current(_TAB_EDITOR)
         self._main_stack.setCurrentIndex(_TAB_EDITOR)
         self._refresh_editor_badge()
-        self._refresh_export_badge()
 
     def _apply_loaded_project(self, project: SubtitleProject):
         """
@@ -342,7 +395,6 @@ class ProjectWidget(QWidget):
         self.tab_bar.set_current(_TAB_EDITOR)
         self._main_stack.setCurrentIndex(_TAB_EDITOR)
         self._refresh_editor_badge()
-        self._refresh_export_badge()
 
     # ── Apertura file generica ─────────────────────────────────────────────────
 
@@ -382,9 +434,10 @@ class ProjectWidget(QWidget):
             self.project.subtitles = subs
 
         self._export_panel.refresh_from_project()
-        self._export_panel.setWindowTitle("Esporta SRT")
-        self._export_panel.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
-        self._export_panel.resize(500, 280)
+        self._export_panel.setWindowTitle("Esporta sottotitoli")
+        self._export_panel.adjustSize()
+        self._export_panel.resize(max(520, self._export_panel.width()),
+                                  self._export_panel.sizeHint().height())
         self._export_panel.show()
         self._export_panel.raise_()
         self._export_panel.activateWindow()
@@ -555,7 +608,6 @@ class ProjectWidget(QWidget):
         self.modified_changed.emit(mod)
         self._refresh_editor_badge()
         self._refresh_modified_badge()
-        self._refresh_export_badge()
         # Aggiorna export tab in tempo reale se già visibile
         if self.tab_bar.current() == _TAB_EXPORT:
             self._refresh_export_tab()
@@ -573,17 +625,6 @@ class ProjectWidget(QWidget):
     def _refresh_editor_badge(self):
         has_subs = bool(self.workspace.get_subtitles())
         self.tab_bar.set_editor_badge(has_subs)
-
-    def _refresh_export_badge(self):
-        """Aggiorna il badge numerico sulla tab Esportazione."""
-        editor_subs = self.workspace.get_subtitles()
-        if editor_subs:
-            count = len(editor_subs)
-        elif self._segments_raw:
-            count = len(self._segments_raw)
-        else:
-            count = 0
-        self.tab_bar.set_export_badge(count)
 
     def _refresh_modified_badge(self):
         if not self._editor_loaded:
@@ -691,20 +732,15 @@ class ProjectWidget(QWidget):
 
     @staticmethod
     def _add_to_recent(path: str):
-        _MAX_RECENT = 10
-        _KEY = "recent_files"
-        s = QSettings("VideoSRT", "v2")
-        recent: list[str] = list(s.value(_KEY) or [])
-        if path in recent:
-            recent.remove(path)
-        recent.insert(0, path)
-        recent = recent[:_MAX_RECENT]
-        s.setValue(_KEY, recent)
+        add_recent(QSettings("VideoSRT", "v2"), path)
 
     # ── Autosave ──────────────────────────────────────────────────────────────
 
+    def _current_project(self) -> SubtitleProject:
+        return self.project
+
     def autosave_path(self) -> Path:
-        return platform_support.app_cache_dir() / f"autosave_{self._uid}.v2srt"
+        return platform_support.app_cache_dir() / autosave_name(self._project_number)
 
     def _autosave(self):
         """Salva una copia di sicurezza solo se ci sono modifiche non salvate."""
@@ -712,6 +748,7 @@ class ProjectWidget(QWidget):
         if not subs or not self.workspace.is_modified():
             return
         try:
+            _ensure_session_lock()
             self.project.subtitles = list(subs)
             save_project(self.project, str(self.autosave_path()))
         except Exception:
@@ -749,7 +786,6 @@ class ProjectWidget(QWidget):
         self.tab_bar.set_current(_TAB_EDITOR)
         self._main_stack.setCurrentIndex(_TAB_EDITOR)
         self._refresh_editor_badge()
-        self._refresh_export_badge()
         self.modified_changed.emit(True)
         return True
 

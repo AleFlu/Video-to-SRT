@@ -129,7 +129,7 @@ COL_DUR   = 3
 COL_CPS   = 4
 COL_TEXT  = 5
 
-COLUMN_HEADERS = ["#", "Start", "End", "Durata", "CPS", "Testo"]
+COLUMN_HEADERS = ["#", "Inizio", "Fine", "Durata", "CPS", "Testo"]
 
 
 class SubtitleTableModel(QAbstractTableModel):
@@ -222,7 +222,7 @@ class SubtitleTableModel(QAbstractTableModel):
 
     def _issue_message(self, code: str, sub: Subtitle) -> str:
         if code == ISSUE_END_BEFORE_START:
-            return "End precede o coincide con Start"
+            return "La fine precede o coincide con l'inizio"
         if code == ISSUE_TOO_SHORT:
             return (f"Durata troppo breve ({sub.duration:.2f}s < "
                     f"{MIN_SUBTITLE_DURATION}s)")
@@ -342,7 +342,7 @@ class SubtitleTableModel(QAbstractTableModel):
         if role == Qt.ToolTipRole:
             issues = self.row_issues(row)
             if issues:
-                return "⚠️  " + "\n⚠️  ".join(issues)
+                return "\n".join(f"• {i}" for i in issues)
 
         return None
 

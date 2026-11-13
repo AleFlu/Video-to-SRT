@@ -31,7 +31,7 @@ app/                          # tutta l'applicazione
 │   ├── theme.py              # token colore, stylesheet, MANAGER (tema chiaro/scuro)
 │   ├── main_window.py, workspace.py, project_widget.py
 │   ├── project_tab_bar.py, tab_bar.py
-│   ├── home_widget.py, source_panel.py, progress_widget.py, result_widget.py
+│   ├── home_widget.py, progress_widget.py, result_widget.py, widgets.py, prefs.py
 │   ├── editor_tab.py, subtitle_timeline.py, inspector_widget.py, find_replace_dialog.py
 │   ├── preview_area.py, transport_bar.py, waveform_widget.py
 │   └── export_tab.py, export_panel.py, placeholder_widget.py

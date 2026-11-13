@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 
@@ -103,7 +102,7 @@ def test_severity_from_codes():
 
 def test_row_issues_messages_unchanged():
     m = _model(Subtitle(5, 4, ""))
-    assert m.row_issues(0) == ["End precede o coincide con Start", "Testo vuoto"]
+    assert m.row_issues(0) == ["La fine precede o coincide con l'inizio", "Testo vuoto"]
     m = _model(Subtitle(0, 0.3, "ciao"))
     assert m.row_issues(0) == ["Durata troppo breve (0.30s < 0.5s)"]
     m = _model(Subtitle(0, 1, "x" * 30))

@@ -13,6 +13,7 @@ Segnali pubblici:
     state_changed(state: str)   — "playing" | "paused" | "stopped"
     source_ready()              — media caricato e pronto
     error_occurred(msg: str)    — errore di caricamento/riproduzione
+    rate_changed(rate: float)   — velocità di riproduzione cambiata
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class AudioPlayer(QObject):
     state_changed    = Signal(str)   # "playing" | "paused" | "stopped"
     source_ready     = Signal()
     error_occurred   = Signal(str)
+    rate_changed     = Signal(float)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -138,7 +140,11 @@ class AudioPlayer(QObject):
 
     def set_rate(self, rate: float) -> None:
         """Velocità di riproduzione (es. 0.5, 1.0, 1.5, 2.0)."""
-        self._player.setPlaybackRate(max(0.25, min(4.0, rate)))
+        rate = max(0.25, min(4.0, rate))
+        if abs(rate - self._player.playbackRate()) < 1e-6:
+            return
+        self._player.setPlaybackRate(rate)
+        self.rate_changed.emit(rate)
 
     def rate(self) -> float:
         return self._player.playbackRate()

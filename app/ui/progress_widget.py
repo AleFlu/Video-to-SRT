@@ -15,15 +15,17 @@ import warnings
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QThread, QCoreApplication
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QPainter, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QProgressBar, QPlainTextEdit,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QPushButton, QProgressBar, QPlainTextEdit, QMessageBox,
 )
 
 from core.transcription_worker import TranscriptionWorker
 from ui.theme import AuroraMixin
+from ui.widgets import ElidedLabel
 from ui import theme
+import platform_support
 
 # Thread sganciati da widget distrutti (vedi detach_and_stop): le tuple (thread,
 # worker) tengono vivi i wrapper Python finché il thread non termina.
@@ -72,7 +74,7 @@ class _Spinner(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        from PySide6.QtGui import QPen, QColor, QConicalGradient
+        from PySide6.QtGui import QPen, QColor
         from PySide6.QtCore import QRectF
         c = theme.c
         p = QPainter(self)
@@ -132,7 +134,7 @@ class ProgressWidget(AuroraMixin, QWidget):
 
         row_file = QHBoxLayout()
         row_file.addWidget(self._muted("File"))
-        self.file_lbl = QLabel("—")
+        self.file_lbl = ElidedLabel("—")
         self.file_lbl.setStyleSheet("font-weight: 600;")
         row_file.addWidget(self.file_lbl, 1)
         sl.addLayout(row_file)
@@ -141,6 +143,7 @@ class ProgressWidget(AuroraMixin, QWidget):
         row_cfg.addWidget(self._muted("Configurazione"))
         self.cfg_lbl = QLabel("—")
         self.cfg_lbl.setObjectName("muted")
+        self.cfg_lbl.setWordWrap(True)
         row_cfg.addWidget(self.cfg_lbl, 1)
         sl.addLayout(row_cfg)
 
@@ -157,6 +160,7 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("muted")
         self.status_lbl.setAlignment(Qt.AlignCenter)
+        self.status_lbl.setWordWrap(True)
         root.addWidget(self.status_lbl)
 
         # ---- Log ----
@@ -166,6 +170,7 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Il log apparirà qui…")
+        self.log.setAccessibleName("Log della trascrizione")
         root.addWidget(self.log, 1)
 
         self._apply_palette()
@@ -174,14 +179,30 @@ class ProgressWidget(AuroraMixin, QWidget):
 
         # ---- Bottone Stop ----
         btn_row = QHBoxLayout()
+        # Dopo un errore: copia del log e posizione del file di log completo
+        self.copy_log_btn = QPushButton("Copia log")
+        self.copy_log_btn.setObjectName("secondary")
+        self.copy_log_btn.setMinimumHeight(40)
+        self.copy_log_btn.setToolTip(
+            f"Copia il log negli appunti (log completo in {platform_support.app_cache_dir()})"
+        )
+        self.copy_log_btn.clicked.connect(self._copy_log)
+        self.copy_log_btn.setVisible(False)
+        btn_row.addWidget(self.copy_log_btn)
         btn_row.addStretch(1)
-        self.stop_btn = QPushButton("■  Stop")
+        self.stop_btn = QPushButton("■  Interrompi")
         self.stop_btn.setObjectName("danger")
         self.stop_btn.setMinimumHeight(40)
         self.stop_btn.setMinimumWidth(140)
-        self.stop_btn.clicked.connect(self._on_stop)
+        self.stop_btn.setToolTip("Interrompi la trascrizione  (Esc)")
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
         btn_row.addWidget(self.stop_btn)
         root.addLayout(btn_row)
+
+        # Esc = Interrompi (con conferma), solo quando questa schermata è visibile
+        sc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        sc.setContext(Qt.WidgetWithChildrenShortcut)
+        sc.activated.connect(self._on_escape)
 
     # ---- Helpers UI ----
 
@@ -209,18 +230,26 @@ class ProgressWidget(AuroraMixin, QWidget):
         self._spinner.show()
         self.title_lbl.setText("Trascrizione in corso…")
         self.file_lbl.setText(Path(source_path).name)
+        self.file_lbl.set_full_tooltip(source_path)
         parts = [
             f"Modello: {settings.get('model_size', '—')}",
-            f"VAD: {'on' if settings.get('vad_filter') else 'off'}",
-            f"Denoise: {'on' if settings.get('denoise') else 'off'}",
+            f"VAD: {'attivo' if settings.get('vad_filter') else 'disattivo'}",
+            f"Riduzione rumore: {'attiva' if settings.get('denoise') else 'disattiva'}",
             f"Beam: {settings.get('beam_size', 5)}",
         ]
         self.cfg_lbl.setText("  ·  ".join(parts))
         self.log.clear()
         self.progress.setValue(0)
         self.status_lbl.setText("")
+        self.copy_log_btn.setVisible(False)
         self.stop_btn.setEnabled(True)
-        self.stop_btn.setText("■  Stop")
+        self.stop_btn.setText("■  Interrompi")
+        self.stop_btn.setToolTip("Interrompi la trascrizione  (Esc)")
+        if self.stop_btn.objectName() != "danger":
+            # dopo un errore il bottone era diventato "primary" (torna alla home)
+            self.stop_btn.setObjectName("danger")
+            self.stop_btn.style().unpolish(self.stop_btn)
+            self.stop_btn.style().polish(self.stop_btn)
 
         # Avvia worker
         params = {"input_path": source_path, **settings}
@@ -309,7 +338,9 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.title_lbl.setText("Errore trascrizione")
         self.status_lbl.setText(f"Errore: {err}")
         self.log.appendPlainText(f"ERRORE: {err}")
-        self.stop_btn.setText("← Torna alla home")
+        self.copy_log_btn.setVisible(True)
+        self.stop_btn.setText("← Torna alla Home")
+        self.stop_btn.setToolTip("Torna alla schermata iniziale")
         self.stop_btn.setObjectName("primary")
         self.stop_btn.style().unpolish(self.stop_btn)
         self.stop_btn.style().polish(self.stop_btn)
@@ -322,6 +353,30 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.status_lbl.setText("Annullata")
         self.log.appendPlainText("--- Annullata ---")
         self.transcription_cancelled.emit()
+
+    def _on_stop_clicked(self):
+        """Click su Interrompi: chiede conferma (un click accidentale non perde il lavoro)."""
+        if self._worker and self._thread:
+            self._confirm_and_stop()
+        else:
+            self._on_stop()
+
+    def _copy_log(self):
+        QApplication.clipboard().setText(self.log.toPlainText())
+        self.status_lbl.setText("Log copiato negli appunti")
+
+    def _on_escape(self):
+        if self._worker and self._thread and self.stop_btn.isEnabled():
+            self._confirm_and_stop()
+
+    def _confirm_and_stop(self):
+        ans = QMessageBox.question(
+            self, "Interrompere la trascrizione?",
+            "La trascrizione in corso verrà annullata e il lavoro fatto finora andrà perso.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if ans == QMessageBox.Yes:
+            self._on_stop()
 
     def _on_stop(self):
         if self._worker and self._thread:

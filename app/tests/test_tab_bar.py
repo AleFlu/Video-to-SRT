@@ -68,14 +68,3 @@ def test_tab_bar_constants():
     assert _TAB_EDITOR == 1
     assert _TAB_EXPORT == 2
 
-def test_export_badge_hidden_by_default(app):
-    tb = TabBar()
-    assert tb._export_badge.isHidden()
-
-def test_export_badge_always_hidden(app):
-    # Il badge numerico è stato rimosso: set_export_badge non lo mostra mai
-    tb = TabBar()
-    tb.set_export_badge(42)
-    assert tb._export_badge.isHidden()
-    tb.set_export_badge(0)
-    assert tb._export_badge.isHidden()

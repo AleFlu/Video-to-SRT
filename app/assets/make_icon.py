@@ -19,13 +19,13 @@ Requisiti: PySide6 (già nel venv del progetto)
 """
 
 from __future__ import annotations
-import os
-import struct
 import subprocess
 import sys
-import tempfile
-import zlib
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QPixmap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import platform_support  # noqa: E402
@@ -44,7 +44,7 @@ def draw_icon(size: int) -> "QPixmap":
     from PySide6.QtCore import Qt, QRectF, QPointF
     from PySide6.QtGui import (
         QPixmap, QPainter, QLinearGradient, QColor,
-        QFont, QPen, QPainterPath, QBrush,
+        QFont, QPainterPath, QBrush,
     )
 
     pix = QPixmap(size, size)
@@ -197,7 +197,7 @@ def iconset_to_icns():
 def main():
     # Bootstrap QApplication (necessario per QPainter/QPixmap)
     from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication(sys.argv)
+    _app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
 
     print("🎨  Generazione icona Video → SRT...")
 
@@ -213,8 +213,8 @@ def main():
     ok = iconset_to_icns()
 
     if ok:
-        print(f"\n📦  Pronto per il build:")
-        print(f"    python build_mac.py")
+        print("\n📦  Pronto per il build:")
+        print("    python build_mac.py")
     else:
         print(f"\n📦  Usa {PNG_PATH} come icona alternativa.")
 

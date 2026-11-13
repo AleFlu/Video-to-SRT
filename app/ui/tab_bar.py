@@ -2,7 +2,7 @@
 tab_bar.py — TabBar custom con 3 tab: "Trascrizione" | "Editor [●]" | "Esportazione".
 
 All'avvio "Trascrizione" è attiva. Editor ed Esportazione restano visibili ma
-"bloccati" (lucchetto 🔒) finché non chiamato set_unlocked(True), cioè quando
+"bloccati" (non cliccabili) finché non chiamato set_unlocked(True), cioè quando
 ci sono sottotitoli disponibili (post-trascrizione o import).
 
 Tema chiaro/scuro: legge i colori da theme.c() e si ri-applica su theme_changed.
@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QSizePolicy
 
 from ui import theme
+import platform_support
 
 
 _TAB_TRANSCRIPTION = 0
@@ -33,11 +34,15 @@ class TabBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(46)
+        # Altezza dalle metriche del font (mai testo tagliato con font grandi)
+        bar_h = max(46, self.fontMetrics().height() + 26)
+        self.setFixedHeight(bar_h)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self._current = _TAB_TRANSCRIPTION
         self._unlocked = False
+        self.setObjectName("innerTabBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 0, 14, 0)
@@ -45,55 +50,48 @@ class TabBar(QWidget):
 
         # ── Tab Trascrizione ───────────────────────────────────────────────────
         self._btn_transcription = QPushButton("Trascrizione")
-        self._btn_transcription.setFixedHeight(46)
+        self._btn_transcription.setFixedHeight(bar_h)
         self._btn_transcription.setCursor(Qt.PointingHandCursor)
-        self._btn_transcription.clicked.connect(lambda: self.set_current(_TAB_TRANSCRIPTION))
+        self._btn_transcription.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
+        self._btn_transcription.clicked.connect(lambda: self._on_clicked(_TAB_TRANSCRIPTION))
         layout.addWidget(self._btn_transcription)
 
         # ── Tab Editor (con badge ● / lucchetto) ───────────────────────────────
         self._editor_container = QWidget()
-        self._editor_container.setFixedHeight(46)
+        self._editor_container.setFixedHeight(bar_h)
         self._editor_container.setStyleSheet("background: transparent;")
         ec_layout = QHBoxLayout(self._editor_container)
         ec_layout.setContentsMargins(0, 0, 0, 0)
         ec_layout.setSpacing(6)
 
         self._btn_editor = QPushButton("Editor")
-        self._btn_editor.setFixedHeight(46)
+        self._btn_editor.setFixedHeight(bar_h)
         self._btn_editor.setCursor(Qt.PointingHandCursor)
-        self._btn_editor.clicked.connect(lambda: self.set_current(_TAB_EDITOR))
+        self._btn_editor.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
+        self._btn_editor.clicked.connect(lambda: self._on_clicked(_TAB_EDITOR))
         ec_layout.addWidget(self._btn_editor)
 
         self._badge = QLabel("●")
+        self._badge.setToolTip("L'editor contiene sottotitoli")
         self._badge.setVisible(False)
         ec_layout.addWidget(self._badge)
-
-        # lucchetto rimosso (widget tenuto nascosto per compat con set_unlocked)
-        self._editor_lock = QLabel("")
-        self._editor_lock.setVisible(False)
-
-        # badge legacy nascosto (compat: alcuni test/codice lo referenziano)
-        self._export_badge = QLabel("")
-        self._export_badge.setVisible(False)
 
         layout.addWidget(self._editor_container)
 
         # ── Tab Esportazione ───────────────────────────────────────────────────
         self._export_container = QWidget()
-        self._export_container.setFixedHeight(46)
+        self._export_container.setFixedHeight(bar_h)
         self._export_container.setStyleSheet("background: transparent;")
         exp_layout = QHBoxLayout(self._export_container)
         exp_layout.setContentsMargins(0, 0, 8, 0)
         exp_layout.setSpacing(6)
 
         self._btn_export = QPushButton("Esportazione")
-        self._btn_export.setFixedHeight(46)
+        self._btn_export.setFixedHeight(bar_h)
         self._btn_export.setCursor(Qt.PointingHandCursor)
-        self._btn_export.clicked.connect(lambda: self.set_current(_TAB_EXPORT))
+        self._btn_export.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader
+        self._btn_export.clicked.connect(lambda: self._on_clicked(_TAB_EXPORT))
         exp_layout.addWidget(self._btn_export)
-
-        self._export_lock = QLabel("")
-        self._export_lock.setVisible(False)
 
         layout.addWidget(self._export_container)
 
@@ -114,24 +112,23 @@ class TabBar(QWidget):
     # ── Toggle tema ─────────────────────────────────────────────────────────
 
     def _toggle_theme(self):
-        from PySide6.QtCore import QSettings
-        from PySide6.QtWidgets import QApplication
-        new = "light" if theme.get_theme() == "dark" else "dark"
-        theme.apply_theme(QApplication.instance(), new)
-        QSettings("VideoSRT", "v2").setValue("theme", new)
+        theme.toggle_theme()
 
     def _refresh_theme_btn(self):
         c = theme.c
         is_dark = theme.get_theme() == "dark"
         self._theme_btn.setText("☾  Scuro" if is_dark else "☀  Chiaro")
-        self._theme_btn.setToolTip("Passa al tema chiaro" if is_dark else "Passa al tema scuro")
+        tip = "Passa al tema chiaro" if is_dark else "Passa al tema scuro"
+        self._theme_btn.setToolTip(f"{tip}  {platform_support.shortcut_label('Ctrl+Shift+L')}")
+        self._theme_btn.setAccessibleName(tip)
         self._theme_btn.setStyleSheet(
             "QPushButton {"
             f"  background: {c('card_2')}; color: {c('dim')};"
             f"  border: 1px solid {c('line')}; border-radius: 7px;"
-            "  font-size: 11.5px; padding: 0 11px; min-height: 28px;"
+            "  font-size: 11.5px; padding: 4px 11px; min-height: 20px;"
             "}"
             f"QPushButton:hover {{ color: {c('text')}; border-color: {c('line_2')}; }}"
+            + theme.focus_rule("QPushButton", 7)
         )
 
     # ── API pubblica ───────────────────────────────────────────────────────────
@@ -144,8 +141,6 @@ class TabBar(QWidget):
         if self._unlocked == unlocked:
             return
         self._unlocked = unlocked
-        self._editor_lock.setVisible(not unlocked)
-        self._export_lock.setVisible(not unlocked)
         self._btn_editor.setEnabled(unlocked)
         self._btn_export.setEnabled(unlocked)
         self._btn_editor.setCursor(Qt.PointingHandCursor if unlocked else Qt.ForbiddenCursor)
@@ -166,16 +161,21 @@ class TabBar(QWidget):
         self._refresh_styles()
         self.tab_changed.emit(index)
 
+    def _on_clicked(self, index: int):
+        self.set_current(index)
+        self._sync_checked()   # un click sulla tab attiva non deve "spegnerla"
+
+    def _sync_checked(self):
+        for i, btn in ((_TAB_TRANSCRIPTION, self._btn_transcription),
+                       (_TAB_EDITOR, self._btn_editor), (_TAB_EXPORT, self._btn_export)):
+            btn.setChecked(i == self._current)
+
     def current(self) -> int:
         return self._current
 
     def set_editor_badge(self, visible: bool):
         """INV3: badge ● visibile ↔ project.subtitles non vuoti."""
         self._badge.setVisible(visible)
-
-    def set_export_badge(self, count: int):
-        # Mantenuto per compatibilità, badge non mostrato
-        pass
 
     # ── Tema ─────────────────────────────────────────────────────────────────
 
@@ -186,16 +186,14 @@ class TabBar(QWidget):
 
     def _apply_palette(self):
         c = theme.c
+        # Selettore esplicito: il bordo inferiore non deve propagarsi ai figli
         self.setStyleSheet(
-            f"background-color: {c('bg')}; border-bottom: 1px solid {c('line')};"
+            f"QWidget#innerTabBar {{ background-color: {c('bg')};"
+            f" border-bottom: 1px solid {c('line')}; }}"
         )
         self._badge.setStyleSheet(
-            f"color: {c('acc')}; font-size: 11px; background: transparent;"
-            f" border: 3px solid {c('acc_soft')}; border-radius: 7px;"
+            f"color: {c('acc')}; font-size: 10px; background: transparent; border: none;"
         )
-        lock_ss = f"color: {c('faint')}; font-size: 11px; background: transparent;"
-        self._editor_lock.setStyleSheet(lock_ss)
-        self._export_lock.setStyleSheet(lock_ss)
 
     # ── Privato ────────────────────────────────────────────────────────────────
 
@@ -225,9 +223,11 @@ class TabBar(QWidget):
             "  padding: 0 18px;"
             "}"
             f"{hover}"
+            f"QPushButton:focus {{ border: 2px solid {c('focus')}; border-radius: 6px; }}"
         )
 
     def _refresh_styles(self):
+        self._sync_checked()
         self._btn_transcription.setStyleSheet(
             self._style_for(self._current == _TAB_TRANSCRIPTION, locked=False)
         )
