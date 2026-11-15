@@ -438,3 +438,31 @@ def test_normalize_language():
     assert normalize_language("auto") is None
     assert normalize_language(None) is None
     assert normalize_language(" IT ") == "it"
+
+
+# ── "Alta precisione" non disponibile: mai un ripiego silenzioso ─────────────
+
+def test_high_accuracy_unavailable_is_reported(monkeypatch):
+    captured, statuses = {}, []
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_has_whisperx", lambda: False)
+    monkeypatch.setattr(engine, "high_accuracy_unavailable_reason",
+                        lambda: "WhisperX non è installato (pip install whisperx)")
+    monkeypatch.setattr(engine, "_get_or_load_model",
+                        lambda *a, **k: _fake_whisper_model("it", captured))
+    out = engine.transcribe("x.wav", denoise=False, vad_filter=False, language="it",
+                            high_accuracy=True, on_status=statuses.append)
+    assert out, "deve comunque trascrivere in modalità standard"
+    assert any("Alta precisione non disponibile" in s and "WhisperX" in s for s in statuses)
+
+
+def test_high_accuracy_reason_when_package_missing(monkeypatch):
+    import importlib.util
+    monkeypatch.setattr(engine, "_is_frozen", lambda: False)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert "WhisperX" in engine.high_accuracy_unavailable_reason()
+    assert engine.high_accuracy_available() is False
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert engine.high_accuracy_available() is True
+    monkeypatch.setattr(engine, "_is_frozen", lambda: True)
+    assert engine.high_accuracy_available() is False

@@ -815,3 +815,30 @@ def test_extension_buttons_use_painted_icon_and_survive_style_change(app):
         assert_guarded()
     finally:
         theme.toggle_theme(app)
+
+
+# ── "Alta precisione": mai un'opzione che non fa nulla ───────────────────────
+
+def test_accuracy_toggle_disabled_when_whisperx_missing(app, monkeypatch):
+    import engine
+    from ui.home_widget import HomeWidget
+    monkeypatch.setattr(engine, "high_accuracy_unavailable_reason",
+                        lambda: "WhisperX non è installato (pip install whisperx)")
+    home = HomeWidget()
+    tog = home.accuracy_toggle
+    assert not tog.isEnabled()
+    assert not tog.isChecked()
+    assert "WhisperX" in tog.toolTip()
+    tog._toggle()                       # click/tastiera non devono attivarla
+    assert not tog.isChecked()
+    assert home._get_settings()["high_accuracy"] is False
+
+
+def test_accuracy_toggle_enabled_when_whisperx_present(app, monkeypatch):
+    import engine
+    from ui.home_widget import HomeWidget
+    monkeypatch.setattr(engine, "high_accuracy_unavailable_reason", lambda: "")
+    home = HomeWidget()
+    assert home.accuracy_toggle.isEnabled()
+    home.accuracy_toggle._toggle()
+    assert home._get_settings()["high_accuracy"] is True

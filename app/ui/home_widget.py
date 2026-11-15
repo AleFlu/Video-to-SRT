@@ -330,9 +330,10 @@ class HomeWidget(AuroraMixin, QWidget):
         self.accuracy_toggle = _ToggleSwitch("Attiva", "Standard", name="Alta precisione")
         self.accuracy_toggle.setChecked(False)
         self.accuracy_toggle.setToolTip(
-            "Usa WhisperX con allineamento fonetico.\nRichiede: pip install whisperx"
+            "Allineamento fonetico delle parole con WhisperX: tempi più precisi, più lento."
         )
         self.accuracy_toggle.toggled.connect(self._update_preset_label)
+        self._apply_accuracy_availability()
         col_hp.addWidget(self.accuracy_toggle)
         col_hp.addStretch()
         grid.addLayout(col_hp, 1)
@@ -346,6 +347,20 @@ class HomeWidget(AuroraMixin, QWidget):
         lay.addLayout(grid)
         self._update_preset_label()
         return card
+
+    def _apply_accuracy_availability(self):
+        """Disattiva "Alta precisione" se WhisperX non è utilizzabile, spiegando perché."""
+        try:
+            from engine import high_accuracy_unavailable_reason
+            reason = high_accuracy_unavailable_reason()
+        except Exception as exc:  # noqa: BLE001 — engine non importabile: opzione non usabile
+            reason = f"motore di trascrizione non disponibile ({exc})"
+        if reason:
+            self.accuracy_toggle.set_unavailable(
+                "Non disp.",
+                f"Alta precisione non disponibile: {reason}.\n"
+                "La trascrizione usa la modalità standard.",
+            )
 
     def _update_preset_label(self):
         """Riepilogo inline delle impostazioni correnti (nell'header della card)."""
@@ -433,7 +448,7 @@ class HomeWidget(AuroraMixin, QWidget):
             "language":      self.lang_combo.currentData(),
             "vad_filter":    self.vad_toggle.isChecked(),
             "denoise":       True,
-            "high_accuracy": self.accuracy_toggle.isChecked(),
+            "high_accuracy": self.accuracy_toggle.isEnabled() and self.accuracy_toggle.isChecked(),
             "beam_size":     self.beam_spin.value(),
         }
 
@@ -836,7 +851,8 @@ class _ToggleSwitch(QWidget):
             f"QWidget#toggleSwitch:focus {{ border: 2px solid {c('focus')}; }}"
         )
         self._lbl.setStyleSheet(
-            f"font-size: 12.5px; font-weight: 500; color: {c('text')};"
+            f"font-size: 12.5px; font-weight: 500;"
+            f" color: {c('text') if self.isEnabled() else c('muted')};"
             " background: transparent; border: none;"
         )
         self._pill.update()
@@ -854,7 +870,19 @@ class _ToggleSwitch(QWidget):
         self._lbl.setText(self._on if self._checked else self._off)
         self._update_accessible()
 
+    def set_unavailable(self, label: str, tooltip: str):
+        """Blocca l'interruttore su spento, con etichetta e spiegazione del motivo."""
+        self._off = label
+        self.setChecked(False)
+        self.setEnabled(False)
+        self.setCursor(Qt.ArrowCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip(tooltip)
+        self._apply_palette()
+
     def _toggle(self):
+        if not self.isEnabled():
+            return
         self.setChecked(not self._checked)
         self.toggled.emit(self._checked)
 

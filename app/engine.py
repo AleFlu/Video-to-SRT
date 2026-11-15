@@ -60,6 +60,27 @@ def _has_whisperx() -> bool:
         return False
 
 
+def high_accuracy_unavailable_reason() -> str:
+    """Motivo per cui la modalità "Alta precisione" non è utilizzabile ("" se lo è).
+
+    Non importa WhisperX (trascinerebbe PyTorch all'avvio): controlla solo che il
+    pacchetto sia installato.
+    """
+    if _is_frozen():
+        return "Non inclusa in questa versione dell'app"
+    import importlib.util
+    try:
+        found = importlib.util.find_spec("whisperx") is not None
+    except (ImportError, ValueError):
+        found = False
+    return "" if found else "WhisperX non è installato (pip install whisperx)"
+
+
+def high_accuracy_available() -> bool:
+    """True se la modalità "Alta precisione" (WhisperX) può essere usata."""
+    return high_accuracy_unavailable_reason() == ""
+
+
 # ============================================================
 # Configurazione
 # ============================================================
@@ -1004,6 +1025,12 @@ def transcribe(
 
     segments_iter = None
     try:
+        if high_accuracy and not (_has_whisperx() and not _is_frozen()):
+            # Mai un ripiego silenzioso: l'utente ha chiesto una modalità che non c'è.
+            reason = high_accuracy_unavailable_reason() or "WhisperX non utilizzabile"
+            logger.warning("Alta precisione richiesta ma non disponibile: %s", reason)
+            status(f"⚠️ Alta precisione non disponibile ({reason}) — uso la modalità standard")
+
         if high_accuracy and _has_whisperx() and not _is_frozen():
             try:
                 status("Backend: WhisperX (alta precisione)")
