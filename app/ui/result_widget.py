@@ -1,13 +1,12 @@
 """
-result_widget.py — ResultWidget (sotto-stato 0.2 di TranscriptionTab).
+result_widget.py — ResultWidget (sotto-stato 0.2 di TranscriptionTab), "Bianco e nero".
 
-Layout (design "Studio"):
-  ┌── Header row ──────────────────────────────────────────────────────┐
-  │  Titolo + sottotitolo                   [Nuova] [Esporta] [Editor] │
-  ├── Badge modificato (nascosto di default) ──────────────────────────┤
-  ├── 4 Stat card ──────────────────────────────────────────────────────┤
-  ├── Anteprima sottotitoli (vista virtualizzata: QTableView + model) ─┤
-  └────────────────────────────────────────────────────────────────────┘
+Layout (mockup Result.dc.html):
+  ┌── Fascia su "panel" ───────────────────────────────────────────────┐
+  │ [✓] Trascrizione completata   N sottotitoli · file   [azioni]       │
+  │     (avviso "Versione modificata nell'editor", se serve)            │
+  ├── Anteprima (vista virtualizzata: QTableView + model, righe 36 px) ─┤
+  └─────────────────────────────────────────────────────────────────────┘
 
 L'anteprima usa un modello Qt: anche con migliaia di segmenti si creano solo
 le righe visibili (nessun widget per segmento).
@@ -19,13 +18,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QAbstractTableModel, QModelIndex
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QSizePolicy, QTableView, QHeaderView, QAbstractItemView, QStackedWidget,
 )
 
+import platform_support
 from ui import icons, theme
 from ui.widgets import ElidedLabel
+
+_ROW_H = 36
 
 
 def _fmt_ts(s: float) -> str:
@@ -33,53 +36,6 @@ def _fmt_ts(s: float) -> str:
     sec = int(s) % 60
     ms = int((s - int(s)) * 1000)
     return f"{m:02d}:{sec:02d}.{ms:03d}"
-
-
-# ── Stat card ─────────────────────────────────────────────────────────────────
-
-class _StatCard(QFrame):
-    def __init__(self, value: str, label: str, accent: bool = False, parent=None):
-        super().__init__(parent)
-        self.setObjectName("statCard")
-        self._accent = accent
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(4)
-
-        self._val = QLabel(value)
-        self._val.setObjectName("statVal")
-        lay.addWidget(self._val)
-
-        self._lbl = QLabel(label)
-        self._lbl.setObjectName("statLbl")
-        lay.addWidget(self._lbl)
-
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(92)
-        self._apply_palette()
-
-    def _apply_palette(self):
-        c = theme.c
-        self.setStyleSheet(
-            f"QFrame#statCard {{ background-color: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
-        )
-        val_color = c("acc") if self._accent else c("text")
-        self._val.setStyleSheet(
-            f"QLabel#statVal {{ color: {val_color}; font-size: 26px; font-weight: 650;"
-            " background: transparent; border: none; }"
-        )
-        self._lbl.setStyleSheet(
-            f"QLabel#statLbl {{ color: {c('muted')}; font-size: 10.5px; font-weight: 600;"
-            " background: transparent; border: none; }"
-        )
-
-    def set_value(self, v: str):
-        self._val.setText(v)
-
-    def set_label(self, l: str):
-        self._lbl.setText(l)
 
 
 # ── Modello anteprima ─────────────────────────────────────────────────────────
@@ -94,9 +50,9 @@ def _seg_fields(seg) -> tuple:
 
 
 class _PreviewModel(QAbstractTableModel):
-    """Modello a sola lettura: # | inizio | testo (una riga per segmento)."""
+    """Modello a sola lettura: # | inizio | fine | testo (una riga per segmento)."""
 
-    _HEADERS = ("#", "Inizio", "Testo")
+    _HEADERS = ("#", "Inizio", "Fine", "Testo")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,42 +67,48 @@ class _PreviewModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QModelIndex()) -> int:  # noqa: N802
-        return 3
+        return 4
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):  # noqa: N802
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self._HEADERS[section]
+        if role == Qt.TextAlignmentRole and orientation == Qt.Horizontal:
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
         return None
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        start, _end, text = self._rows[index.row()]
+        start, end, text = self._rows[index.row()]
         col = index.column()
         if role == Qt.DisplayRole:
             if col == 0:
                 return index.row() + 1
             if col == 1:
                 return _fmt_ts(start)
+            if col == 2:
+                return _fmt_ts(end)
             return text.strip().replace("\n", " ")
         if role == Qt.TextAlignmentRole:
-            if col == 0:
-                return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role == Qt.FontRole and col < 3:
+            f = QFont(platform_support.mono_font_family())
+            f.setPixelSize(13)
+            return f
         if role == Qt.ForegroundRole:
             if col == 0:
-                return theme.qcolor("muted")
-            if col == 1:
-                return theme.qcolor("acc")
-            return theme.qcolor("dim")
-        if role == Qt.ToolTipRole and col == 2:
+                return theme.qcolor("label")
+            if col < 3:
+                return theme.qcolor("dim")
+            return theme.qcolor("text")
+        if role == Qt.ToolTipRole and col == 3:
             return text.strip()
         return None
 
     def refresh_colors(self):
         if self._rows:
             self.dataChanged.emit(self.index(0, 0),
-                                  self.index(len(self._rows) - 1, 2), [Qt.ForegroundRole])
+                                  self.index(len(self._rows) - 1, 3), [Qt.ForegroundRole])
 
 
 # ── ResultWidget ──────────────────────────────────────────────────────────────
@@ -164,96 +126,95 @@ class ResultWidget(QWidget):
         self._source_path: str = ""
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(48, 32, 48, 32)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Header: titolo sinistra, bottoni destra ────────────────────────────
+        # ── Fascia superiore su "panel" ───────────────────────────────────────
+        self._band = QFrame()
+        self._band.setObjectName("resultBand")
+        band = QVBoxLayout(self._band)
+        band.setContentsMargins(40, 22, 40, 22)
+        band.setSpacing(12)
+
         hdr = QHBoxLayout()
-        hdr.setSpacing(12)
+        hdr.setSpacing(16)
+
+        self._check_box = QLabel()
+        self._check_box.setFixedSize(40, 40)
+        self._check_box.setAlignment(Qt.AlignCenter)
+        hdr.addWidget(self._check_box, 0, Qt.AlignVCenter)
 
         title_col = QVBoxLayout()
-        title_col.setSpacing(4)
-
-        eyebrow_row = QHBoxLayout()
-        eyebrow_row.setSpacing(6)
-        self._eyebrow_icon = QLabel()
-        self._eyebrow_icon.setFixedSize(14, 14)
-        eyebrow_row.addWidget(self._eyebrow_icon)
-        self._eyebrow = QLabel("Completata")
-        eyebrow_row.addWidget(self._eyebrow)
-        eyebrow_row.addStretch(1)
-        title_col.addLayout(eyebrow_row)
-
+        title_col.setSpacing(2)
         self.title_lbl = QLabel("Trascrizione completata")
         title_col.addWidget(self.title_lbl)
-
         self.summary_lbl = ElidedLabel("")
         title_col.addWidget(self.summary_lbl)
-
         hdr.addLayout(title_col, 1)
 
-        # Bottoni
+        # Azioni
         self.new_btn = QPushButton("Nuova trascrizione")
         self.new_btn.setObjectName("secondary")
-        self.new_btn.setMinimumHeight(40)
+        self.new_btn.setMinimumHeight(36)
         self.new_btn.setCursor(Qt.PointingHandCursor)
         self.new_btn.clicked.connect(self.new_requested)
         hdr.addWidget(self.new_btn, alignment=Qt.AlignVCenter)
 
         self.export_btn = QPushButton("Esporta SRT")
         self.export_btn.setObjectName("secondary")
-        self.export_btn.setMinimumHeight(40)
+        icons.bind_icon(self.export_btn, "export", "text")
+        self.export_btn.setMinimumHeight(36)
         self.export_btn.setCursor(Qt.PointingHandCursor)
         self.export_btn.clicked.connect(self.export_requested)
         hdr.addWidget(self.export_btn, alignment=Qt.AlignVCenter)
 
-        self.editor_btn = QPushButton("Apri nell'editor  →")
+        self.editor_btn = QPushButton("Apri nell'editor")
         self.editor_btn.setObjectName("primary")
-        self.editor_btn.setMinimumHeight(40)
+        icons.bind_icon(self.editor_btn, "arrow_right", "acc_ink")
+        self.editor_btn.setLayoutDirection(Qt.RightToLeft)   # icona dopo il testo
+        self.editor_btn.setMinimumHeight(36)
         self.editor_btn.setCursor(Qt.PointingHandCursor)
         self.editor_btn.clicked.connect(self.open_editor_requested)
         hdr.addWidget(self.editor_btn, alignment=Qt.AlignVCenter)
+        band.addLayout(hdr)
 
-        root.addLayout(hdr)
-        root.addSpacing(20)
-
-        # ── Badge modificato ───────────────────────────────────────────────────
+        # ── Avviso: versione modificata nell'editor (nascosto di default) ─────
         self.badge_frame = QFrame()
+        self.badge_frame.setObjectName("resultNotice")
         badge_lay = QHBoxLayout(self.badge_frame)
-        badge_lay.setContentsMargins(13, 9, 13, 9)
+        badge_lay.setContentsMargins(12, 8, 12, 8)
+        badge_lay.setSpacing(10)
+        self._badge_icon = QLabel()
+        self._badge_icon.setFixedSize(16, 16)
+        badge_lay.addWidget(self._badge_icon, 0, Qt.AlignTop)
         self.badge_lbl = QLabel(
             "Versione modificata nell'editor — i sottotitoli qui sono quelli originali"
         )
         self.badge_lbl.setWordWrap(True)
-        badge_lay.addWidget(self.badge_lbl)
+        badge_lay.addWidget(self.badge_lbl, 1)
         self.badge_frame.setVisible(False)
-        root.addWidget(self.badge_frame)
-        root.addSpacing(4)
+        band.addWidget(self.badge_frame)
+        root.addWidget(self._band)
 
-        # ── 4 Stat card ───────────────────────────────────────────────────────
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
-        self._card_n   = _StatCard("—", "Sottotitoli", accent=True)
-        self._card_dur = _StatCard("—", "Durata media")
-        self._card_cps = _StatCard("—", "CPS medio")
-        self._card_cov = _StatCard("—", "Copertura")
-        for c in (self._card_n, self._card_dur, self._card_cps, self._card_cov):
-            cards.addWidget(c)
-        root.addLayout(cards)
-        root.addSpacing(24)
-
-        # ── Header anteprima ──────────────────────────────────────────────────
+        # ── Corpo: anteprima ──────────────────────────────────────────────────
+        body = QVBoxLayout()
+        body.setContentsMargins(40, 20, 40, 0)
+        body.setSpacing(6)
+        prev_row = QHBoxLayout()
         self._prev_hdr = QLabel("Anteprima")
-        root.addWidget(self._prev_hdr)
-        root.addSpacing(10)
+        prev_row.addWidget(self._prev_hdr)
+        prev_row.addStretch(1)
+        self._prev_note = QLabel("Trascrizione originale, sola lettura")
+        prev_row.addWidget(self._prev_note)
+        body.addLayout(prev_row)
 
         # ── Preview: vista virtualizzata (solo le righe visibili vengono disegnate)
         self._preview_outer = QFrame()
         self._preview_outer.setObjectName("previewOuter")
-        self._preview_outer.setMinimumHeight(240)
+        self._preview_outer.setMinimumHeight(200)
         self._preview_outer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer_lay = QVBoxLayout(self._preview_outer)
-        outer_lay.setContentsMargins(1, 1, 1, 1)
+        outer_lay.setContentsMargins(0, 0, 0, 0)
         outer_lay.setSpacing(0)
 
         self._preview_stack = QStackedWidget()
@@ -266,17 +227,25 @@ class ResultWidget(QWidget):
         self._preview_view.setSelectionMode(QAbstractItemView.NoSelection)
         self._preview_view.setFocusPolicy(Qt.NoFocus)
         self._preview_view.setShowGrid(False)
-        self._preview_view.setAlternatingRowColors(True)
+        self._preview_view.setAlternatingRowColors(False)
         self._preview_view.setWordWrap(False)
+        self._preview_view.setFrameShape(QFrame.NoFrame)
         self._preview_view.verticalHeader().setVisible(False)
-        self._preview_view.horizontalHeader().setVisible(False)
         self._preview_view.verticalHeader().setDefaultSectionSize(
-            self._preview_view.fontMetrics().lineSpacing() + 16
+            max(_ROW_H, self._preview_view.fontMetrics().lineSpacing() + 16)
         )
         hh = self._preview_view.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        hh.setVisible(True)
+        hh.setHighlightSections(False)
+        hh.setSectionsClickable(False)
+        hh.setFixedHeight(30)
+        hh.setSectionResizeMode(0, QHeaderView.Fixed)
+        hh.setSectionResizeMode(1, QHeaderView.Fixed)
+        hh.setSectionResizeMode(2, QHeaderView.Fixed)
+        hh.setSectionResizeMode(3, QHeaderView.Stretch)
+        self._preview_view.setColumnWidth(0, 56)
+        self._preview_view.setColumnWidth(1, 120)
+        self._preview_view.setColumnWidth(2, 120)
         self._preview_stack.addWidget(self._preview_view)       # 0
 
         # Stato vuoto: nessun parlato rilevato
@@ -301,7 +270,8 @@ class ResultWidget(QWidget):
         self._preview_stack.addWidget(self._empty)               # 1
 
         outer_lay.addWidget(self._preview_stack)
-        root.addWidget(self._preview_outer, 1)
+        body.addWidget(self._preview_outer, 1)
+        root.addLayout(body, 1)
 
         self._apply_palette()
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
@@ -310,43 +280,54 @@ class ResultWidget(QWidget):
 
     def _on_theme_changed(self, _name: str):
         self._apply_palette()
-        for card in (self._card_n, self._card_dur, self._card_cps, self._card_cov):
-            card._apply_palette()
         self._preview_model.refresh_colors()
 
     def _apply_palette(self):
         c = theme.c
-        self._eyebrow.setStyleSheet(
-            f"font-size: 12px; font-weight: 500; color: {c('ok')}; background: transparent;"
+        self._band.setStyleSheet(
+            f"QFrame#resultBand {{ background-color: {c('panel')}; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
         )
-        self._eyebrow_icon.setPixmap(icons.pixmap("check", theme.qcolor("ok"), 14))
-        self._eyebrow_icon.setStyleSheet("background: transparent;")
+        self._check_box.setStyleSheet(
+            f"background: transparent; border: 1px solid {c('line_2')}; border-radius: 4px;"
+        )
+        self._check_box.setPixmap(icons.pixmap("check", theme.qcolor("text"), 20))
         self.title_lbl.setStyleSheet(
             f"font-size: 22px; font-weight: 500; color: {c('text')}; background: transparent;"
         )
         self.summary_lbl.setStyleSheet(
-            f"color: {c('dim')}; font-size: 14.5px; background: transparent;"
+            f"color: {c('dim')}; font-size: 12px; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
         )
         self.badge_frame.setStyleSheet(
-            f"QFrame {{ background-color: {c('warn_soft')};"
+            f"QFrame#resultNotice {{ background-color: transparent;"
             f" border: 1px solid {c('warn')}; border-radius: 4px; }}"
         )
+        self._badge_icon.setPixmap(icons.pixmap("alert", theme.qcolor("warn"), 16))
+        self._badge_icon.setStyleSheet("background: transparent; border: none;")
         self.badge_lbl.setStyleSheet(
-            f"color: {c('warn')}; font-size: 12.5px; font-weight: 500;"
+            f"color: {c('warn')}; font-size: 13px; font-weight: 500;"
             " background: transparent; border: none;"
         )
         self._prev_hdr.setStyleSheet(
-            f"color: {c('muted')}; font-size: 10px; font-weight: 600;"
-            f" background: transparent;"
+            f"color: {c('text')}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        self._prev_note.setStyleSheet(
+            f"color: {c('dim')}; font-size: 12px; background: transparent;"
         )
         self._preview_outer.setStyleSheet(
-            f"QFrame#previewOuter {{ background: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
+            "QFrame#previewOuter { background: transparent; border: none; }"
         )
         self._preview_view.setStyleSheet(
             f"QTableView#resultPreview {{ background: transparent; border: none;"
-            f" alternate-background-color: {c('lift')}; font-size: 13px; }}"
-            "QTableView#resultPreview::item { padding: 0 10px; border: none; }"
+            f" font-size: 14px; color: {c('text')}; }}"
+            f"QTableView#resultPreview::item {{ padding: 0 10px; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
+            f"QTableView#resultPreview QHeaderView::section {{ background: transparent;"
+            f" color: {c('label')}; font-size: 11px; font-weight: 500; border: none;"
+            f" border-bottom: 1px solid {c('line')}; padding: 0 10px; text-align: left; }}"
+            f"QTableView#resultPreview QTableCornerButton::section {{ background: transparent;"
+            " border: none; }"
         )
         self._empty.setStyleSheet("background: transparent;")
         self._empty_title.setStyleSheet(
@@ -365,31 +346,10 @@ class ResultWidget(QWidget):
         n = len(segments)
         fname = Path(source_path).name if source_path else "—"
         self.title_lbl.setText("Trascrizione completata")
-        self.summary_lbl.setText(f"{n} sottotitoli  ·  {fname}")
+        self.summary_lbl.setText(f"{n} sottotitoli · {fname}")
         self.summary_lbl.set_full_tooltip(source_path)
         self.editor_btn.setEnabled(n > 0)
         self.export_btn.setEnabled(n > 0)
-
-        # Statistiche
-        durations, cpss, covered, total_audio = [], [], 0.0, 0.0
-        for seg in segments:
-            start, end, text = _seg_fields(seg)
-            dur = max(0.0, end - start)
-            durations.append(dur)
-            covered += dur
-            if dur > 0:
-                cpss.append(len(text.strip()) / dur)
-            if end > total_audio:
-                total_audio = end
-
-        avg_dur = sum(durations) / len(durations) if durations else 0.0
-        avg_cps = sum(cpss) / len(cpss) if cpss else 0.0
-        cov_pct = (covered / total_audio * 100) if total_audio > 0 else 0.0
-
-        self._card_n.set_value(str(n))
-        self._card_dur.set_value(f"{avg_dur:.1f}s")
-        self._card_cps.set_value(f"{avg_cps:.1f}")
-        self._card_cov.set_value(f"{cov_pct:.0f}%")
 
         self._preview_model.set_segments(segments)
         self._preview_stack.setCurrentIndex(0 if n else 1)

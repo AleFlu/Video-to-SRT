@@ -26,6 +26,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 import platform_support
+from ui import theme
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,11 @@ SPLASH_W = 520
 SPLASH_H = 300
 
 
+def _splash_color(token: str) -> QColor:
+    """Colore del tema scuro (lo splash compare prima che il tema utente sia applicato)."""
+    return theme.qcolor(token, "dark")
+
+
 def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
     """
     Disegna la splash screen con:
@@ -195,16 +201,13 @@ def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
 
     # Sfondo con bordo arrotondato
     bg_path = QPainterPath()
-    bg_path.addRoundedRect(QRectF(0, 0, w, h), 14, 14)
+    bg_path.addRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 6, 6)
 
-    grad = QLinearGradient(0, 0, 0, h)
-    grad.setColorAt(0.0, QColor("#16162a"))
-    grad.setColorAt(1.0, QColor("#0e0e1e"))
-    p.fillPath(bg_path, QBrush(grad))
+    p.fillPath(bg_path, QBrush(_splash_color("bg")))
 
     # Bordo sottile
     from PySide6.QtGui import QPen
-    p.setPen(QPen(QColor("#2a2a4a"), 1.5))
+    p.setPen(QPen(_splash_color("line"), 1))
     p.setBrush(Qt.NoBrush)
     p.drawPath(bg_path)
 
@@ -221,7 +224,7 @@ def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
         # Clip circolare per l'icona
         icon_clip = QPainterPath()
         icon_clip.addRoundedRect(
-            QRectF(icon_x, icon_y, icon_size, icon_size), 14, 14
+            QRectF(icon_x, icon_y, icon_size, icon_size), 6, 6
         )
         p.save()
         p.setClipPath(icon_clip)
@@ -230,21 +233,23 @@ def _render_splash_pixmap(app_icon_pix: QPixmap | None = None) -> QPixmap:
 
     # Titolo
     text_x = icon_x + icon_size + 20
-    p.setPen(QColor("#e4e4ef"))
-    p.setFont(QFont(platform_support.ui_font_family(), 26, QFont.Bold))
+    p.setPen(_splash_color("text"))
+    title_font = QFont(platform_support.ui_font_family(), 26)
+    title_font.setWeight(QFont.Medium)
+    p.setFont(title_font)
     p.drawText(QRectF(text_x, icon_y + 2, w - text_x - 30, 40),
                Qt.AlignLeft | Qt.AlignVCenter, "Video → SRT")
 
     # Sottotitolo
-    p.setPen(QColor("#6a6a8a"))
+    p.setPen(_splash_color("dim"))
     p.setFont(QFont(platform_support.ui_font_family(), 12))
     p.drawText(QRectF(text_x, icon_y + 44, w - text_x - 30, 24),
                Qt.AlignLeft | Qt.AlignVCenter,
                "Trascrizione automatica italiana · Editor integrato")
 
     # Versione
-    p.setPen(QColor("#3a3a5a"))
-    p.setFont(QFont(platform_support.ui_font_family(), 10))
+    p.setPen(_splash_color("label"))
+    p.setFont(QFont(platform_support.mono_font_family(), 10))
     p.drawText(QRectF(0, h - 22, w - 16, 16),
                Qt.AlignRight | Qt.AlignVCenter, "v2.0")
 
@@ -284,20 +289,17 @@ class Splash(QSplashScreen):
         track_y  = h - 52
         track_w  = w - 80
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#1e1e3a"))
-        painter.drawRoundedRect(track_x, track_y, track_w, 5, 2, 2)
+        painter.setBrush(_splash_color("line"))
+        painter.drawRect(track_x, track_y, track_w, 4)
 
-        # Progress fill
-        fill_grad = QLinearGradient(track_x, 0, track_x + track_w, 0)
-        fill_grad.setColorAt(0.0, QColor("#4f8cff"))
-        fill_grad.setColorAt(1.0, QColor("#8b5cf6"))
-        painter.setBrush(QBrush(fill_grad))
+        # Progress fill (piatto, accento monocromatico)
+        painter.setBrush(_splash_color("acc"))
         fill_w = int(track_w * self._pct)
-        if fill_w > 4:
-            painter.drawRoundedRect(track_x, track_y, fill_w, 5, 2, 2)
+        if fill_w > 0:
+            painter.drawRect(track_x, track_y, fill_w, 4)
 
         # Messaggio
-        painter.setPen(QColor("#6a6a8a"))
+        painter.setPen(_splash_color("dim"))
         painter.setFont(QFont(platform_support.ui_font_family(), 11))
         painter.drawText(
             QRectF(track_x, track_y + 12, track_w, 22),

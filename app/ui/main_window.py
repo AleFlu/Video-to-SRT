@@ -5,7 +5,8 @@ Struttura:
   ┌──────────────────────────────────────────────────────────────┐
   │  QMenuBar                                                    │
   ├──────────────────────────────────────────────────────────────┤
-  │  ProjectTabBar  [Progetto 1 ×] [video.mp4 ● ×] [+]  spazio │
+  │  Intestazione 40 px: ProjectTabBar | sezioni del progetto    │
+  │  attivo (Trascrizione/Editor/Esportazione) | tema            │
   ├──────────────────────────────────────────────────────────────┤
   │  QStackedWidget  (un ProjectWidget per tab)                  │
   │    [0] ProjectWidget                                         │
@@ -25,11 +26,11 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence, QUndoGroup
 from PySide6.QtWidgets import (
     QMainWindow, QStackedWidget, QStatusBar, QLabel, QMessageBox, QWidget, QVBoxLayout,
-    QApplication,
+    QApplication, QHBoxLayout, QPushButton, QSizePolicy,
 )
 
 import platform_support
@@ -37,7 +38,7 @@ import platform_support
 from core.constants import SUPPORTED_ALL_EXTS, FILE_FILTER_OPEN_ANY
 from ui.project_widget import ProjectWidget, autosave_in_use
 from ui.project_tab_bar import ProjectTabBar
-from ui import theme
+from ui import icons, theme
 from ui.prefs import read_list, RECENT_KEY
 from ui.widgets import protect_extension_buttons
 
@@ -73,8 +74,13 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        # Intestazione unica da 40 px: tab progetti | sezioni del progetto attivo | tema
         self.proj_tab_bar = ProjectTabBar()
-        root_layout.addWidget(self.proj_tab_bar)
+        self._nav_stack = QStackedWidget()   # una TabBar (sezioni) per progetto
+        self._nav_stack.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._nav_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
+        self.theme_btn = self._build_theme_button()
+        root_layout.addWidget(self._build_header())
 
         self._stack = QStackedWidget()
         root_layout.addWidget(self._stack, 1)
@@ -84,6 +90,8 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_status_bar()
+        self._refresh_theme_btn()
+        theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
         # ── Wiring ProjectTabBar ──────────────────────────────────────────────
         self.proj_tab_bar.tab_selected.connect(self._on_tab_selected)
@@ -97,6 +105,75 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
 
         # Il ripristino autosave è invocato da main.py dopo la chiusura dello splash.
+
+    # ── Intestazione ───────────────────────────────────────────────────────────
+
+    def _build_header(self) -> QWidget:
+        """Riga unica: tab progetti (sinistra), sezioni (centro), tema (destra)."""
+        header = QWidget()
+        header.setObjectName("mainHeader")
+        header.setAttribute(Qt.WA_StyledBackground, True)
+        header.setFixedHeight(self.proj_tab_bar.height() or 40)
+        self._header = header
+        row = QHBoxLayout(header)
+        row.setContentsMargins(10, 0, 10, 0)
+        row.setSpacing(0)
+        row.addWidget(self.proj_tab_bar, 1)
+        row.addWidget(self._nav_stack, 0)
+        right = QHBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.addStretch(1)
+        right.addWidget(self.theme_btn, 0, Qt.AlignVCenter)
+        row.addLayout(right, 1)
+        self._apply_header_palette()
+        return header
+
+    def _apply_header_palette(self):
+        c = theme.c
+        self._header.setStyleSheet(
+            f"QWidget#mainHeader {{ background-color: {c('panel')};"
+            f" border-bottom: 1px solid {c('line')}; }}"
+        )
+
+    def _build_theme_button(self) -> QPushButton:
+        btn = QPushButton()
+        btn.setObjectName("themeToggle")
+        btn.setFixedHeight(28)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(self._toggle_theme)
+        return btn
+
+    def _refresh_theme_btn(self):
+        c = theme.c
+        is_dark = theme.get_theme() == "dark"
+        btn = self.theme_btn
+        btn.setText("Scuro" if is_dark else "Chiaro")
+        btn.setIcon(icons.icon("moon" if is_dark else "sun", "dim"))
+        btn.setIconSize(QSize(16, 16))
+        tip = "Passa al tema chiaro" if is_dark else "Passa al tema scuro"
+        btn.setToolTip(f"{tip}  {platform_support.shortcut_label('Ctrl+Shift+L')}")
+        btn.setAccessibleName(tip)
+        btn.setStyleSheet(
+            "QPushButton {"
+            f"  background: transparent; color: {c('dim')};"
+            "  border: 1px solid transparent; border-radius: 4px;"
+            "  font-size: 13px; padding: 0 9px; min-height: 26px;"
+            "}"
+            f"QPushButton:hover {{ color: {c('text')}; background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton", 4)
+        )
+
+    def _on_theme_changed(self, _name: str = ""):
+        self._apply_header_palette()
+        self._refresh_theme_btn()
+
+    def _attach_project_nav(self, pw: ProjectWidget):
+        """Sposta nell'intestazione la TabBar (sezioni) del progetto: resta sua, con tutti i segnali."""
+        self._nav_stack.addWidget(pw.tab_bar)
+
+    def _detach_project_nav(self, pw: ProjectWidget):
+        self._nav_stack.removeWidget(pw.tab_bar)
+        pw.tab_bar.deleteLater()
 
     # ── Progetto attivo ────────────────────────────────────────────────────────
 
@@ -123,6 +200,7 @@ class MainWindow(QMainWindow):
         # Connetti segnali del progetto
         self._projects.append(pw)
         self._stack.addWidget(pw)
+        self._attach_project_nav(pw)
         self._undo_group.addStack(pw.timeline.undo_stack)
 
         pw.title_changed.connect(self._on_project_title_changed)
@@ -144,6 +222,7 @@ class MainWindow(QMainWindow):
             if isinstance(previous, ProjectWidget) and previous is not new:
                 previous.pause_playback()
             self._stack.setCurrentWidget(new)
+            self._nav_stack.setCurrentWidget(new.tab_bar)
             self._refresh_menu_for_active()
             # Status bar e titolo finestra seguono il progetto selezionato
             self.status_main.setText(new.last_status or "Pronto")
@@ -172,6 +251,7 @@ class MainWindow(QMainWindow):
             self._undo_group.removeStack(pw.timeline.undo_stack)
             # Rimuovi e ricrea un progetto vuoto fresco
             self._stack.removeWidget(pw)
+            self._detach_project_nav(pw)
             self._projects.clear()
             pw.deleteLater()
             self.proj_tab_bar.remove_tab(0)
@@ -185,6 +265,7 @@ class MainWindow(QMainWindow):
         pw.teardown()
         self._undo_group.removeStack(pw.timeline.undo_stack)
         self._stack.removeWidget(pw)
+        self._detach_project_nav(pw)
         self._projects.pop(index)
         pw.deleteLater()
         self.proj_tab_bar.remove_tab(index)
@@ -380,11 +461,11 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
         self._refresh_theme_ui()
-        # Tiene il menu in sync anche quando il tema cambia dal toggle nella TabBar
+        # Tiene il menu in sync anche quando il tema cambia dal toggle nell'intestazione
         theme.MANAGER.theme_changed.connect(self._refresh_theme_ui)
 
     # ── Tema chiaro/scuro ───────────────────────────────────────────────────────
-    # Il toggle visibile vive nella TabBar di ogni ProjectWidget (la menu bar
+    # Il toggle visibile vive nell'intestazione (la menu bar
     # macOS è nativa e non mostra corner widget). La voce menu Vista resta come
     # scorciatoia (Ctrl+Shift+L) e applica lo stesso cambio.
 
@@ -407,6 +488,7 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self):
         sb = QStatusBar()
         self.status_main = QLabel("Pronto")
+        self.status_main.setContentsMargins(10, 0, 0, 0)
         sb.addWidget(self.status_main)
         sb.addPermanentWidget(QLabel("  "))
         self.status_proj = QLabel("")

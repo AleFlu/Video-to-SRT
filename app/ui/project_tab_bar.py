@@ -41,7 +41,7 @@ class _TabButton(QWidget):
     close_clicked = Signal()
     tab_clicked   = Signal()
 
-    def __init__(self, title: str, height: int = 34, parent=None):
+    def __init__(self, title: str, height: int = 40, parent=None):
         super().__init__(parent)
         self.setFixedHeight(height)
         self.setMinimumWidth(_TAB_MIN_W)
@@ -56,8 +56,8 @@ class _TabButton(QWidget):
         self._hovered = False
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 8, 0)
-        layout.setSpacing(5)
+        layout.setContentsMargins(12, 0, 6, 0)
+        layout.setSpacing(8)
 
         self._lbl = QLabel(title)
         self._lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
@@ -74,7 +74,7 @@ class _TabButton(QWidget):
         self._close = QPushButton()
         self._close.setIconSize(QSize(12, 12))
         self._close.setObjectName("tabClose")
-        self._close.setFixedSize(18, 18)
+        self._close.setFixedSize(20, 20)
         self._close.setFlat(True)
         self._close.setCursor(Qt.PointingHandCursor)
         self._close.setToolTip(f"Chiudi progetto  {platform_support.shortcut_label('Ctrl+W')}")
@@ -115,7 +115,7 @@ class _TabButton(QWidget):
     # ── Stile chiusura (theme-aware) ─────────────────────────────────────────────
     def _close_style(self, active: bool) -> str:
         c = theme.c
-        col = c("dim") if active else c("muted")
+        col = c("label")
         return (
             "QPushButton#tabClose {"
             "  background: transparent;"
@@ -132,6 +132,7 @@ class _TabButton(QWidget):
 
     def set_active(self, active: bool):
         self._active = active
+        self._close.setVisible(active or self._hovered)
         c = theme.c
         if active:
             # Tab attiva: sfondo distinguibile, bordo accent in basso
@@ -147,10 +148,10 @@ class _TabButton(QWidget):
                 f"QWidget#projectTab:focus {{ border: 1px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
-                f"color: {c('text')}; font-size: 12px; font-weight: 600; background: transparent;"
+                f"color: {c('text')}; font-size: 13px; font-weight: 500; background: transparent;"
             )
             self._close.setStyleSheet(self._close_style(True))
-            self._close.setIcon(icons.icon("close", "dim", 12))
+            self._close.setIcon(icons.icon("close", "label", 12))
         else:
             self.setStyleSheet(
                 "QWidget#projectTab {"
@@ -167,10 +168,10 @@ class _TabButton(QWidget):
                 f"QWidget#projectTab:focus {{ border: 1px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
-                f"color: {c('muted')}; font-size: 12px; font-weight: 400; background: transparent;"
+                f"color: {c('dim')}; font-size: 13px; font-weight: 400; background: transparent;"
             )
             self._close.setStyleSheet(self._close_style(False))
-            self._close.setIcon(icons.icon("close", "muted", 12))
+            self._close.setIcon(icons.icon("close", "label", 12))
         self._update_accessible()
 
     def apply_palette(self):
@@ -185,11 +186,8 @@ class _TabButton(QWidget):
 
     def leaveEvent(self, event):
         self._hovered = False
-        if not self._active:
-            self._close.setVisible(False)
-        else:
-            # tab attiva: mostra × solo su hover, nascondi al leaveEvent anche se attiva
-            self._close.setVisible(False)
+        # sulla tab attiva il × resta visibile (come nel mockup)
+        self._close.setVisible(self._active)
         super().leaveEvent(event)
 
     def focusInEvent(self, event):
@@ -198,7 +196,7 @@ class _TabButton(QWidget):
 
     def focusOutEvent(self, event):
         if not self._hovered:
-            self._close.setVisible(False)
+            self._close.setVisible(self._active)
         super().focusOutEvent(event)
 
     def mousePressEvent(self, event):
@@ -228,14 +226,14 @@ class ProjectTabBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Altezza dalle metriche del font: niente titoli tagliati con font grandi
-        self._bar_h = max(34, self.fontMetrics().height() + 16)
+        self._bar_h = max(40, self.fontMetrics().height() + 22)
         self.setFixedHeight(self._bar_h)
 
         self._tabs: list[_TabButton] = []
         self._current = -1
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(4, 0, 4, 0)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         # Area scorribile per le tab
@@ -249,13 +247,13 @@ class ProjectTabBar(QWidget):
         self._tabs_widget = QWidget()
         self._tabs_layout = QHBoxLayout(self._tabs_widget)
         self._tabs_layout.setContentsMargins(0, 0, 0, 0)
-        self._tabs_layout.setSpacing(2)   # piccolo gap tra tab invece di bordo divisore
+        self._tabs_layout.setSpacing(2)
         self._tabs_layout.addStretch(1)
 
         # Bottone + — vive DENTRO il layout delle tab, subito dopo l'ultima
         self._btn_new = QPushButton()
         icons.bind_icon(self._btn_new, "plus", "dim")
-        self._btn_new.setFixedSize(26, 26)
+        self._btn_new.setFixedSize(28, 28)
         self._btn_new.setFlat(False)
         self._btn_new.setToolTip(f"Nuovo progetto  ({platform_support.shortcut_label('Ctrl+Shift+T')})")
         self._btn_new.setAccessibleName("Nuovo progetto")
@@ -292,11 +290,10 @@ class ProjectTabBar(QWidget):
 
     def _apply_palette(self):
         c = theme.c
-        self.setStyleSheet(
-            f"background-color: {c('panel')}; border-bottom: 1px solid {c('line')};"
-        )
-        self._scroll.setStyleSheet(f"background: {c('panel')}; border: none;")
-        self._tabs_widget.setStyleSheet(f"background: {c('panel')};")
+        # sfondo e linea inferiore sono dell'intestazione della MainWindow
+        self.setStyleSheet("background: transparent; border: none;")
+        self._scroll.setStyleSheet("background: transparent; border: none;")
+        self._tabs_widget.setStyleSheet("background: transparent;")
         self._btn_new.setStyleSheet(
             "QPushButton {"
             "  background: transparent;"

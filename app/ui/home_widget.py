@@ -1,23 +1,14 @@
 """
-home_widget.py — Schermata Home (Stato 0).
+home_widget.py — Schermata Home (Stato 0), "Bianco e nero".
 
-Layout (design system "Studio"):
-  ┌──────────────────────────────────────────────┐
-  │  [DepsBanner — solo se dipendenze mancano]   │
-  ├──────────────────────────────────────────────┤
-  │  eyebrow "TRASCRIZIONE"                      │
-  │  Titolo grande 30px                          │
-  │  Sottotitolo descrittivo                     │
-  ├──────────────────────────────────────────────┤
-  │  DropZone  (idle / hover / loaded / error)   │
-  ├──────────────────────────────────────────────┤
-  │  Settings card (grid 4 col)                  │
-  │   Modello | Lingua | VAD | Alta precisione   │
-  ├──────────────────────────────────────────────┤
-  │  Action row: stima  ·  [Avvia]               │
-  ├──────────────────────────────────────────────┤
-  │  [Recenti — solo se ci sono file]            │
-  └──────────────────────────────────────────────┘
+Layout (mockup Home.dc.html): banco di lavoro a tutta larghezza, due colonne.
+  ┌── [DepsBanner — solo se dipendenze mancano] ───────────────────────────┐
+  │ Sorgente                       │  Impostazioni di trascrizione (420 px) │
+  │  zona di rilascio 330 px       │   Modello Whisper  + RAM/qualità       │
+  │  (o riga "file caricato")      │   Lingua                               │
+  │ Recenti (Nome|Cartella|Dim.)   │   Filtro VAD · Alta precisione         │
+  │                                │   riepilogo · Stima · Avvia            │
+  └────────────────────────────────┴────────────────────────────────────────┘
 
 Tema chiaro/scuro: i colori vengono letti da theme.c() e ri-applicati su
 theme_changed via _apply_palette().
@@ -48,12 +39,23 @@ from ui import icons, theme
 import platform_support
 
 
-_SHOWN_RECENTS = 3
+_SHOWN_RECENTS = 5
+_PANEL_W = 420          # pannello impostazioni
+_DROP_H = 330           # altezza della zona di rilascio
+_ROW_H = 38             # riga della tabella "Recenti"
+_COL_NAME, _COL_DIR, _COL_SIZE = 12, 15, 110   # proporzioni colonne dei Recenti
 
 # Filtro del dialog: le estensioni accettate vengono da core.constants
 _MEDIA_GLOB = " ".join(f"*{e}" for e in sorted(SUPPORTED_MEDIA_EXTS))
 FILE_FILTER_MEDIA = f"File video o audio ({_MEDIA_GLOB});;Tutti i file (*.*)"
 _FORMATS_HINT = "MP4, MOV, MKV, WAV, MP3, M4A, FLAC…"
+
+# Etichette dei formati mostrate sotto la zona di rilascio (gruppi: video, audio, testo)
+_FORMAT_GROUPS = (
+    ("MP4", "MOV", "MKV", "AVI", "WEBM"),
+    ("WAV", "MP3", "M4A", "FLAC", "OGG"),
+    ("SRT", "V2SRT"),
+)
 
 
 def _is_media(path: str) -> bool:
@@ -64,23 +66,39 @@ def _is_subtitle(path: str) -> bool:
     return Path(path).suffix.lower() in SUPPORTED_SUBTITLE_EXTS
 
 
+def _short_dir(path: str) -> str:
+    """Cartella del file con la home abbreviata in "~"."""
+    parent = str(Path(path).parent)
+    home = str(Path.home())
+    if parent == home or parent.startswith(home + os.sep):
+        return "~" + parent[len(home):]
+    return parent
+
+
+def _quality_text(stars: str) -> str:
+    """"★★★★½" -> "4,5/5" (stelle intere + mezza)."""
+    n = stars.count("★") + (0.5 if "½" in stars else 0.0)
+    num = f"{int(n)}" if n == int(n) else f"{n:.1f}".replace(".", ",")
+    return f"qualità {num}/5"
+
+
 def _combo_ss() -> str:
     c = theme.c
     return (
-        f"QComboBox {{ background: {c('card_2')}; border: 1px solid transparent; border-radius: 4px;"
-        f" color: {c('text')}; padding: 5px 10px; font-size: 13px; font-weight: 500; min-height: 22px; }}"
+        f"QComboBox {{ background: {c('bg')}; border: 1px solid {c('line')}; border-radius: 4px;"
+        f" color: {c('text')}; padding: 0 10px; font-size: 13px; min-height: 30px; }}"
         f"QComboBox:hover {{ border-color: {c('line_2')}; }}"
-        f"QComboBox:focus {{ border: 2px solid {c('focus')}; }}"
+        f"QComboBox:focus {{ border: 1px solid {c('focus')}; }}"
         "QComboBox::drop-down { border: none; width: 22px; }"
         f"{theme.combo_arrow_rule()}"
-        f"QComboBox QAbstractItemView {{ background: {c('card')}; border: 1px solid {c('line_2')};"
+        f"QComboBox QAbstractItemView {{ background: {c('panel')}; border: 1px solid {c('line_2')};"
         f" color: {c('text')}; selection-background-color: {c('acc_fill')};"
         f" selection-color: {c('acc_ink')}; border-radius: 4px; }}"
     )
 
 
 class HomeWidget(QWidget):
-    """Schermata iniziale: drag&drop + impostazioni + avvia."""
+    """Schermata iniziale: sorgente + recenti a sinistra, impostazioni e avvio a destra."""
 
     start_requested = Signal(str, dict)   # (source_path, settings)
     open_requested  = Signal(str)         # SRT / .v2srt da aprire nell'editor
@@ -89,107 +107,72 @@ class HomeWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("contentPanel")
         self._source_path: str | None = None
+        self._hint_default = "Scegli un file per iniziare"
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Scroll area ───────────────────────────────────────────────────────
+        # ── Banner dipendenze: una riga sopra le colonne, solo quando serve ───
+        self._deps_wrap = QWidget()
+        dl = QVBoxLayout(self._deps_wrap)
+        dl.setContentsMargins(32, 14, 32, 0)
+        dl.setSpacing(0)
+        self.deps_banner = DepsBanner()
+        dl.addWidget(self.deps_banner)
+        self._deps_wrap.setVisible(False)
+        root.addWidget(self._deps_wrap)
+
+        cols = QHBoxLayout()
+        cols.setContentsMargins(0, 0, 0, 0)
+        cols.setSpacing(0)
+        root.addLayout(cols, 1)
+
+        # ── Colonna sinistra (scorrevole se la finestra è bassa) ──────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        root.addWidget(scroll)
-
         inner = QWidget()
         inner.setStyleSheet("background: transparent;")
         scroll.setWidget(inner)
+        cols.addWidget(scroll, 1)
 
-        lay = QVBoxLayout(inner)
-        lay.setContentsMargins(48, 40, 48, 40)
-        lay.setSpacing(0)
-        lay.addStretch(1)
+        left = QVBoxLayout(inner)
+        left.setContentsMargins(32, 28, 32, 28)
+        left.setSpacing(24)
 
-        # contenuto centrato a max 780px
-        content = QWidget()
-        content.setMaximumWidth(780)
-        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        content.setStyleSheet("background: transparent;")
-        cl = QVBoxLayout(content)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(0)
-
-        # ── Banner dipendenze ─────────────────────────────────────────────────
-        self.deps_banner = DepsBanner()
-        cl.addWidget(self.deps_banner)
-        cl.addSpacing(8)
-
-        # ── Header ───────────────────────────────────────────────────────────
-        self._eyebrow = QLabel("Trascrizione")
-        cl.addWidget(self._eyebrow)
-        cl.addSpacing(10)
-
-        self._title = QLabel("Trasforma il tuo video in sottotitoli SRT.")
-        self._title.setWordWrap(True)
-        cl.addWidget(self._title)
-        cl.addSpacing(10)
-
-        self._sub = QLabel(
-            "Trascrizione automatica in italiano, interamente in locale sul tuo computer. "
-            "Trascina un file, scegli il modello e ottieni sottotitoli pronti da rifinire "
-            "nell'editor."
+        src_col = QVBoxLayout()
+        src_col.setSpacing(10)
+        src_head = QHBoxLayout()
+        self._src_title = QLabel("Sorgente")
+        src_head.addWidget(self._src_title)
+        src_head.addStretch(1)
+        self._src_note = ElidedLabel(
+            "Tutto resta sul tuo computer: nessun file viene caricato in rete.", Qt.ElideRight
         )
-        self._sub.setWordWrap(True)
-        cl.addWidget(self._sub)
-        cl.addSpacing(24)
+        self._src_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        src_head.addWidget(self._src_note, 4)
+        src_col.addLayout(src_head)
 
-        # ── DropZone ──────────────────────────────────────────────────────────
         self.drop = _DesignDropZone()
         self.drop.file_selected.connect(self._on_file_selected)
         self.drop.file_error.connect(self._on_file_error)
         self.drop.open_requested.connect(self.open_requested)
-        cl.addWidget(self.drop)
-        cl.addSpacing(16)
+        src_col.addWidget(self.drop)
+        left.addLayout(src_col)
 
-        # ── Settings card ─────────────────────────────────────────────────────
-        self._settings_card = self._build_settings_card()
-        cl.addWidget(self._settings_card)
-        cl.addSpacing(20)
-
-        # ── Action row ────────────────────────────────────────────────────────
-        ar = QHBoxLayout()
-        ar.setSpacing(12)
-        self._estimate_lbl = QLabel("Stima: –")
-        self._estimate_lbl.setWordWrap(True)
-        ar.addWidget(self._estimate_lbl, 1)
-        self.start_btn = QPushButton("Avvia trascrizione")
-        self.start_btn.setObjectName("primary")
-        self._start_icon = icons.bind_icon(self.start_btn, "play", "acc_ink")
-        self.start_btn.setMinimumHeight(44)
-        self.start_btn.setMinimumWidth(200)
-        self.start_btn.setCursor(Qt.PointingHandCursor)
-        self.start_btn.setToolTip("Avvia la trascrizione  (Invio)")
-        self.start_btn.clicked.connect(self._on_start)
-        ar.addWidget(self.start_btn)
-        cl.addLayout(ar)
-        cl.addSpacing(24)
-
-        # ── Recenti ───────────────────────────────────────────────────────────
         self._recents_widget = _RecentsWidget()
         self._recents_widget.file_selected.connect(self._on_file_selected)
-        cl.addWidget(self._recents_widget)
+        left.addWidget(self._recents_widget)
+        left.addStretch(1)
 
-        # centra content
-        center_row = QHBoxLayout()
-        center_row.setContentsMargins(0, 0, 0, 0)
-        center_row.addStretch(1)
-        center_row.addWidget(content, 0)
-        center_row.addStretch(1)
-        lay.addLayout(center_row)
-        lay.addStretch(1)
+        # ── Pannello impostazioni (420 px) ────────────────────────────────────
+        self._settings_card = self._build_settings_card()
+        cols.addWidget(self._settings_card)
 
-        # Ordine di tab: file → impostazioni → avvio → recenti
+        # Ordine di tab: file → impostazioni → avvio
         chain = [self.drop, self.model_combo, self.lang_combo, self.vad_toggle,
                  self.accuracy_toggle, self.start_btn]
         for a, b in zip(chain, chain[1:]):
@@ -225,74 +208,122 @@ class HomeWidget(QWidget):
         self.lang_combo.setStyleSheet(ss)
         self.vad_toggle._apply_palette()
         self.accuracy_toggle._apply_palette()
+        self._apply_accuracy_palette()
         self._set_start_btn_state(self._source_path is not None)
         self.update()
 
     def _apply_palette(self):
         c = theme.c
-        self._eyebrow.setStyleSheet(
-            f"font-size: 11px; font-weight: 600; color: {c('muted')};"
-            " background: transparent;"
+        self._src_title.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {c('text')}; background: transparent;"
         )
-        self._title.setStyleSheet(
-            f"font-size: 30px; font-weight: 600; color: {c('text')};"
-            " background: transparent;"
-        )
-        self._sub.setStyleSheet(f"font-size: 14.5px; color: {c('dim')}; background: transparent;")
-        self._estimate_lbl.setStyleSheet(
-            f"font-size: 12px; color: {c('muted')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
+        self._src_note.setStyleSheet(
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
         )
         self._settings_card.setStyleSheet(
-            f"QFrame#settingsCard {{ background-color: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
+            f"QFrame#settingsCard {{ background-color: {c('panel')}; border: none;"
+            f" border-left: 1px solid {c('line')}; }}"
+            f"QFrame#setRow {{ background: transparent; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
+            f"QFrame#setBottom {{ background: transparent; border: none;"
+            f" border-top: 1px solid {c('line')}; }}"
         )
         self._head_lbl.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-            " background: transparent;"
-        )
-        self._preset_lbl.setStyleSheet(
-            f"font-size: 11px; color: {c('muted')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
+            f"font-size: 12px; font-weight: 600; color: {c('text')}; background: transparent;"
         )
         for lbl in self._field_labels:
             lbl.setStyleSheet(
-                f"font-size: 10px; font-weight: 600; color: {c('muted')};"
+                f"font-size: 11px; font-weight: 500; color: {c('label')};"
                 " background: transparent;"
             )
+        mono = (f"font-size: 11px; color: {c('dim')}; background: transparent;"
+                f" font-family: {theme.FONT_MONO};")
+        self._model_hint.setStyleSheet(mono)
+        self._preset_lbl.setStyleSheet(
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
+        )
+        self._estimate_title.setStyleSheet(
+            f"font-size: 11px; font-weight: 500; color: {c('label')}; background: transparent;"
+        )
+        self._estimate_lbl.setStyleSheet(
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
+        )
+        self._hint_lbl.setStyleSheet(
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
+        )
+        self._start_kbd.setStyleSheet(
+            f"font-size: 11px; color: {c('label')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
+        )
+        for title, desc in ((self._vad_title, self._vad_desc),
+                            (self._acc_title, self._acc_desc)):
+            desc.setStyleSheet(
+                f"font-size: 12px; color: {c('dim')}; background: transparent;"
+            )
+        self._vad_title.setStyleSheet(
+            f"font-size: 13px; font-weight: 500; color: {c('text')}; background: transparent;"
+        )
+        self._apply_accuracy_palette()
 
-    # ── Settings card ─────────────────────────────────────────────────────────
+    def _apply_accuracy_palette(self):
+        """Titolo "Alta precisione" attenuato quando l'opzione non è disponibile."""
+        tone = "text" if self.accuracy_toggle.isEnabled() else "dim"
+        self._acc_title.setStyleSheet(
+            f"font-size: 13px; font-weight: 500; color: {theme.c(tone)};"
+            " background: transparent;"
+        )
+
+    # ── Pannello impostazioni ─────────────────────────────────────────────────
+
+    def _set_row(self) -> tuple:
+        """Sezione del pannello: (cornice con linea inferiore, layout verticale)."""
+        row = QFrame()
+        row.setObjectName("setRow")
+        lay = QVBoxLayout(row)
+        lay.setContentsMargins(0, 14, 0, 14)
+        lay.setSpacing(0)
+        return row, lay
+
+    def _toggle_row(self, title: QLabel, desc: QLabel, toggle: ToggleSwitch) -> QFrame:
+        row, lay = self._set_row()
+        h = QHBoxLayout()
+        h.setSpacing(12)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        col.addWidget(title)
+        desc.setWordWrap(True)
+        col.addWidget(desc)
+        h.addLayout(col, 1)
+        toggle.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        toggle.setFixedWidth(38 + 10 + 96)
+        h.addWidget(toggle, 0, Qt.AlignVCenter)
+        lay.addLayout(h)
+        return row
 
     def _build_settings_card(self) -> QFrame:
         from engine import MODELS, DEFAULT_MODEL
         self._models = MODELS
         self._model_keys = list(MODELS.keys())
+        self._field_labels: list = []
+        ss = _combo_ss()
 
         card = QFrame()
         card.setObjectName("settingsCard")
+        card.setFixedWidth(_PANEL_W)
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(14)
+        lay.setContentsMargins(28, 28, 28, 24)
+        lay.setSpacing(0)
 
-        # header row: titolo a sinistra, riepilogo impostazioni a destra
-        head_row = QHBoxLayout()
-        head_row.setContentsMargins(0, 0, 0, 0)
         self._head_lbl = QLabel("Impostazioni di trascrizione")
-        head_row.addWidget(self._head_lbl)
-        head_row.addStretch()
-        self._preset_lbl = ElidedLabel("", Qt.ElideRight)
-        self._preset_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        head_row.addWidget(self._preset_lbl, 1)
-        lay.addLayout(head_row)
+        lay.addWidget(self._head_lbl)
+        lay.addSpacing(4)
 
-        # grid 4 col: Modello | Lingua | VAD | Alta precisione
-        grid = QHBoxLayout()
-        grid.setSpacing(14)
-
-        self._field_labels = []
-        ss = _combo_ss()
-
-        col_m = self._col("Modello Whisper")
+        # Modello Whisper + RAM / qualità
+        row_m, ml = self._set_row()
+        ml.addWidget(self._field("Modello Whisper"))
+        ml.addSpacing(6)
         self.model_combo = QComboBox()
         self.model_combo.setAccessibleName("Modello Whisper")
         self.model_combo.setStyleSheet(ss)
@@ -301,10 +332,17 @@ class HomeWidget(QWidget):
         self.model_combo.setCurrentIndex(self._model_keys.index(DEFAULT_MODEL))
         self.model_combo.currentIndexChanged.connect(self._update_estimate)
         self.model_combo.currentIndexChanged.connect(self._update_preset_label)
-        col_m.addWidget(self.model_combo)
-        grid.addLayout(col_m, 2)
+        self.model_combo.currentIndexChanged.connect(self._update_model_hint)
+        ml.addWidget(self.model_combo)
+        ml.addSpacing(8)
+        self._model_hint = ElidedLabel("", Qt.ElideRight)
+        ml.addWidget(self._model_hint)
+        lay.addWidget(row_m)
 
-        col_l = self._col("Lingua")
+        # Lingua
+        row_l, ll = self._set_row()
+        ll.addWidget(self._field("Lingua"))
+        ll.addSpacing(6)
         self.lang_combo = QComboBox()
         self.lang_combo.setAccessibleName("Lingua dell'audio")
         self.lang_combo.setStyleSheet(ss)
@@ -314,19 +352,21 @@ class HomeWidget(QWidget):
             self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(0)
         self.lang_combo.currentIndexChanged.connect(self._update_preset_label)
-        col_l.addWidget(self.lang_combo)
-        grid.addLayout(col_l, 2)
+        ll.addWidget(self.lang_combo)
+        lay.addWidget(row_l)
 
-        col_v = self._col("Filtro VAD")
+        # Filtro VAD
+        self._vad_title = QLabel("Filtro VAD")
+        self._vad_desc = QLabel("Salta i tratti senza parlato (consigliato)")
         self.vad_toggle = _ToggleSwitch("Attivo", "Disattivo", name="Filtro VAD")
         self.vad_toggle.setToolTip("Salta i tratti senza parlato (consigliato)")
         self.vad_toggle.setChecked(True)
         self.vad_toggle.toggled.connect(self._update_preset_label)
-        col_v.addWidget(self.vad_toggle)
-        col_v.addStretch()
-        grid.addLayout(col_v, 1)
+        lay.addWidget(self._toggle_row(self._vad_title, self._vad_desc, self.vad_toggle))
 
-        col_hp = self._col("Alta precisione")
+        # Alta precisione
+        self._acc_title = QLabel("Alta precisione")
+        self._acc_desc = QLabel("Allineamento fonetico delle parole con WhisperX: più lento")
         self.accuracy_toggle = _ToggleSwitch("Attiva", "Standard", name="Alta precisione")
         self.accuracy_toggle.setChecked(False)
         self.accuracy_toggle.setToolTip(
@@ -334,9 +374,7 @@ class HomeWidget(QWidget):
         )
         self.accuracy_toggle.toggled.connect(self._update_preset_label)
         self._apply_accuracy_availability()
-        col_hp.addWidget(self.accuracy_toggle)
-        col_hp.addStretch()
-        grid.addLayout(col_hp, 1)
+        lay.addWidget(self._toggle_row(self._acc_title, self._acc_desc, self.accuracy_toggle))
 
         # beam_spin non visibile: valore di default letto da _get_settings()
         self.beam_spin = QSpinBox()
@@ -344,9 +382,57 @@ class HomeWidget(QWidget):
         self.beam_spin.setValue(5)
         self.beam_spin.hide()
 
-        lay.addLayout(grid)
+        lay.addStretch(1)
+
+        # Parte bassa: riepilogo, stima, avvio, suggerimento
+        bottom = QFrame()
+        bottom.setObjectName("setBottom")
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 12, 0, 0)
+        bl.setSpacing(0)
+        self._preset_lbl = ElidedLabel("", Qt.ElideRight)
+        bl.addWidget(self._preset_lbl)
+        bl.addSpacing(12)
+        est = QHBoxLayout()
+        self._estimate_title = QLabel("Stima")
+        est.addWidget(self._estimate_title)
+        est.addStretch(1)
+        self._estimate_lbl = ElidedLabel("–", Qt.ElideRight)
+        self._estimate_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        est.addWidget(self._estimate_lbl, 1)
+        bl.addLayout(est)
+        bl.addSpacing(12)
+
+        self.start_btn = QPushButton("Avvia trascrizione")
+        self.start_btn.setObjectName("primary")
+        self._start_icon = icons.bind_icon(self.start_btn, "play", "acc_ink", 14)
+        self.start_btn.setMinimumHeight(40)
+        self.start_btn.setCursor(Qt.PointingHandCursor)
+        self.start_btn.setToolTip("Avvia la trascrizione  (Invio)")
+        self.start_btn.clicked.connect(self._on_start)
+        # suggerimento ↵ dentro il pulsante, a destra
+        bl_btn = QHBoxLayout(self.start_btn)
+        bl_btn.setContentsMargins(0, 0, 14, 0)
+        bl_btn.addStretch(1)
+        self._start_kbd = QLabel("↵")
+        self._start_kbd.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        bl_btn.addWidget(self._start_kbd)
+        bl.addWidget(self.start_btn)
+        bl.addSpacing(8)
+        self._hint_lbl = QLabel(self._hint_default)
+        self._hint_lbl.setAlignment(Qt.AlignCenter)
+        self._hint_lbl.setWordWrap(True)
+        bl.addWidget(self._hint_lbl)
+        lay.addWidget(bottom)
+
         self._update_preset_label()
+        self._update_model_hint()
         return card
+
+    def _field(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        self._field_labels.append(lbl)
+        return lbl
 
     def _apply_accuracy_availability(self):
         """Disattiva "Alta precisione" se WhisperX non è utilizzabile, spiegando perché."""
@@ -357,13 +443,28 @@ class HomeWidget(QWidget):
             reason = f"motore di trascrizione non disponibile ({exc})"
         if reason:
             self.accuracy_toggle.set_unavailable(
-                "Non disp.",
+                "Non disponibile",
                 f"Alta precisione non disponibile: {reason}.\n"
                 "La trascrizione usa la modalità standard.",
             )
+            self._acc_desc.setText(f"{reason[:1].upper()}{reason[1:]}: si usa la modalità standard")
+
+    def _update_model_hint(self, *_):
+        """Riga mono sotto il modello: RAM, qualità (da engine.MODELS), "predefinito"."""
+        from engine import DEFAULT_MODEL
+        key = self.model_combo.currentData()
+        info = self._models.get(key, {})
+        parts = []
+        if info.get("ram"):
+            parts.append(f"RAM {info['ram']}")
+        if info.get("quality"):
+            parts.append(_quality_text(info["quality"]))
+        if key == DEFAULT_MODEL:
+            parts.append("predefinito")
+        self._model_hint.setText("      ".join(parts))
 
     def _update_preset_label(self):
-        """Riepilogo inline delle impostazioni correnti (nell'header della card)."""
+        """Riepilogo delle impostazioni correnti (sopra la stima)."""
         parts = [self.lang_combo.currentText()]
         model_key = self.model_combo.currentData()
         if model_key:
@@ -371,14 +472,6 @@ class HomeWidget(QWidget):
         parts.append("VAD attivo" if self.vad_toggle.isChecked() else "VAD disattivo")
         parts.append("alta precisione" if self.accuracy_toggle.isChecked() else "standard")
         self._preset_lbl.setText("  ·  ".join(parts))
-
-    def _col(self, label: str) -> QVBoxLayout:
-        col = QVBoxLayout()
-        col.setSpacing(6)
-        lbl = QLabel(label)
-        self._field_labels.append(lbl)
-        col.addWidget(lbl)
-        return col
 
     # ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -395,6 +488,8 @@ class HomeWidget(QWidget):
 
     def _set_start_btn_state(self, enabled: bool):
         c = theme.c
+        self._hint_lbl.setText("Premi Invio per avviare" if enabled else self._hint_default)
+        self._hint_lbl.setVisible(True)
         if enabled:
             self.start_btn.setEnabled(True)
             self.start_btn.setText("Avvia trascrizione")
@@ -408,34 +503,42 @@ class HomeWidget(QWidget):
                 "  font-size: 14px;"
                 "  font-weight: 600;"
                 "  padding: 0 22px;"
-                "  min-height: 44px;"
+                "  min-height: 40px;"
                 "}"
                 f"QPushButton:hover {{ background-color: {c('acc_fill_h')}; }}"
                 f"QPushButton:pressed {{ background-color: {c('acc_fill_d')}; }}"
-                + theme.focus_rule("QPushButton", 8)
+                + theme.focus_rule("QPushButton", 4)
+            )
+            self._start_kbd.setStyleSheet(
+                f"font-size: 11px; color: {c('acc_ink')}; background: transparent;"
+                f" font-family: {theme.FONT_MONO};"
             )
         else:
             self.start_btn.setEnabled(False)
             self.start_btn.setText("Avvia trascrizione")
-            self._start_icon.set_icon("play", "muted")
+            self._start_icon.set_icon("play", "dim")
             self.start_btn.setStyleSheet(
                 "QPushButton {"
-                f"  background-color: {c('card')};"
-                f"  color: {c('muted')};"
+                "  background-color: transparent;"
+                f"  color: {c('dim')};"
                 f"  border: 1px solid {c('line')};"
                 "  border-radius: 4px;"
                 "  font-size: 14px;"
-                "  font-weight: 500;"
+                "  font-weight: 600;"
                 "  padding: 0 22px;"
-                "  min-height: 44px;"
+                "  min-height: 40px;"
                 "}"
+            )
+            self._start_kbd.setStyleSheet(
+                f"font-size: 11px; color: {c('label')}; background: transparent;"
+                f" font-family: {theme.FONT_MONO};"
             )
 
     def _on_file_error(self, ext: str):
         self.drop.show_error(ext)
         self._source_path = None
         self._set_start_btn_state(False)
-        self._estimate_lbl.setText(
+        self._hint_lbl.setText(
             f"Formato .{ext} non supportato" if ext else "Formato non supportato"
         )
 
@@ -456,7 +559,7 @@ class HomeWidget(QWidget):
 
     def _update_estimate(self):
         if not self._source_path:
-            self._estimate_lbl.setText("Stima: –")
+            self._estimate_lbl.setText("–")
             return
         try:
             size_mb = os.path.getsize(self._source_path) / (1024 * 1024)
@@ -468,10 +571,10 @@ class HomeWidget(QWidget):
             mins = max(1, int(size_mb * factor / 100 * 1.5))
             srt_kb = max(1, int(size_mb * 0.05))
             self._estimate_lbl.setText(
-                f"Stima: ~ {mins}–{mins * 2} min di lavoro  ·  output ~ {srt_kb} KB .srt"
+                f"~ {mins}–{mins * 2} min · ~ {srt_kb} KB"
             )
         except OSError:
-            self._estimate_lbl.setText("Stima: –")
+            self._estimate_lbl.setText("–")
 
     # ── Recenti ───────────────────────────────────────────────────────────────
     # Un'unica lista ("recent_files", condivisa con File → Apri recenti): la Home
@@ -491,6 +594,7 @@ class HomeWidget(QWidget):
 
     def set_deps_status(self, ffmpeg_ok: bool, model_ok: bool):
         self.deps_banner.set_status(ffmpeg_ok, model_ok)
+        self._deps_wrap.setVisible(self.deps_banner.isVisibleTo(self._deps_wrap))
 
     def preload_file(self, path: str):
         """Pre-carica un file (es. da File → Apri); estensioni non media → errore visibile."""
@@ -500,7 +604,7 @@ class HomeWidget(QWidget):
         self._source_path = None
         self.drop.reset()
         self._set_start_btn_state(False)
-        self._estimate_lbl.setText("Stima: –")
+        self._estimate_lbl.setText("–")
         self._refresh_recents()
 
 
@@ -508,9 +612,10 @@ class HomeWidget(QWidget):
 
 class _DesignDropZone(QWidget):
     """
-    Drop zone con widget fissi (uno per stato, nessun rebuild). Accetta click,
-    Invio/Spazio da tastiera e drag & drop; i formati non supportati vengono
-    rifiutati con un messaggio visibile.
+    Zona di rilascio con widget fissi (uno per stato, nessun rebuild): tratteggiata
+    da 330 px a riposo, riga compatta "file caricato" (con Cambia) a file scelto.
+    Accetta click, Invio/Spazio da tastiera e drag & drop; i formati non supportati
+    vengono rifiutati con un messaggio visibile.
     """
 
     file_selected  = Signal(str)
@@ -523,8 +628,8 @@ class _DesignDropZone(QWidget):
     _ERROR  = "error"
 
     # Altezze minime di progetto; quella effettiva segue il contenuto (font grandi)
-    _H_NORMAL = 196
-    _H_LOADED = 78
+    _H_NORMAL = _DROP_H
+    _H_LOADED = 72
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -550,10 +655,10 @@ class _DesignDropZone(QWidget):
             lay.setContentsMargins(24, 16, 24, 16)
             return w, lay
 
-        def _icon(text: str) -> QLabel:
-            lbl = QLabel(text)
+        def _icon() -> QLabel:
+            lbl = QLabel()
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setFixedSize(56, 56)
+            lbl.setFixedSize(32, 32)
             return lbl
 
         def _centered(text: str) -> QLabel:
@@ -564,46 +669,59 @@ class _DesignDropZone(QWidget):
 
         # ── Idle ──────────────────────────────────────────────────────────────
         self._w_idle, lay_idle = _state_page()
-        self._idle_icon = _icon("")
+        self._idle_icon = _icon()
         lay_idle.addWidget(self._idle_icon, 0, Qt.AlignCenter)
-        self._idle_t1 = _centered("Trascina qui un file video o audio")
+        self._idle_t1 = _centered("Trascina qui un video o un audio")
         lay_idle.addWidget(self._idle_t1)
-        self._idle_t2 = _centered(
-            f"oppure clicca o premi  {platform_support.shortcut_label('Ctrl+O')}  per scegliere"
-            f"  ·  {_FORMATS_HINT}"
-        )
+        self._idle_t2 = _centered("")
+        self._idle_t2.setTextFormat(Qt.RichText)
         lay_idle.addWidget(self._idle_t2)
+        lay_idle.addSpacing(8)
+        self._chips: list = []
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        chips.addStretch(1)
+        for gi, group in enumerate(_FORMAT_GROUPS):
+            if gi:
+                chips.addSpacing(10)
+            for name in group:
+                chip = QLabel(name)
+                chip.setAlignment(Qt.AlignCenter)
+                self._chips.append(chip)
+                chips.addWidget(chip)
+        chips.addStretch(1)
+        lay_idle.addLayout(chips)
 
         # ── Hover ─────────────────────────────────────────────────────────────
         self._w_hover, lay_hover = _state_page()
-        self._hover_icon = _icon("")
+        self._hover_icon = _icon()
         lay_hover.addWidget(self._hover_icon, 0, Qt.AlignCenter)
         self._hover_t1 = _centered("Rilascia per caricare")
         lay_hover.addWidget(self._hover_t1)
 
         # ── Error ─────────────────────────────────────────────────────────────
         self._w_error, lay_error = _state_page()
-        self._err_icon = _icon("")
+        self._err_icon = _icon()
         lay_error.addWidget(self._err_icon, 0, Qt.AlignCenter)
         self._err_t1 = _centered("Formato non supportato")
         lay_error.addWidget(self._err_t1)
         self._err_t2 = _centered(f"Usa un file video o audio: {_FORMATS_HINT}")
         lay_error.addWidget(self._err_t2)
 
-        # ── Loaded ────────────────────────────────────────────────────────────
+        # ── Loaded: riga del file (icona, nome, dimensione · estensione, Cambia) ─
         self._w_loaded = QWidget()
         lay_loaded = QHBoxLayout(self._w_loaded)
         lay_loaded.setSpacing(14)
-        lay_loaded.setContentsMargins(20, 12, 20, 12)
+        lay_loaded.setContentsMargins(16, 14, 16, 14)
         lay_loaded.setAlignment(Qt.AlignVCenter)
 
         self._loaded_icon = QLabel()
         self._loaded_icon.setAlignment(Qt.AlignCenter)
-        self._loaded_icon.setFixedSize(46, 46)
+        self._loaded_icon.setFixedSize(24, 24)
         lay_loaded.addWidget(self._loaded_icon)
 
         info_col = QVBoxLayout()
-        info_col.setSpacing(3)
+        info_col.setSpacing(0)
         self._loaded_name = ElidedLabel("")
         self._loaded_detail = QLabel("")
         info_col.addWidget(self._loaded_name)
@@ -611,7 +729,7 @@ class _DesignDropZone(QWidget):
         lay_loaded.addLayout(info_col, 1)
 
         self._change_btn = QPushButton("Cambia")
-        self._change_btn.setMinimumHeight(32)
+        self._change_btn.setMinimumHeight(28)
         self._change_btn.setCursor(Qt.PointingHandCursor)
         self._change_btn.setAccessibleName("Cambia file")
         self._change_btn.clicked.connect(self._open_dialog)
@@ -626,45 +744,59 @@ class _DesignDropZone(QWidget):
 
     def _apply_palette(self):
         c = theme.c
-        self._idle_icon.setStyleSheet(
-            f"background: {c('raise')}; border: none; border-radius: 4px;"
+        self._idle_icon.setStyleSheet("background: transparent; border: none;")
+        self._idle_icon.setPixmap(icons.pixmap("import", theme.qcolor("dim"), 30))
+        self._idle_t1.setStyleSheet(
+            f"font-size: 20px; font-weight: 500; color: {c('text')}; background: transparent;"
         )
-        self._idle_icon.setPixmap(icons.pixmap("import", theme.qcolor("dim"), 28))
-        self._idle_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;")
+        kbd = platform_support.shortcut_label("Ctrl+O")
+        self._idle_t2.setText(
+            f"oppure clicca, o premi "
+            f"<span style=\"font-family: {theme.FONT_MONO}; color: {c('text')};\">{kbd}</span>"
+            ", per scegliere un file"
+        )
         self._idle_t2.setStyleSheet(
-            f"font-size: 12px; color: {c('muted')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
+            f"font-size: 13px; color: {c('dim')}; background: transparent;"
         )
-        self._hover_icon.setStyleSheet(
-            f"background: {c('acc_soft_2')}; border: 1px solid {c('acc')}; border-radius: 4px;"
+        for chip in self._chips:
+            chip.setStyleSheet(
+                f"font-size: 11px; color: {c('dim')}; background: transparent;"
+                f" border: 1px solid {c('line')}; padding: 2px 6px;"
+                f" font-family: {theme.FONT_MONO};"
+            )
+        self._hover_icon.setStyleSheet("background: transparent; border: none;")
+        self._hover_icon.setPixmap(icons.pixmap("import", theme.qcolor("acc"), 30))
+        self._hover_t1.setStyleSheet(
+            f"font-size: 20px; font-weight: 500; color: {c('text')}; background: transparent;"
         )
-        self._hover_icon.setPixmap(icons.pixmap("import", theme.qcolor("acc"), 28))
-        self._hover_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;")
-        self._err_icon.setStyleSheet(
-            f"background: {c('err_soft')}; border: 1px solid {c('err')}; border-radius: 4px;"
+        self._err_icon.setStyleSheet("background: transparent; border: none;")
+        self._err_icon.setPixmap(icons.pixmap("alert", theme.qcolor("err"), 30))
+        self._err_t1.setStyleSheet(
+            f"font-size: 20px; font-weight: 500; color: {c('err')}; background: transparent;"
         )
-        self._err_icon.setPixmap(icons.pixmap("alert", theme.qcolor("err"), 28))
-        self._err_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('err')}; background: transparent;")
-        self._err_t2.setStyleSheet(f"font-size: 12px; color: {c('muted')}; background: transparent;")
-        self._loaded_icon.setStyleSheet(
-            f"background: {c('raise')}; border: none; border-radius: 4px;"
-        )
-        self._loaded_icon.setPixmap(icons.pixmap("video", theme.qcolor("dim"), 24))
+        self._err_t2.setStyleSheet(f"font-size: 13px; color: {c('dim')}; background: transparent;")
+        self._loaded_icon.setStyleSheet("background: transparent; border: none;")
+        self._loaded_icon.setPixmap(icons.pixmap(self._loaded_icon_name(), theme.qcolor("dim"), 24))
         self._loaded_name.setStyleSheet(
-            f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;"
+            f"font-size: 14px; font-weight: 500; color: {c('text')}; background: transparent;"
         )
         self._loaded_detail.setStyleSheet(
-            f"font-size: 12px; color: {c('muted')}; background: transparent;"
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
         self._change_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: 1px solid {c('line_2')};"
-            f" border-radius: 4px; color: {c('dim')}; font-size: 12.5px; font-weight: 500; padding: 4px 13px; }}"
-            f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('line_2')}; color: {c('text')}; }}"
-            f"QPushButton:pressed {{ background: {c('card')}; }}"
-            + theme.focus_rule("QPushButton", 7)
+            f"QPushButton {{ background: transparent; border: 1px solid {c('line')};"
+            f" border-radius: 4px; color: {c('text')}; font-size: 13px; padding: 0 9px; }}"
+            f"QPushButton:hover {{ background: {c('raise')}; border-color: {c('line_2')}; }}"
+            f"QPushButton:pressed {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton", 4)
         )
         self.update()
+
+    def _loaded_icon_name(self) -> str:
+        if not self._file_path:
+            return "video"
+        return "audio" if Path(self._file_path).suffix.lower() in SUPPORTED_AUDIO_EXTS else "video"
 
     def _set_state(self, state: str):
         self._state = state
@@ -681,16 +813,17 @@ class _DesignDropZone(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = self.rect().adjusted(1, 1, -1, -1)
+        r = self.rect().adjusted(0, 0, -1, -1)
+        r = r.adjusted(0, 0, 0, 0)
 
-        border = {self._IDLE: "line_2", self._HOVER: "acc", self._LOADED: "line_2",
+        border = {self._IDLE: "label", self._HOVER: "acc", self._LOADED: "line",
                   self._ERROR: "err"}[self._state]
-        p.setBrush(theme.qcolor("acc_soft" if self._state == self._HOVER else "card"))
+        p.setBrush(theme.qcolor("raise" if self._state == self._HOVER else "panel"))
         pen = QPen(theme.qcolor(border))
         if self._state != self._LOADED:
             pen.setStyle(Qt.DashLine)
         p.setPen(pen)
-        p.drawRoundedRect(r, 6, 6)
+        p.drawRoundedRect(r.adjusted(0, 0, 0, 0), 6, 6)
 
         if self.hasFocus():
             # Anello di focus da tastiera
@@ -779,7 +912,8 @@ class _DesignDropZone(QWidget):
         self._loaded_name.setText(Path(path).name)
         self._loaded_name.set_full_tooltip(path)
         ext = Path(path).suffix.upper().lstrip(".")
-        self._loaded_detail.setText(f"{fmt_size(path)}  ·  {ext}")
+        self._loaded_detail.setText(f"{fmt_size(path).replace('.', ',')} · {ext}")
+        self._loaded_icon.setPixmap(icons.pixmap(self._loaded_icon_name(), theme.qcolor("dim"), 24))
         self.setAccessibleName(f"File selezionato: {Path(path).name}. Invio per cambiarlo")
         self._set_state(self._LOADED)
 
@@ -793,16 +927,15 @@ class _DesignDropZone(QWidget):
         self.setAccessibleName("Scegli il file video o audio da trascrivere")
         self._set_state(self._IDLE)
 
-
 # ── Interruttore: ToggleSwitch vive in ui.widgets (alias storici qui sotto) ──
 
 _ToggleSwitch = ToggleSwitch
 _SwitchPill = SwitchPill
 
-# ── _RecentsWidget ────────────────────────────────────────────────────────────
+# ── Recenti: elenco a tabella (Nome | Cartella | Dimensione) ────────────────────
 
 class _RecentCard(QFrame):
-    """Scheda di un file recente: cliccabile e attivabile da tastiera (Invio/Spazio)."""
+    """Riga di un file recente: cliccabile e attivabile da tastiera (Invio/Spazio)."""
 
     activated = Signal(str)
 
@@ -814,25 +947,31 @@ class _RecentCard(QFrame):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(f"Apri recente: {Path(path).name}")
         self.setToolTip(path)
-        self.setMinimumHeight(max(54, self.fontMetrics().height() * 2 + 22))
+        self.setMinimumHeight(max(_ROW_H, self.fontMetrics().height() + 18))
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(13, 8, 13, 8)
-        lay.setSpacing(11)
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(0)
 
+        name_box = QHBoxLayout()
+        name_box.setSpacing(10)
         self._ic = QLabel()
-        self._ic.setFixedSize(32, 32)
-        self._ic.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self._ic)
-
-        info = QVBoxLayout()
-        info.setSpacing(2)
+        self._ic.setFixedSize(16, 16)
+        name_box.addWidget(self._ic)
         self._name = ElidedLabel(Path(path).name)
         self._name.set_full_tooltip(path)
-        self._meta = QLabel(fmt_size(path))
-        info.addWidget(self._name)
-        info.addWidget(self._meta)
-        lay.addLayout(info, 1)
+        name_box.addWidget(self._name, 1)
+        lay.addLayout(name_box, _COL_NAME)
+        lay.addSpacing(12)
+
+        self._dir = ElidedLabel(_short_dir(path), Qt.ElideMiddle)
+        self._dir.set_full_tooltip(path)
+        lay.addWidget(self._dir, _COL_DIR)
+
+        self._meta = QLabel(fmt_size(path).replace(".", ","))
+        self._meta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._meta.setFixedWidth(_COL_SIZE)
+        lay.addWidget(self._meta)
         self.apply_palette()
 
     def _icon_name(self) -> str:
@@ -844,21 +983,21 @@ class _RecentCard(QFrame):
     def apply_palette(self):
         c = theme.c
         self.setStyleSheet(
-            f"QFrame#recentCard {{ background: {c('card')}; border: 1px solid {c('card_border')};"
-            " border-radius: 4px; }"
-            f"QFrame#recentCard:hover {{ border-color: {c('acc')}; background: {c('card_2')}; }}"
-            f"QFrame#recentCard:focus {{ border: 2px solid {c('focus')}; }}"
+            f"QFrame#recentCard {{ background: transparent; border: none;"
+            f" border-bottom: 1px solid {c('line')}; border-radius: 0; }}"
+            f"QFrame#recentCard:hover {{ background: {c('panel')}; }}"
+            f"QFrame#recentCard:focus {{ border: 1px solid {c('focus')}; }}"
         )
-        self._ic.setStyleSheet(
-            f"background: {c('raise')}; border: none; border-radius: 4px;"
-        )
+        self._ic.setStyleSheet("background: transparent; border: none;")
         self._ic.setPixmap(icons.pixmap(self._icon_name(), theme.qcolor("dim"), 16))
         self._name.setStyleSheet(
-            f"font-size: 12.5px; font-weight: 500; color: {c('text')};"
-            " background: transparent; border: none;"
+            f"font-size: 13px; color: {c('text')}; background: transparent; border: none;"
+        )
+        self._dir.setStyleSheet(
+            f"font-size: 13px; color: {c('dim')}; background: transparent; border: none;"
         )
         self._meta.setStyleSheet(
-            f"font-size: 11px; color: {c('muted')}; background: transparent; border: none;"
+            f"font-size: 13px; color: {c('dim')}; background: transparent; border: none;"
             f" font-family: {theme.FONT_MONO};"
         )
 
@@ -874,7 +1013,7 @@ class _RecentCard(QFrame):
 
 
 class _RecentsWidget(QWidget):
-    """Riga file recenti — visibile solo se ci sono file."""
+    """Elenco dei file recenti — visibile solo se ci sono file."""
 
     file_selected = Signal(str)
 
@@ -882,36 +1021,70 @@ class _RecentsWidget(QWidget):
         super().__init__(parent)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
-        self._lay.setSpacing(8)
+        self._lay.setSpacing(0)
         self.setVisible(False)
         self.setStyleSheet("background: transparent;")
         self._paths: list = []
 
         self._title = QLabel("Recenti")
         self._lay.addWidget(self._title)
-        self._row = QHBoxLayout()
-        self._row.setSpacing(12)
-        self._lay.addLayout(self._row)
+        self._lay.addSpacing(6)
+
+        # intestazione di colonna (stesse proporzioni delle righe)
+        self._head = QFrame()
+        self._head.setObjectName("recentHead")
+        hl = QHBoxLayout(self._head)
+        hl.setContentsMargins(12, 0, 12, 0)
+        hl.setSpacing(0)
+        self._head_lbls = []
+        for text, stretch, align in (("Nome", _COL_NAME, Qt.AlignLeft),
+                                     ("Cartella", _COL_DIR, Qt.AlignLeft)):
+            lbl = QLabel(text)
+            lbl.setAlignment(align | Qt.AlignVCenter)
+            self._head_lbls.append(lbl)
+            hl.addWidget(lbl, stretch)
+            if text == "Nome":
+                hl.addSpacing(12)
+        size_lbl = QLabel("Dimensione")
+        size_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        size_lbl.setFixedWidth(_COL_SIZE)
+        self._head_lbls.append(size_lbl)
+        hl.addWidget(size_lbl)
+        self._head.setFixedHeight(30)
+        self._lay.addWidget(self._head)
+
+        self._rows = QVBoxLayout()
+        self._rows.setSpacing(0)
+        self._lay.addLayout(self._rows)
         self._cards: list = []
         self._apply_palette()
 
     def _apply_palette(self):
+        c = theme.c
         self._title.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; color: {theme.c('muted')};"
-            " background: transparent;"
+            f"font-size: 12px; font-weight: 600; color: {c('text')}; background: transparent;"
         )
+        self._head.setStyleSheet(
+            f"QFrame#recentHead {{ background: transparent; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
+        )
+        for lbl in self._head_lbls:
+            lbl.setStyleSheet(
+                f"font-size: 11px; font-weight: 500; color: {c('label')};"
+                " background: transparent; border: none;"
+            )
         for card in self._cards:
             card.apply_palette()
 
     def set_recents(self, paths: list):
         self._paths = list(paths)
         for card in self._cards:
-            self._row.removeWidget(card)
+            self._rows.removeWidget(card)
             card.deleteLater()
         self._cards = []
         for path in self._paths:
             card = _RecentCard(path)
             card.activated.connect(self.file_selected)
-            self._row.addWidget(card, 1)
+            self._rows.addWidget(card)
             self._cards.append(card)
         self.setVisible(bool(self._paths))
