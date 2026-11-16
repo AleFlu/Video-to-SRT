@@ -1,20 +1,19 @@
 """
-preview_area.py — Area preview centrale (Editor, Stato 2).
+preview_area.py — Zona alta dell'editor: monitor video + forma d'onda + trasporto.
 
-Mostra video oppure waveform in base al tipo di file:
-  - Video (.mp4 .mkv .mov .avi .webm) → QVideoWidget embedded
-  - Solo audio (.mp3 .wav .flac .m4a .ogg .aac) → WaveformWidget
+Il monitor (sinistra, 452 px) e la forma d'onda (destra) sono affiancati quando il
+file è un video; per un file solo audio il monitor si chiude e la forma d'onda
+occupa tutta la larghezza. Senza media il monitor mostra "Nessun file caricato".
 
 Layout:
-  ┌─────────────────────────────────────────┐
-  │  timecode bar  (HH:MM:SS.mmm / totale)  │
-  ├─────────────────────────────────────────┤
-  │  QStackedWidget                         │
-  │    [0] VideoWidget  (QVideoWidget)      │
-  │    [1] WaveformWidget                   │
-  ├─────────────────────────────────────────┤
-  │  TransportBar                           │
-  └─────────────────────────────────────────┘
+  ┌────────────────┬──────────────────────────────────────┐
+  │ monitor video  │ riga info (nome file · durata)  26px │
+  │ (QStackedLayout│ righello 22 px                       │
+  │  video / testo)│ forma d'onda                         │
+  │   452 px       │ corsia sottotitoli 52 px             │
+  ├────────────────┴──────────────────────────────────────┤
+  │ TransportBar (46 px)                                  │
+  └───────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -26,15 +25,15 @@ from typing import List
 from PySide6.QtCore import Qt, QSizeF
 from PySide6.QtGui import QFont, QPainter, QFontMetrics, QBrush, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QSizePolicy, QStackedWidget, QGraphicsView, QGraphicsScene,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLayout, QFrame,
+    QSizePolicy, QStackedLayout, QGraphicsView, QGraphicsScene,
 )
 
 from core.subtitle_model import Subtitle
 from core.audio_player import AudioPlayer
 from core.constants import SUPPORTED_VIDEO_EXTS
 from ui.waveform_widget import WaveformWidget
-from ui.transport_bar import TransportBar
+from ui.transport_bar import TransportBar, _ms_to_full_label
 from ui import theme
 from ui.widgets import ElidedLabel
 import platform_support
@@ -42,16 +41,42 @@ import platform_support
 logger = logging.getLogger(__name__)
 
 
-_PREVIEW_VIDEO    = 0
-_PREVIEW_WAVEFORM = 1
+# Pagine del monitor
+_MONITOR_VIDEO   = 0
+_MONITOR_MESSAGE = 1
+
+# Misure del mockup
+MONITOR_WIDTH = 452
+TOP_ZONE_HEIGHT = 286
+_INFO_LINE_HEIGHT = 26
+
+# Modalità del monitor
+MODE_EMPTY = "empty"   # nessun media: monitor con "Nessun file caricato"
+MODE_VIDEO = "video"   # video: monitor e forma d'onda affiancati
+MODE_AUDIO = "audio"   # solo audio: il monitor si chiude
+
+_EMPTY_TEXT = "Nessun file caricato"
 
 
 def _is_video(path: str) -> bool:
     return Path(path).suffix.lower() in SUPPORTED_VIDEO_EXTS
 
 
+def monitor_mode(media_path: str, video_available: bool) -> str:
+    """
+    Decide come mostrare il monitor per `media_path`: vuoto (nessun media),
+    video (monitor + forma d'onda) oppure audio (monitor chiuso). Un video senza
+    uscita video disponibile (modulo multimediale assente) vale come solo audio.
+    """
+    if not media_path:
+        return MODE_EMPTY
+    if _is_video(media_path) and video_available:
+        return MODE_VIDEO
+    return MODE_AUDIO
+
+
 class PreviewArea(QWidget):
-    """Zona preview: video o waveform + transport bar."""
+    """Zona preview: monitor video + forma d'onda affiancati, poi la transport bar."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -64,6 +89,7 @@ class PreviewArea(QWidget):
         self._overlay_index: list = []    # [(start, end, testo)] ordinati per start
         self._overlay_starts: list = []
         self._media_path: str = ""
+        self._mode: str = MODE_EMPTY
         self._subtitle_overlay = None   # impostato da _build_video_widget
         self._video_player_view: _VideoPlayerView | None = None   # idem
 
@@ -71,37 +97,37 @@ class PreviewArea(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Timecode bar ───────────────────────────────────────────────────────
-        self._tc_bar = QWidget()
-        self._tc_bar.setMinimumHeight(34)
-        tc_layout = QHBoxLayout(self._tc_bar)
-        tc_layout.setContentsMargins(16, 4, 16, 4)
-        tc_layout.setSpacing(14)
+        # ── Zona alta: monitor | colonna forma d'onda ──────────────────────────
+        top = QWidget()
+        top.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        top_lay = QHBoxLayout(top)
+        top_lay.setContentsMargins(0, 0, 0, 0)
+        top_lay.setSpacing(0)
 
-        self.timecode_lbl = QLabel("00:00.000")
-        font = QFont(platform_support.mono_font_family(), 14)
-        font.setStyleHint(QFont.Monospace)
-        font.setWeight(QFont.DemiBold)
-        self.timecode_lbl.setFont(font)
-        tc_layout.addWidget(self.timecode_lbl)
+        # Monitor: cornice 452 px (padding 12) con il riquadro scuro da 1 px di linea
+        self._monitor = QFrame()
+        self._monitor.setObjectName("previewMonitor")
+        mon_lay = QVBoxLayout(self._monitor)
+        mon_lay.setContentsMargins(12, 12, 12, 12)
+        mon_lay.setSpacing(0)
+        mon_lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._monitor.setFixedWidth(MONITOR_WIDTH)
 
-        self.duration_lbl = QLabel("durata 00:00.000")
-        tc_layout.addWidget(self.duration_lbl)
-        tc_layout.addStretch(1)
+        self._monitor_box = QFrame()
+        self._monitor_box.setObjectName("previewMonitorBox")
+        box_lay = QStackedLayout(self._monitor_box)
+        box_lay.setContentsMargins(1, 1, 1, 1)
+        self._monitor_stack = box_lay
 
-        self.file_lbl = ElidedLabel("")
-        self.file_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        tc_layout.addWidget(self.file_lbl, 1)
-
-        layout.addWidget(self._tc_bar)
-
-        # ── Area preview (stack: video | waveform) ─────────────────────────────
-        self._preview_stack = QStackedWidget()
-        self._preview_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        # Slot 0: VideoWidget
         self._video_widget = self._build_video_widget()
-        self._preview_stack.addWidget(self._video_widget)   # index 0
+        box_lay.addWidget(self._video_widget)               # 0: video
+
+        self._monitor_msg = QLabel(_EMPTY_TEXT)
+        self._monitor_msg.setAlignment(Qt.AlignCenter)
+        self._monitor_msg.setWordWrap(True)
+        box_lay.addWidget(self._monitor_msg)                # 1: testo (vuoto / errore)
+        mon_lay.addWidget(self._monitor_box, 1)
+        top_lay.addWidget(self._monitor)
 
         # Collega il player al video item UNA SOLA VOLTA durante costruzione
         if self._video_player_view is not None:
@@ -110,25 +136,43 @@ class PreviewArea(QWidget):
             except Exception:  # noqa: BLE001
                 logger.warning("Collegamento uscita video fallito", exc_info=True)
 
-        # Slot 1: WaveformWidget
+        # Colonna destra: riga info (26 px) + forma d'onda (righello, onda, corsia)
+        right = QWidget()
+        right.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+
+        self._info_bar = QFrame()
+        self._info_bar.setObjectName("previewInfo")
+        info_lay = QHBoxLayout(self._info_bar)
+        info_lay.setContentsMargins(12, 0, 12, 0)
+        info_lay.setSpacing(12)
+        info_lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._info_bar.setFixedHeight(_INFO_LINE_HEIGHT)
+
+        self.file_lbl = ElidedLabel("")
+        self.file_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        info_lay.addWidget(self.file_lbl, 1)
+
+        self.duration_lbl = QLabel("durata " + _ms_to_full_label(0))
+        self.duration_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        info_lay.addWidget(self.duration_lbl)
+        right_lay.addWidget(self._info_bar)
+
         self.waveform = WaveformWidget()
         self.waveform.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._preview_stack.addWidget(self.waveform)         # index 1
+        right_lay.addWidget(self.waveform, 1)
+        top_lay.addWidget(right, 1)
 
-        layout.addWidget(self._preview_stack, 1)
+        layout.addWidget(top, 1)
 
-        # ── Separatore ────────────────────────────────────────────────────────
-        self._sep = QFrame()
-        self._sep.setFrameShape(QFrame.HLine)
-        layout.addWidget(self._sep)
-
-        # ── Transport bar ──────────────────────────────────────────────────────
+        # ── Transport bar (46 px, con il proprio bordo inferiore) ──────────────
         self.transport = TransportBar()
         self.transport.bind_player(self.player)
         layout.addWidget(self.transport)
 
         # ── Wiring player ──────────────────────────────────────────────────────
-        self.player.position_changed.connect(self._on_position)
         self.player.duration_changed.connect(self._on_duration)
         self.player.position_changed.connect(self.waveform.set_position)
         self.player.duration_changed.connect(self.waveform.set_duration)
@@ -142,44 +186,74 @@ class PreviewArea(QWidget):
         # Aggiorna overlay sottotitoli ad ogni tick player
         self.player.position_changed.connect(self._update_subtitle_overlay)
 
+        self._set_mode(MODE_EMPTY)
         self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._apply_palette)
 
+    def sizeHint(self):  # noqa: N802 (override Qt)
+        from PySide6.QtCore import QSize
+        return QSize(900, TOP_ZONE_HEIGHT + self.transport.height())
+
+    # ── Modalità del monitor ───────────────────────────────────────────────────
+
+    @property
+    def mode(self) -> str:
+        """Modalità corrente: "empty", "video" o "audio" (vedi `monitor_mode`)."""
+        return self._mode
+
+    def _set_mode(self, mode: str):
+        """Applica la modalità: audio chiude il monitor, gli altri casi lo mostrano."""
+        self._mode = mode
+        self._monitor.setVisible(mode != MODE_AUDIO)
+        if mode == MODE_VIDEO and self._qvideo_widget is not None:
+            self._monitor_stack.setCurrentIndex(_MONITOR_VIDEO)
+        else:
+            self._monitor_msg.setText(_EMPTY_TEXT)
+            self._monitor_stack.setCurrentIndex(_MONITOR_MESSAGE)
+
     # ── Tema ─────────────────────────────────────────────────────────────────
 
-    def _apply_palette(self):
+    def _apply_palette(self, _name=None):
         c = theme.c
-        self._tc_bar.setStyleSheet(
-            f"background-color: {c('surface')}; border-bottom: 1px solid {c('line')};"
+        self._monitor.setStyleSheet(
+            f"QFrame#previewMonitor {{ background: {c('bg')};"
+            f" border: none; border-right: 1px solid {c('line')}; }}"
+            f"QFrame#previewMonitorBox {{ background: {c('video_bg')};"
+            f" border: 1px solid {c('line')}; }}"
         )
-        self.timecode_lbl.setStyleSheet(f"color: {c('text')}; background: transparent;")
+        self._monitor_msg.setStyleSheet(
+            f"color: {c('dim')}; font-size: 13px; background: transparent; border: none;"
+        )
+        self._info_bar.setStyleSheet(
+            f"QFrame#previewInfo {{ background: {c('bg')}; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
+        )
         self.duration_lbl.setStyleSheet(
-            f"color: {c('muted')}; font-size: 12px; background: transparent;"
+            f"color: {c('dim')}; font-size: 11px; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
         self._style_file_lbl()
-        self._sep.setStyleSheet(f"background-color: {c('line')}; max-height: 1px;")
 
     def _style_file_lbl(self, error: bool = False):
         self.file_lbl.setStyleSheet(
-            f"color: {theme.c('err' if error else 'muted')}; font-size: 11px;"
+            f"color: {theme.c('err' if error else 'dim')}; font-size: 12px;"
             " background: transparent;"
         )
 
     def _on_player_error(self, msg: str):
-        """Mostra l'errore del player e ripiega sulla waveform (con messaggio)."""
+        """Mostra l'errore del player; nel monitor resta un messaggio al posto del video."""
         logger.warning("Errore player: %s", msg)
         text = f"Impossibile riprodurre il file: {msg}" if msg else "Impossibile riprodurre il file"
         self.file_lbl.setText(text)
         self.file_lbl.set_full_tooltip(f"{text}\n{self._media_path}")
         self._style_file_lbl(error=True)
-        if self._preview_stack.currentIndex() == _PREVIEW_VIDEO:
-            self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
-            self.waveform.show_message(
+        if self._mode == MODE_VIDEO:
+            self._monitor_msg.setText(
                 "Anteprima video non disponibile per questo formato.\n"
                 "I sottotitoli restano modificabili."
             )
+            self._monitor_stack.setCurrentIndex(_MONITOR_MESSAGE)
 
     # ── Build video widget ─────────────────────────────────────────────────────
 
@@ -236,7 +310,7 @@ class PreviewArea(QWidget):
     def load_media(self, file_path: str):
         """
         Carica un file media nel player.
-        Video → mostra QVideoWidget; audio → mostra WaveformWidget.
+        Video → monitor e forma d'onda affiancati; solo audio → il monitor si chiude.
         """
         self.waveform.reset()
         self._set_overlay_subs([])
@@ -254,12 +328,9 @@ class PreviewArea(QWidget):
             except Exception:  # noqa: BLE001
                 logger.warning("Ricollegamento uscita video fallito", exc_info=True)
 
-        if _is_video(file_path) and self._qvideo_widget is not None:
-            self._preview_stack.setCurrentIndex(_PREVIEW_VIDEO)
-        else:
-            # Fallback waveform
-            self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
-            self.waveform.load_audio(file_path)
+        self._set_mode(monitor_mode(file_path, self._qvideo_widget is not None))
+        # La forma d'onda c'è sempre, anche per i video (picchi a blocchi, memoria limitata)
+        self.waveform.load_audio(file_path)
 
     def clear_media(self):
         """Nessun media associato al progetto: svuota player, waveform e overlay."""
@@ -272,7 +343,9 @@ class PreviewArea(QWidget):
         self.file_lbl.setText("")
         self.file_lbl.set_full_tooltip("")
         self._style_file_lbl()
-        self._preview_stack.setCurrentIndex(_PREVIEW_WAVEFORM)
+        self.duration_lbl.setText("durata " + _ms_to_full_label(0))
+        self.waveform.show_message("")
+        self._set_mode(MODE_EMPTY)
 
     def _set_overlay_subs(self, subs: List[Subtitle]):
         self._overlay_subs = list(subs)
@@ -290,20 +363,17 @@ class PreviewArea(QWidget):
 
     # ── Slots player ───────────────────────────────────────────────────────────
 
-    def _on_position(self, ms: int):
-        self.timecode_lbl.setText(_fmt_tc(ms))
-
     def _on_duration(self, ms: int):
-        self.duration_lbl.setText(f"durata {_fmt_tc(ms)}")
+        self.duration_lbl.setText("durata " + _ms_to_full_label(ms))
 
     def _update_subtitle_overlay(self, ms: int):
         """
         Aggiorna il testo dell'overlay in base alla posizione corrente.
-        Attivo solo quando è visibile il video (non la waveform).
+        Attivo solo quando nel monitor è visibile il video.
         """
         if self._subtitle_overlay is None:
             return
-        if self._preview_stack.currentIndex() != _PREVIEW_VIDEO:
+        if self._mode != MODE_VIDEO or self._monitor_stack.currentIndex() != _MONITOR_VIDEO:
             return
 
         pos_s = ms / 1000.0
@@ -336,8 +406,8 @@ class _VideoPlayerView(QGraphicsView):
 
         self._subtitle_text = ""
         self._font = QFont()
-        self._font.setPixelSize(18)
-        self._font.setWeight(QFont.DemiBold)
+        self._font.setPixelSize(16)
+        self._font.setWeight(QFont.Normal)
 
         # Scena e item video
         self._scene = QGraphicsScene(self)
@@ -397,8 +467,8 @@ class _VideoPlayerView(QGraphicsView):
         fm = QFontMetrics(self._font)
         vp_w = self.viewport().width()
         vp_h = self.viewport().height()
-        padding_h = 14
-        padding_v = 7
+        padding_h = 12
+        padding_v = 5
         max_text_w = int(vp_w * 0.88)
 
         # Wrapping manuale
@@ -431,11 +501,11 @@ class _VideoPlayerView(QGraphicsView):
             max_text_w,
         )
         box_x = (vp_w - box_w) // 2
-        box_y = vp_h - box_h - 14   # 14px dal fondo
+        box_y = vp_h - box_h - 22   # 22 px dal fondo
 
         p.setBrush(QBrush(theme.qcolor("overlay_bg")))
         p.setPen(Qt.NoPen)
-        p.drawRoundedRect(box_x, box_y, box_w, box_h, 5, 5)
+        p.drawRect(box_x, box_y, box_w, box_h)
 
         p.setPen(QPen(theme.qcolor("overlay_fg")))
         for i, line in enumerate(lines):
@@ -446,16 +516,3 @@ class _VideoPlayerView(QGraphicsView):
 
         p.end()
 
-
-def _fmt_tc(ms: int) -> str:
-    """ms → MM:SS.mmm  (ore solo se > 0)."""
-    total_ms = max(0, ms)
-    mmm = total_ms % 1000
-    total_s = total_ms // 1000
-    secs = total_s % 60
-    total_m = total_s // 60
-    mins = total_m % 60
-    hrs = total_m // 60
-    if hrs > 0:
-        return f"{hrs:02d}:{mins:02d}:{secs:02d}.{mmm:03d}"
-    return f"{mins:02d}:{secs:02d}.{mmm:03d}"

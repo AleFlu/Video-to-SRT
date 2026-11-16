@@ -1,11 +1,11 @@
 """
 export_tab.py — ExportTab: pannello esportazione (terza tab di ProjectWidget).
 
-Layout:
-  ┌── Header: N sub · fonte · badge ──────────────────────────────────────────┐
-  ├── Sezione "Salva file" (2 colonne: SRT★ VTT / TXT ASS / V2SRT) ──────────┤
-  ├── Sezione "Pubblica direttamente" (YouTube captions, Vimeo, ecc.) ─────────┤
-  └────────────────────────────────────────────────────────────────────────────┘
+Layout (mockup "Bianco e nero"):
+  ┌── Fascia info 56 px: N sottotitoli · fonte · tag · badge · avviso ──────────┐
+  ├── "Salva file" e "Pubblica direttamente": righe da 56 px ──┬─ Anteprima SRT ─┤
+  │   (sigla, titolo, descrizione, scorciatoia, icona)         │  mono, 560 px   │
+  └─────────────────────────────────────────────────────────────┴─────────────────┘
 
 API pubblica:
   refresh(segments_raw, editor_subs, source_path, is_modified)
@@ -17,105 +17,145 @@ from pathlib import Path
 from typing import List
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QColor, QPainter, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLayout, QPushButton,
     QFrame, QSizePolicy, QScrollArea, QStackedWidget, QPlainTextEdit,
 )
 
 from core.subtitle_model import Subtitle
 from ui.widgets import ElidedLabel
 from ui import icons, theme
+import platform_support
 
+_sl = platform_support.shortcut_label
 
-# ── Stili bottone export (theme-aware) ──────────────────────────────────────────
-
-def _ss_btn() -> str:
-    c = theme.c
-    return (
-        "QPushButton {"
-        f"  background: {c('card')}; border: 1px solid {c('card_border')}; border-radius: 4px;"
-        f"  color: {c('text')}; text-align: left; padding: 0 16px;"
-        "}"
-        f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('acc')}; }}"
-        f"QPushButton:pressed {{ background: {c('surface')}; }}"
-        + theme.focus_rule("QPushButton", 10)
-    )
-
-
-def _ss_btn_accent() -> str:
-    c = theme.c
-    return (
-        "QPushButton {"
-        f"  background: {c('acc_soft')}; border: 1px solid {c('acc')};"
-        f"  border-radius: 4px; color: {c('text')}; text-align: left; padding: 0 16px;"
-        "}"
-        f"QPushButton:hover {{ background: {c('acc_soft_2')}; border-color: {c('acc')}; }}"
-        f"QPushButton:pressed {{ background: {c('acc_soft')}; }}"
-        + theme.focus_rule("QPushButton", 10)
-    )
+# Misure del mockup
+_INFO_HEIGHT = 56
+_ROW_HEIGHT = 56
+_TAG_SIZE = (64, 28)
+_ASIDE_WIDTH = 560
 
 
 class _ExportButton(QPushButton):
-    """Bottone export: titolo in grassetto + descrizione su seconda riga (label figlie)."""
+    """
+    Riga di esportazione da 56 px a tutta larghezza: sigla (o icona) in un riquadro
+    bordato 64×28, titolo (600) + descrizione (12 px, dim), scorciatoia mono opzionale
+    e icona di scarico/copia. Il testo vive nelle label figlie: nome/descrizione
+    accessibili sono espliciti. `accent` = riga principale (barra e sigla in accento).
+    """
 
-    def __init__(self, title: str, subtitle: str, parent=None):
+    def __init__(self, title: str, subtitle: str, tag: str = "", icon_name: str = "download",
+                 hint: str = "", accent: bool = False, tag_icon: str = "", parent=None):
         super().__init__(parent)
+        self._accent = accent
+        self.setObjectName("exportRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
-        # Il testo vive nelle label figlie: nome/descrizione accessibili espliciti
         self.setAccessibleName(title)
         self.setAccessibleDescription(subtitle)
         self.setToolTip(subtitle)
 
-        self._inner = QWidget(self)
-        self._inner.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay = QVBoxLayout(self._inner)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(16)
+        lay.setSizeConstraint(QLayout.SetNoConstraint)   # l'altezza fissa non va persa
+
+        self.tag_lbl = QLabel(tag)
+        self.tag_lbl.setObjectName("exportTag")
+        self.tag_lbl.setAlignment(Qt.AlignCenter)
+        self.tag_lbl.setFixedSize(*_TAG_SIZE)
+        self._tag_icon = tag_icon
+        lay.addWidget(self.tag_lbl)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        texts.setContentsMargins(0, 0, 0, 0)
         self.title_lbl = QLabel(title)
+        self.title_lbl.setObjectName("exportTitle")
         self.sub_lbl = ElidedLabel(subtitle, Qt.ElideRight)
-        lay.addStretch(1)   # titolo + descrizione centrati verticalmente
-        for lbl in (self.title_lbl, self.sub_lbl):
-            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
-            lay.addWidget(lbl)
-        lay.addStretch(1)
-        # Altezza dal contenuto (due righe di testo + margini), non fissa
-        self.setMinimumHeight(max(56, self._inner.sizeHint().height() + 18))
+        self.sub_lbl.setObjectName("exportDesc")
+        texts.addStretch(1)
+        texts.addWidget(self.title_lbl)
+        texts.addWidget(self.sub_lbl)
+        texts.addStretch(1)
+        lay.addLayout(texts, 1)
 
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        self._inner.setGeometry(16, 0, max(0, self.width() - 32), self.height())
+        self.hint_lbl = QLabel(hint)
+        self.hint_lbl.setObjectName("exportHint")
+        self.hint_lbl.setVisible(bool(hint))
+        lay.addWidget(self.hint_lbl)
 
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setObjectName("exportIcon")
+        self.icon_lbl.setFixedSize(16, 16)
+        self._icon_name = icon_name
+        lay.addWidget(self.icon_lbl)
 
-# kind: "normal" | "accent" | "publish"  → ricolorabili su theme_changed
-def _export_btn(title: str, subtitle: str, kind: str, store: list) -> QPushButton:
-    """Crea un _ExportButton; `store` raccoglie (button, kind, title, sub) per il tema."""
-    b = _ExportButton(title, subtitle)
-    store.append((b, kind, b.title_lbl, b.sub_lbl))
-    return b
+        # dopo il layout: il layout imposterebbe da sé l'altezza minima del widget
+        self.setFixedHeight(_ROW_HEIGHT)
 
+        for w in (self.tag_lbl, self.title_lbl, self.sub_lbl, self.hint_lbl, self.icon_lbl):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.restyle()
 
-def _style_export_btn(b: QPushButton, kind: str, t: QLabel, s: QLabel):
-    c = theme.c
-    b.setStyleSheet({"accent": _ss_btn_accent()}.get(kind, _ss_btn()))
-    t.setStyleSheet(
-        f"color: {c('text')}; font-size: 13px; font-weight: 600;"
-        " background: transparent; border: none;"
-    )
-    s.setStyleSheet(
-        f"color: {c('muted')}; font-size: 11px;"
-        " background: transparent; border: none;"
-    )
+    def restyle(self):
+        """Colori dai token del tema (richiamato al cambio tema)."""
+        c = theme.c
+        acc = self._accent
+        self.setStyleSheet(
+            "QPushButton#exportRow {"
+            f" background: {c('panel') if acc else 'transparent'}; border: none;"
+            f" border-bottom: 1px solid {c('line')}; text-align: left; padding: 0;"
+            # il QSS globale dei QPushButton impone min-height: 28 px; qui 55 + 1 di bordo
+            f" min-height: {_ROW_HEIGHT - 1}px; }}"
+            f"QPushButton#exportRow:hover {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton#exportRow")
+            + "QLabel { background: transparent; border: none; }"
+            f"QLabel#exportTitle {{ color: {c('text')}; font-size: 13px; font-weight: 600; }}"
+            f"QLabel#exportDesc {{ color: {c('dim')}; font-size: 12px; }}"
+            f"QLabel#exportHint {{ color: {c('dim')}; font-family: {theme.FONT_MONO};"
+            " font-size: 11px; }"
+            "QLabel#exportTag {"
+            f" color: {c('acc') if acc else c('text')};"
+            f" border: 1px solid {c('acc') if acc else c('line')}; border-radius: 3px;"
+            f" font-family: {theme.FONT_MONO}; font-size: 12px; font-weight: 500; }}"
+        )
+        if self._tag_icon:
+            self.tag_lbl.setPixmap(icons.pixmap(self._tag_icon, theme.qcolor("dim"), 16))
+        self.icon_lbl.setPixmap(icons.pixmap(self._icon_name, theme.qcolor("dim"), 16))
+
+    def paintEvent(self, event):  # noqa: N802 (override Qt)
+        super().paintEvent(event)
+        if self._accent:
+            p = QPainter(self)
+            try:
+                p.fillRect(0, 0, 2, self.height(), theme.qcolor("acc"))
+            finally:
+                p.end()
 
 
 def _section_label(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color: {theme.c('muted')}; font-size: 10px; font-weight: 700;"
-        f" font-family: {theme.FONT_MONO};"
-    )
+    lbl.setObjectName("exportSection")
     return lbl
+
+
+class _SrtHighlighter(QSyntaxHighlighter):
+    """Anteprima SRT: numero e tempi attenuati, testo in primo piano (solo colore)."""
+
+    def highlightBlock(self, text: str):  # noqa: N802 (override Qt)
+        stripped = text.strip()
+        if stripped.isdigit() or stripped.startswith("…"):
+            token = "label"
+        elif "-->" in text:
+            token = "dim"
+        else:
+            token = "text"
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(theme.qcolor(token)))
+        self.setFormat(0, len(text), fmt)
 
 
 # ── ExportTab ─────────────────────────────────────────────────────────────────
@@ -212,11 +252,11 @@ class _ExportPlaceholder(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignCenter)
-        lay.setSpacing(12)
+        lay.setSpacing(10)
 
         self._icon = QLabel()
         self._icon.setAlignment(Qt.AlignCenter)
-        self._icon.setFixedSize(60, 60)
+        self._icon.setFixedSize(32, 32)
         lay.addWidget(self._icon, alignment=Qt.AlignCenter)
 
         self._msg = QLabel("Nessun sottotitolo da esportare")
@@ -233,15 +273,13 @@ class _ExportPlaceholder(QWidget):
 
     def _apply_palette(self, _name=None):
         c = theme.c
-        self._icon.setStyleSheet(
-            f"background: {c('raise')}; border: none; border-radius: 4px;"
-        )
-        self._icon.setPixmap(icons.pixmap("export", theme.qcolor("muted"), 28))
+        self._icon.setStyleSheet("background: transparent; border: none;")
+        self._icon.setPixmap(icons.pixmap("export", theme.qcolor("dim"), 24))
         self._msg.setStyleSheet(
-            f"color: {c('muted')}; font-size: 15px; font-weight: 600; background: transparent;"
+            f"color: {c('dim')}; font-size: 15px; font-weight: 600; background: transparent;"
         )
         self._sub.setStyleSheet(
-            f"color: {c('faint')}; font-size: 12px; background: transparent;"
+            f"color: {c('label')}; font-size: 12px; background: transparent;"
         )
 
 
@@ -253,170 +291,131 @@ class _ExportPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._rows: list = []   # righe _ExportButton, ri-tematizzabili
 
-        self._btn_store: list = []   # (button, kind, title_lbl, sub_lbl)
-
-        # Scroll esterno per tutta la pagina
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # ── Fascia informativa (56 px, panel) ──────────────────────────────────
+        self._info_card = QFrame()
+        self._info_card.setObjectName("exportInfo")
+        info_lay = QHBoxLayout(self._info_card)
+        info_lay.setContentsMargins(40, 0, 40, 0)
+        info_lay.setSpacing(20)
+        info_lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._info_card.setFixedHeight(_INFO_HEIGHT)
+
+        self._lbl_count = QLabel("—")
+        info_lay.addWidget(self._lbl_count)
+
+        self._lbl_source = ElidedLabel("")
+        # usa la larghezza del testo (può accorciarsi solo se manca spazio)
+        self._lbl_source.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        info_lay.addWidget(self._lbl_source)
+
+        self._lbl_origin = QLabel("")
+        self._lbl_origin.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        info_lay.addWidget(self._lbl_origin, 0, Qt.AlignVCenter)
+
+        self._badge_modified = QLabel("●  modificato nell'editor")
+        self._badge_modified.setVisible(False)
+        info_lay.addWidget(self._badge_modified)
+        info_lay.addStretch(1)
+
+        # Avviso: ci sono sottotitoli ma con testo vuoto (icona + testo a destra)
+        self._warn_icon = QLabel()
+        self._warn_icon.setFixedSize(14, 14)
+        self._warn_icon.setVisible(False)
+        info_lay.addWidget(self._warn_icon)
+        self._lbl_empty_warn = QLabel("")
+        self._lbl_empty_warn.setVisible(False)
+        info_lay.addWidget(self._lbl_empty_warn)
+        outer.addWidget(self._info_card)
+
+        # ── Corpo: colonna di sinistra + anteprima da 560 px ───────────────────
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        outer.addLayout(body, 1)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        outer.addWidget(self._scroll)
+        body.addWidget(self._scroll, 1)
 
         content = QWidget()
-        content.setStyleSheet("background: transparent;")
+        content.setObjectName("exportContent")
         self._scroll.setWidget(content)
-
         root = QVBoxLayout(content)
-        root.setContentsMargins(40, 36, 40, 40)
-        root.setSpacing(0)
-
-        # ── Header info ────────────────────────────────────────────────────────
-        self._info_card = QFrame()
-        self._info_card.setObjectName("exportInfo")
-        info_lay = QVBoxLayout(self._info_card)
-        info_lay.setContentsMargins(20, 14, 20, 14)
-        info_lay.setSpacing(6)
-
-        top_row = QHBoxLayout()
-        self._lbl_count = QLabel("—")
-        top_row.addWidget(self._lbl_count)
-
-        self._badge_modified = QLabel("Modificato nell'editor")
-        self._badge_modified.setVisible(False)
-        top_row.addWidget(self._badge_modified)
-        top_row.addStretch()
-        info_lay.addLayout(top_row)
-
-        self._lbl_source = ElidedLabel("")
-        info_lay.addWidget(self._lbl_source)
-
-        self._lbl_origin = QLabel("")
-        info_lay.addWidget(self._lbl_origin)
-
-        # Avviso: ci sono sottotitoli ma con testo vuoto
-        self._lbl_empty_warn = QLabel("")
-        self._lbl_empty_warn.setWordWrap(True)
-        self._lbl_empty_warn.setVisible(False)
-        info_lay.addWidget(self._lbl_empty_warn)
-
-        root.addWidget(self._info_card)
-        root.addSpacing(28)
+        root.setContentsMargins(40, 24, 40, 24)
+        root.setSpacing(26)
 
         # ── Sezione: Salva file ────────────────────────────────────────────────
-        root.addWidget(_section_label("Salva file"))
-        root.addSpacing(10)
-
-        # Prima riga: SRT (accent) + VTT
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-
-        self.btn_srt = _export_btn(
-            "SRT",
-            "SubRip Subtitle — standard universale",
-            "accent", self._btn_store,
-        )
-        self.btn_vtt = _export_btn(
-            "VTT",
-            "WebVTT — per video HTML5 e web player",
-            "normal", self._btn_store,
-        )
-        row1.addWidget(self.btn_srt)
-        row1.addWidget(self.btn_vtt)
-        root.addLayout(row1)
-        root.addSpacing(8)
-
-        # Seconda riga: TXT + ASS
-        row2 = QHBoxLayout()
-        row2.setSpacing(10)
-
-        self.btn_txt = _export_btn(
-            "TXT",
-            "Testo semplice — solo dialoghi, senza timing",
-            "normal", self._btn_store,
-        )
-        self.btn_ass = _export_btn(
-            "ASS",
-            "Advanced SubStation Alpha — stili avanzati",
-            "normal", self._btn_store,
-        )
-        row2.addWidget(self.btn_txt)
-        row2.addWidget(self.btn_ass)
-        root.addLayout(row2)
-        root.addSpacing(8)
-
-        # Terza riga: V2SRT (progetto) — full width
-        self.btn_v2srt = _export_btn(
-            "Progetto .v2srt",
-            "Salva tutto il progetto — riapribile e modificabile",
-            "normal", self._btn_store,
-        )
-        root.addWidget(self.btn_v2srt)
-        root.addSpacing(32)
+        self.btn_srt = self._row(
+            "SRT", "SubRip Subtitle — standard universale",
+            tag="SRT", hint=_sl("Ctrl+S"), accent=True)
+        self.btn_vtt = self._row(
+            "VTT", "WebVTT — per video HTML5 e web player", tag="VTT")
+        self.btn_txt = self._row(
+            "TXT", "Testo semplice — solo dialoghi, senza timing", tag="TXT")
+        self.btn_ass = self._row(
+            "ASS", "Advanced SubStation Alpha — stili avanzati", tag="ASS")
+        self.btn_v2srt = self._row(
+            "Progetto .v2srt", "Salva tutto il progetto — riapribile e modificabile",
+            tag="V2SRT", hint=_sl("Ctrl+Shift+S"))
+        root.addLayout(self._section(
+            "Salva file", [self.btn_srt, self.btn_vtt, self.btn_txt, self.btn_ass,
+                           self.btn_v2srt]))
 
         # ── Sezione: Pubblica direttamente ────────────────────────────────────
-        root.addWidget(_section_label("Pubblica direttamente"))
-        root.addSpacing(10)
-
-        pub_row1 = QHBoxLayout()
-        pub_row1.setSpacing(10)
-
-        self._btn_youtube = _export_btn(
+        self._btn_youtube = self._row(
             "YouTube Studio",
             "Copia il testo SRT negli appunti — da incollare in YouTube Studio",
-            "publish", self._btn_store,
-        )
+            icon_name="copy", tag_icon="copy")
         self._btn_youtube.clicked.connect(self._publish_youtube)
-
-        self._btn_vimeo = _export_btn(
-            "Vimeo",
-            "Esporta SRT da caricare nei sottotitoli di Vimeo",
-            "publish", self._btn_store,
-        )
+        self._btn_vimeo = self._row(
+            "Vimeo", "Esporta SRT da caricare nei sottotitoli di Vimeo", tag_icon="download")
         self._btn_vimeo.clicked.connect(self._publish_vimeo)
-
-        pub_row1.addWidget(self._btn_youtube)
-        pub_row1.addWidget(self._btn_vimeo)
-        root.addLayout(pub_row1)
-        root.addSpacing(8)
-
-        pub_row2 = QHBoxLayout()
-        pub_row2.setSpacing(10)
-
-        self._btn_premiere = _export_btn(
+        self._btn_premiere = self._row(
             "Premiere Pro / DaVinci",
-            "Esporta SRT — importa con File → Import nel progetto",
-            "publish", self._btn_store,
-        )
+            "Esporta SRT da importare nella timeline del montaggio", tag_icon="download")
         self._btn_premiere.clicked.connect(self._publish_premiere)
-
-        self._btn_clipboard = _export_btn(
-            "Copia negli appunti",
-            "Copia tutto il testo SRT — incolla dove vuoi",
-            "publish", self._btn_store,
-        )
+        self._btn_clipboard = self._row(
+            "Copia negli appunti", "Copia tutto il testo SRT — incolla dove vuoi",
+            icon_name="copy", tag_icon="copy")
         self._btn_clipboard.clicked.connect(self._publish_clipboard)
+        root.addLayout(self._section(
+            "Pubblica direttamente",
+            [self._btn_youtube, self._btn_vimeo, self._btn_premiere, self._btn_clipboard]))
+        root.addStretch(1)
 
-        pub_row2.addWidget(self._btn_premiere)
-        pub_row2.addWidget(self._btn_clipboard)
-        root.addLayout(pub_row2)
+        # ── Anteprima SRT (colonna destra, 560 px, panel) ──────────────────────
+        self._aside = QFrame()
+        self._aside.setObjectName("exportAside")
+        aside_lay = QVBoxLayout(self._aside)
+        aside_lay.setContentsMargins(0, 0, 0, 0)
+        aside_lay.setSpacing(0)
+        aside_lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._aside.setFixedWidth(_ASIDE_WIDTH)
 
-        root.addSpacing(28)
-
-        # ── Anteprima SRT ──────────────────────────────────────────────────────
-        root.addWidget(_section_label("Anteprima SRT"))
-        root.addSpacing(10)
+        self._aside_head = QFrame()
+        self._aside_head.setObjectName("exportAsideHead")
+        head_lay = QHBoxLayout(self._aside_head)
+        head_lay.setContentsMargins(20, 0, 20, 0)
+        head_lay.setSizeConstraint(QLayout.SetNoConstraint)
+        self._aside_head.setFixedHeight(44)
+        head_lay.addWidget(_section_label("Anteprima SRT"))
+        aside_lay.addWidget(self._aside_head)
 
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setAccessibleName("Anteprima SRT")
         self._preview.setMinimumHeight(self._preview.fontMetrics().lineSpacing() * 10 + 24)
-        root.addWidget(self._preview)
-        root.addStretch(1)
+        self._preview_hl = _SrtHighlighter(self._preview.document())
+        aside_lay.addWidget(self._preview, 1)
+        body.addWidget(self._aside)
 
         # Riferimento ai sottotitoli per le azioni di pubblicazione
         self._current_subs: list = []
@@ -425,43 +424,69 @@ class _ExportPanel(QWidget):
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._apply_palette)
 
+    def _row(self, title: str, subtitle: str, tag: str = "", icon_name: str = "download",
+             hint: str = "", accent: bool = False, tag_icon: str = "") -> _ExportButton:
+        b = _ExportButton(title, subtitle, tag=tag, icon_name=icon_name, hint=hint,
+                          accent=accent, tag_icon=tag_icon)
+        self._rows.append(b)
+        return b
+
+    def _section(self, title: str, rows: list) -> QVBoxLayout:
+        """Titolo + elenco di righe sotto una linea da 1 px."""
+        box = QVBoxLayout()
+        box.setSpacing(8)
+        box.addWidget(_section_label(title))
+        frame = QFrame()
+        frame.setObjectName("exportList")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        for r in rows:
+            lay.addWidget(r)
+        box.addWidget(frame)
+        return box
+
     # ── Tema ────────────────────────────────────────────────────────────────
 
-    def _apply_palette(self):
+    def _apply_palette(self, _name=None):
         c = theme.c
-        self._scroll.setStyleSheet(
+        self.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
-        )
-        self._info_card.setStyleSheet(
-            f"QFrame#exportInfo {{ background: {c('card')}; border: 1px solid {c('card_border')};"
-            " border-radius: 4px; }"
+            f"QWidget#exportContent {{ background: {c('bg')}; }}"
+            "QLabel { background: transparent; border: none; }"
+            f"QLabel#exportSection {{ color: {c('text')}; font-size: 12px; font-weight: 600; }}"
+            f"QFrame#exportList {{ background: transparent; border: none;"
+            f" border-top: 1px solid {c('line')}; }}"
+            f"QFrame#exportInfo {{ background: {c('panel')}; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
+            f"QFrame#exportAside {{ background: {c('panel')}; border: none;"
+            f" border-left: 1px solid {c('line')}; }}"
+            f"QFrame#exportAsideHead {{ background: {c('panel')}; border: none;"
+            f" border-bottom: 1px solid {c('line')}; }}"
         )
         self._lbl_count.setStyleSheet(
-            f"color: {c('text')}; font-size: 14px; font-weight: 600;"
-            " background: transparent; border: none;"
+            f"color: {c('text')}; font-family: {theme.FONT_MONO}; font-size: 15px;"
+            " font-weight: 500;"
         )
-        self._badge_modified.setStyleSheet(
-            f"color: {c('warn')}; font-size: 11px; background: transparent; border: none;"
-        )
-        self._lbl_source.setStyleSheet(
-            f"color: {c('muted')}; font-size: 11px; background: transparent; border: none;"
-        )
+        self._lbl_source.setStyleSheet(f"color: {c('dim')}; font-size: 13px;")
         self._lbl_origin.setStyleSheet(
-            f"color: {c('acc')}; font-size: 11px; background: transparent; border: none;"
+            f"color: {c('text')}; font-size: 12px; border: 1px solid {c('line')};"
+            " border-radius: 3px; padding: 2px 8px;"
         )
-        self._lbl_empty_warn.setStyleSheet(
-            f"color: {c('warn')}; font-size: 11px; background: transparent; border: none;"
-        )
+        self._badge_modified.setStyleSheet(f"color: {c('warn')}; font-size: 12px;")
+        self._lbl_empty_warn.setStyleSheet(f"color: {c('err')}; font-size: 12px;")
+        self._warn_icon.setPixmap(icons.pixmap("alert", theme.qcolor("err"), 14))
         self._preview.setStyleSheet(
             "QPlainTextEdit {"
-            f"  background: {c('inset')}; color: {c('dim')};"
-            f"  border: 1px solid {c('line')}; border-radius: 4px;"
+            f"  background: {c('panel')}; color: {c('dim')};"
+            "  border: none;"
             f"  font-family: {theme.FONT_MONO}; font-size: 12px;"
-            "  padding: 10px;"
+            "  padding: 16px 20px;"
             "}"
         )
-        for b, kind, t, s in self._btn_store:
-            _style_export_btn(b, kind, t, s)
+        self._preview_hl.rehighlight()
+        for r in self._rows:
+            r.restyle()
 
     # ── Handlers pubblicazione ─────────────────────────────────────────────────
 
@@ -535,6 +560,7 @@ class _ExportPanel(QWidget):
                 + (" — l'esportazione sarebbe vuota." if n_empty == n else ".")
             )
         self._lbl_empty_warn.setVisible(bool(n_empty))
+        self._warn_icon.setVisible(bool(n_empty))
         self._lbl_origin.setText(
             "Versione dell'editor" if has_editor_subs
             else "Trascrizione originale"

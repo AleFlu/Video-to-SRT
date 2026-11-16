@@ -38,6 +38,8 @@ class PlaceholderWidget(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAcceptDrops(True)
+        self.setObjectName("editorPlaceholder")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._drag_over = False
 
         root = QVBoxLayout(self)
@@ -49,7 +51,7 @@ class PlaceholderWidget(QWidget):
         self._icon.setAlignment(Qt.AlignCenter)
         root.addWidget(self._icon)
 
-        root.addSpacing(20)
+        root.addSpacing(14)
 
         self._title = QLabel("Nessuna trascrizione")
         self._title.setAlignment(Qt.AlignCenter)
@@ -66,7 +68,7 @@ class PlaceholderWidget(QWidget):
 
         self._btn = QPushButton("Apri file…")
         self._btn.setObjectName("primary")
-        self._btn.setMinimumHeight(40)
+        self._btn.setMinimumHeight(32)
         self._btn.setMinimumWidth(200)
         self._btn.setCursor(Qt.PointingHandCursor)
         self._btn.setToolTip(f"Apri file  {platform_support.shortcut_label('Ctrl+O')}")
@@ -83,12 +85,15 @@ class PlaceholderWidget(QWidget):
 
     def _apply_palette(self, _name=None):
         c = theme.c
-        self._icon.setStyleSheet(
-            "background: transparent;"
+        # Rilascio di un file: bordo da 1 px in accento (nessuna card, nessuna ombra)
+        self.setStyleSheet(
+            f"QWidget#editorPlaceholder {{ background: {c('bg')}; border: 1px solid transparent; }}"
+            f"QWidget#editorPlaceholder[dragOver=\"true\"] {{ border: 1px solid {c('acc')}; }}"
         )
-        self._icon.setPixmap(icons.pixmap("document", theme.qcolor("faint"), 48))
+        self._icon.setStyleSheet("background: transparent; border: none;")
+        self._icon.setPixmap(icons.pixmap("document", theme.qcolor("dim"), 32))
         self._title.setStyleSheet(
-            f"font-size: 18px; font-weight: 600; color: {c('dim')}; background: transparent;"
+            f"font-size: 15px; font-weight: 600; color: {c('dim')}; background: transparent;"
         )
         self._set_desc(self._desc.text(), error=getattr(self, "_desc_error", False))
 
@@ -96,7 +101,7 @@ class PlaceholderWidget(QWidget):
         self._desc_error = error
         self._desc.setText(text)
         self._desc.setStyleSheet(
-            f"font-size: 13px; color: {theme.c('err' if error else 'muted')};"
+            f"font-size: 13px; color: {theme.c('err' if error else 'dim')};"
             " background: transparent;"
         )
 

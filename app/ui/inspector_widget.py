@@ -14,15 +14,18 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QEvent
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QDoubleSpinBox,
     QPlainTextEdit, QFrame, QPushButton, QScrollArea
 )
 
 from core.subtitle_table_model import SubtitleTableModel, MAX_CPS, WARN_CPS
-from ui import theme
+from ui import icons, theme
 import platform_support
+
+# Larghezza della colonna delle etichette Inizio / Fine / Durata (mockup)
+_LABEL_COL = 52
 
 
 class InspectorWidget(QWidget):
@@ -37,7 +40,9 @@ class InspectorWidget(QWidget):
         self._current_row: Optional[int] = None
         self._model: Optional[SubtitleTableModel] = None
         self._updating = False  # evita loop durante refresh
-        self._sections: list = []   # (sep, label) per re-tematizzazione
+
+        self.setObjectName("inspector")
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         # Scroll per schermi piccoli
         outer = QVBoxLayout(self)
@@ -47,30 +52,39 @@ class InspectorWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
 
         content = QWidget()
+        content.setObjectName("inspectorContent")
         scroll.setWidget(content)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
-
-        # ---- Header ----
-        self.header = QLabel("Nessuna selezione")
-        self.header.setObjectName("sectionTitle")
-        layout.addWidget(self.header)
-
-        # ---- Tempi ----
-        self._section(layout, "Tempi")
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
 
         fm = self.fontMetrics()
-        lbl_w = max(fm.horizontalAdvance("Inizio"), fm.horizontalAdvance("Fine")) + 8
 
-        # Inizio
-        start_row = QHBoxLayout()
+        # ---- Header: "Sottotitolo N" + "N / tot" mono ----
+        head_row = QHBoxLayout()
+        self.header = QLabel("Nessuna selezione")
+        self.header.setObjectName("sectionTitle")
+        head_row.addWidget(self.header, 1)
+        self.counter_label = QLabel("")
+        self.counter_label.setObjectName("inspectorCounter")
+        head_row.addWidget(self.counter_label)
+        layout.addLayout(head_row)
+
+        # ---- Tempi: griglia etichetta (52 px) + campo ----
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, _LABEL_COL)
+        grid.setColumnStretch(1, 1)
+
         start_lbl = QLabel("Inizio")
-        start_lbl.setMinimumWidth(lbl_w)
-        start_row.addWidget(start_lbl)
+        start_lbl.setObjectName("inspectorLabel")
+        grid.addWidget(start_lbl, 0, 0)
         self.start_spin = QDoubleSpinBox()
         self.start_spin.setAccessibleName("Inizio sottotitolo (secondi)")
         start_lbl.setBuddy(self.start_spin)
@@ -79,14 +93,11 @@ class InspectorWidget(QWidget):
         self.start_spin.setSuffix(" s")
         self.start_spin.setSingleStep(0.1)
         self.start_spin.editingFinished.connect(self._on_start_changed)
-        start_row.addWidget(self.start_spin, 1)
-        layout.addLayout(start_row)
+        grid.addWidget(self.start_spin, 0, 1)
 
-        # Fine
-        end_row = QHBoxLayout()
         end_lbl = QLabel("Fine")
-        end_lbl.setMinimumWidth(lbl_w)
-        end_row.addWidget(end_lbl)
+        end_lbl.setObjectName("inspectorLabel")
+        grid.addWidget(end_lbl, 1, 0)
         self.end_spin = QDoubleSpinBox()
         self.end_spin.setAccessibleName("Fine sottotitolo (secondi)")
         end_lbl.setBuddy(self.end_spin)
@@ -95,72 +106,97 @@ class InspectorWidget(QWidget):
         self.end_spin.setSuffix(" s")
         self.end_spin.setSingleStep(0.1)
         self.end_spin.editingFinished.connect(self._on_end_changed)
-        end_row.addWidget(self.end_spin, 1)
-        layout.addLayout(end_row)
+        grid.addWidget(self.end_spin, 1, 1)
 
-        # Offset helpers — ordine: −100 −10 +10 +100
-        shift_row = QHBoxLayout()
-        shift_row.setSpacing(4)
+        dur_title = QLabel("Durata")
+        dur_title.setObjectName("inspectorLabel")
+        grid.addWidget(dur_title, 2, 0)
+        self.dur_label = QLabel("—")
+        self.dur_label.setObjectName("inspectorValue")
+        grid.addWidget(self.dur_label, 2, 1)
+        layout.addLayout(grid)
+
+        # ---- Sposta inizio e fine: 4 colonne, ordine −100 −10 +10 +100 ----
+        shift_box = QVBoxLayout()
+        shift_box.setSpacing(6)
+        shift_title = QLabel("Sposta inizio e fine")
+        shift_title.setObjectName("inspectorLabel")
+        shift_box.addWidget(shift_title)
+        shift_grid = QGridLayout()
+        shift_grid.setContentsMargins(0, 0, 0, 0)
+        shift_grid.setSpacing(4)
         self._shift_buttons = []
-        for label, delta in (("−100 ms", -0.1), ("−10 ms", -0.01),
-                             ("+10 ms", +0.01), ("+100 ms", +0.1)):
+        for i, (label, delta) in enumerate((("−100 ms", -0.1), ("−10 ms", -0.01),
+                                            ("+10 ms", +0.01), ("+100 ms", +0.1))):
             b = QPushButton(label)
-            # larghezza dalle metriche del font: niente testo tagliato con font grandi
-            b.setMinimumWidth(fm.horizontalAdvance(label) + 16)
-            b.setStyleSheet("QPushButton { padding: 4px 6px; font-size: 12px; }")
+            b.setObjectName("inspectorShift")
+            # larghezza dalle metriche del font mono: niente testo tagliato con font grandi
+            b.setMinimumWidth(QFontMetrics(self._mono_font(12)).horizontalAdvance(label) + 12)
             b.setToolTip(f"Sposta inizio e fine di {label}")
             b.setAccessibleName(f"Sposta di {label}")
             b.setProperty("shiftDelta", delta)
             b.clicked.connect(self._on_shift_button)
-            shift_row.addWidget(b, 1)
+            shift_grid.addWidget(b, 0, i)
+            shift_grid.setColumnStretch(i, 1)
             self._shift_buttons.append(b)
-        layout.addLayout(shift_row)
+        shift_box.addLayout(shift_grid)
+        layout.addLayout(shift_box)
 
-        # Info durata/CPS
-        self.dur_label = QLabel("—")
-        self.dur_label.setObjectName("muted")
-        layout.addWidget(self.dur_label)
-
-        # ---- Testo ----
-        self._section(layout, "Testo")
+        # ---- Testo: etichetta + suggerimento ⌘↵, campo 14 px, contatori ----
+        text_box = QVBoxLayout()
+        text_box.setSpacing(6)
+        text_head = QHBoxLayout()
+        text_title = QLabel("Testo")
+        text_title.setObjectName("inspectorLabel")
+        text_head.addWidget(text_title)
+        text_head.addStretch(1)
+        # Conferma testo: Ctrl+Invio, oppure uscendo dal campo
+        commit_hint = QLabel(f"{platform_support.shortcut_label('Ctrl+Return')} per applicare")
+        commit_hint.setObjectName("inspectorLabel")
+        commit_hint.setToolTip("Applicato anche uscendo dal campo")
+        text_head.addWidget(commit_hint)
+        text_box.addLayout(text_head)
 
         self.text_edit = QPlainTextEdit()
-        self.text_edit.setMinimumHeight(fm.lineSpacing() * 4 + 24)
+        self.text_edit.setObjectName("inspectorText")
+        self.text_edit.setMinimumHeight(max(92, fm.lineSpacing() * 4 + 24))
         self.text_edit.setPlaceholderText("Testo del sottotitolo…")
         self.text_edit.setAccessibleName("Testo del sottotitolo")
         self.text_edit.setTabChangesFocus(True)   # Tab passa al controllo successivo
         self.text_edit.textChanged.connect(self._on_text_changed_live)
         # Uscendo dal campo il testo viene confermato (mai perso in silenzio)
         self.text_edit.installEventFilter(self)
-        layout.addWidget(self.text_edit)
+        text_box.addWidget(self.text_edit)
 
         # Stats testo
         stats_row = QHBoxLayout()
         self.char_count_label = QLabel("0 caratteri")
-        self.char_count_label.setObjectName("subtitle")
+        self.char_count_label.setObjectName("inspectorStat")
         stats_row.addWidget(self.char_count_label)
         stats_row.addStretch(1)
         self.cps_label = QLabel("— CPS")
-        self.cps_label.setObjectName("subtitle")
+        self.cps_label.setObjectName("inspectorStat")
         stats_row.addWidget(self.cps_label)
-        layout.addLayout(stats_row)
+        text_box.addLayout(stats_row)
+        layout.addLayout(text_box)
 
-        # Conferma testo: Ctrl+Invio, oppure uscendo dal campo
-        commit_hint = QLabel(
-            f"{platform_support.shortcut_label('Ctrl+Return')} per applicare"
-            "  ·  applicato anche uscendo dal campo"
-        )
-        commit_hint.setWordWrap(True)
-        commit_hint.setObjectName("subtitle")
-        commit_hint.setAlignment(Qt.AlignRight)
-        layout.addWidget(commit_hint)
+        # ---- Diagnostica: linea sopra, icona + testo nel colore della gravità ----
+        self._diag_sep = QFrame()
+        self._diag_sep.setFrameShape(QFrame.NoFrame)
+        self._diag_sep.setFixedHeight(1)
+        layout.addWidget(self._diag_sep)
+        diag_title = QLabel("Diagnostica")
+        diag_title.setObjectName("inspectorLabel")
+        layout.addWidget(diag_title)
 
-        # ---- Problemi ----
-        self._section(layout, "Diagnostica")
-        self.issues_label = QLabel("—")
+        self._issues_box = QVBoxLayout()   # una riga (icona + testo) per problema
+        self._issues_box.setSpacing(6)
+        layout.addLayout(self._issues_box)
+        self.issues_label = QLabel("—")    # stato senza problemi / nessuna selezione
         self.issues_label.setWordWrap(True)
         self.issues_label.setObjectName("muted")
         layout.addWidget(self.issues_label)
+        self._issue_rows: list = []
 
         layout.addStretch(1)
 
@@ -172,34 +208,41 @@ class InspectorWidget(QWidget):
         # Stato iniziale: tutto disabilitato
         self._set_enabled(False)
 
+        self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
     # ---- Tema ----
-    def _on_theme_changed(self, _name=None):
+    @staticmethod
+    def _mono_font(px: int):
+        from PySide6.QtGui import QFont
+        f = QFont(platform_support.mono_font_family())
+        f.setPixelSize(px)
+        return f
+
+    def _apply_palette(self):
         c = theme.c
-        for sep, lbl in self._sections:
-            sep.setStyleSheet(f"background-color: {c('line')}; border: none;")
-            lbl.setStyleSheet(f"color: {c('muted')}; background: transparent;")
+        mono = theme.FONT_MONO
+        self.setStyleSheet(
+            f"QWidget#inspector, QWidget#inspectorContent {{ background: {c('panel')}; }}"
+            "QScrollArea { background: transparent; border: none; }"
+            "QLabel { background: transparent; border: none; }"
+            f"QLabel#inspectorLabel {{ color: {c('label')}; font-size: 11px; font-weight: 500; }}"
+            f"QLabel#inspectorValue {{ color: {c('text')}; font-family: {mono}; font-size: 13px; }}"
+            f"QLabel#inspectorCounter {{ color: {c('dim')}; font-family: {mono}; font-size: 13px; }}"
+            f"QLabel#inspectorStat {{ color: {c('dim')}; font-family: {mono}; font-size: 12px; }}"
+            f"QDoubleSpinBox {{ font-family: {mono}; font-size: 13px; }}"
+            f"QPushButton#inspectorShift {{ font-family: {mono}; font-size: 12px; padding: 0 4px;"
+            f" color: {c('text')}; }}"
+            f"QPlainTextEdit#inspectorText {{ font-size: 14px; padding: 8px 10px; }}"
+        )
+        self._diag_sep.setStyleSheet(f"background-color: {c('line')}; border: none;")
+
+    def _on_theme_changed(self, _name=None):
+        self._apply_palette()
         self._refresh()
 
     # ---- Utilities UI ----
-    def _section(self, layout: QVBoxLayout, title: str):
-        c = theme.c
-        sep = QFrame()
-        sep.setFrameShape(QFrame.NoFrame)
-        sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background-color: {c('line')}; border: none;")
-        layout.addWidget(sep)
-        lbl = QLabel(title)
-        f = QFont()
-        f.setPointSize(10)
-        f.setBold(True)
-        lbl.setFont(f)
-        lbl.setStyleSheet(f"color: {c('muted')}; background: transparent;")
-        layout.addWidget(lbl)
-        self._sections.append((sep, lbl))
-
     def _set_enabled(self, on: bool):
         for w in (self.start_spin, self.end_spin, self.text_edit, *self._shift_buttons):
             w.setEnabled(on)
@@ -238,7 +281,8 @@ class InspectorWidget(QWidget):
     def _refresh(self):
         if self._model is None or self._current_row is None:
             total = self._model.rowCount() if self._model else 0
-            self.header.setText(f"Nessuna selezione  ·  {total} sottotitoli")
+            self.header.setText("Nessuna selezione")
+            self.counter_label.setText(f"{total} sottotitoli")
             self._set_enabled(False)
             self._updating = True
             self.start_spin.setValue(0)
@@ -248,7 +292,9 @@ class InspectorWidget(QWidget):
             self.dur_label.setText("—")
             self.char_count_label.setText("0 caratteri")
             self.cps_label.setText("— CPS")
+            self._clear_issue_rows()
             self.issues_label.setText("—")
+            self.issues_label.setVisible(True)
             return
 
         sub = self._model.subtitle_at(self._current_row)
@@ -256,7 +302,8 @@ class InspectorWidget(QWidget):
             return
 
         total = self._model.rowCount()
-        self.header.setText(f"Sottotitolo  {self._current_row + 1} / {total}")
+        self.header.setText(f"Sottotitolo {self._current_row + 1}")
+        self.counter_label.setText(f"{self._current_row + 1} / {total}")
         self._set_enabled(True)
 
         self._updating = True
@@ -271,7 +318,7 @@ class InspectorWidget(QWidget):
             self.text_edit.setTextCursor(cur)
         self._updating = False
 
-        self.dur_label.setText(f"Durata: {sub.duration:.2f} s")
+        self.dur_label.setText(f"{sub.duration:.2f} s")
         self._update_text_stats(sub.text, sub.duration)
         self._update_issues()
 
@@ -279,32 +326,57 @@ class InspectorWidget(QWidget):
         txt = text.strip()
         n = len(txt)
         self.char_count_label.setText(f"{n} caratteri · {len(txt.split()) if txt else 0} parole")
+        color = theme.c("dim")
         if duration > 0 and n > 0:
             cps = n / duration
             self.cps_label.setText(f"{cps:.1f} CPS")
             if cps > MAX_CPS:
-                self.cps_label.setStyleSheet(f"color: {theme.c('err')}; font-weight: bold;")
+                color = theme.c("err")
             elif cps > WARN_CPS:
-                self.cps_label.setStyleSheet(f"color: {theme.c('warn')};")
-            else:
-                self.cps_label.setStyleSheet("")
+                color = theme.c("warn")
         else:
             self.cps_label.setText("— CPS")
-            self.cps_label.setStyleSheet("")
+        self.cps_label.setStyleSheet(f"color: {color};")
+
+    def _clear_issue_rows(self):
+        for row in self._issue_rows:
+            self._issues_box.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        self._issue_rows = []
+
+    def _add_issue_row(self, text: str, token: str):
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        icon = QLabel()
+        icon.setPixmap(icons.pixmap("alert", theme.qcolor(token), 16))
+        icon.setFixedSize(16, 16)
+        lay.addWidget(icon, 0, Qt.AlignTop)
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {theme.c(token)};")
+        lay.addWidget(lbl, 1)
+        self._issues_box.addWidget(row)
+        self._issue_rows.append(row)
 
     def _update_issues(self):
         if self._model is None or self._current_row is None:
             return
+        self._clear_issue_rows()
         issues = self._model.row_issues(self._current_row)
         if not issues:
             self.issues_label.setText("Nessun problema rilevato")
-            self.issues_label.setStyleSheet(f"color: {theme.c('ok')};")
+            self.issues_label.setStyleSheet(f"color: {theme.c('dim')};")
+            self.issues_label.setVisible(True)
         else:
-            self.issues_label.setText("\n".join(f"• {i}" for i in issues))
+            self.issues_label.setText("\n".join(issues))
+            self.issues_label.setVisible(False)
             sev = self._model.row_severity(self._current_row)
-            self.issues_label.setStyleSheet(
-                f"color: {theme.c('err' if sev == 'error' else 'warn')};"
-            )
+            token = "err" if sev == "error" else "warn"
+            for i in issues:
+                self._add_issue_row(i, token)
 
     # ---- Event handlers ----
     def _on_start_changed(self):

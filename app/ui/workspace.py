@@ -1,16 +1,20 @@
 """
-workspace.py — WorkspaceWidget (editor DaVinci, Stato 2).
+workspace.py — WorkspaceWidget (editor, Stato 2).
 
-Layout:
-  ┌──────────────────────────────────────────────┬──────────────┐
-  │  PreviewArea  (video o waveform)             │              │
-  ├──────────────────────────────────────────────┤  Inspector   │
-  │  SubtitleTimeline (tabella + toolbar)        │  (full col)  │
-  └──────────────────────────────────────────────┴──────────────┘
+Layout (misure del mockup):
+  ┌─────────────────────────────────────────────────────────────┐
+  │  PreviewArea: monitor 452 px | forma d'onda  (286 px)       │
+  │  riga di trasporto (46 px)                                  │
+  ├─────────────────────────────────────────────────────────────┤  ← QSplitter verticale
+  │  toolbar (42 px, a tutta larghezza)                         │
+  ├───────────────────────────────────────────┬─────────────────┤
+  │  SubtitleTimeline (tabella)               │  Inspector      │  ← QSplitter orizzontale
+  │                                           │  (324 px)       │
+  └───────────────────────────────────────────┴─────────────────┘
 
-- Inspector occupa l'intera altezza a destra (QSplitter orizzontale)
-- Preview e Timeline divisi da QSplitter verticale nella colonna sinistra
-- Tutti i pannelli ridimensionabili con limiti pratici
+- Preview e area di lavoro sono divisi da un QSplitter verticale, tabella e
+  inspector da uno orizzontale: i valori predefiniti sono quelli del mockup,
+  l'utente può ridimensionarli
 - Geometria salvata in QSettings
 """
 
@@ -19,18 +23,23 @@ from pathlib import Path
 from typing import List
 
 from PySide6.QtCore import Qt, Signal, QSettings, QTimer
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QSplitter, QSizePolicy
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QSizePolicy
 
 from core.constants import SUPPORTED_SUBTITLE_EXTS
 from core.subtitle_model import Subtitle
-from ui.preview_area import PreviewArea
+from ui.preview_area import PreviewArea, TOP_ZONE_HEIGHT
 from ui.subtitle_timeline import SubtitleTimeline, SYNC_DEBOUNCE_MS
 from ui import theme
 from ui.prefs import read_list
 
 
-_SETTINGS_HSPLIT = "workspace/hsplit_sizes"   # [left_col, inspector]
-_SETTINGS_VSPLIT = "workspace/vsplit_sizes"   # [preview, timeline]
+# Chiavi nuove (_v2): la struttura è cambiata (toolbar a tutta larghezza, ispettore
+# solo accanto alla tabella) e le vecchie proporzioni non vanno più bene.
+_SETTINGS_HSPLIT = "workspace/hsplit_sizes_v2"   # [tabella, inspector]
+_SETTINGS_VSPLIT = "workspace/vsplit_sizes_v2"   # [preview + trasporto, area di lavoro]
+
+INSPECTOR_WIDTH = 324
+_TRANSPORT_HEIGHT = 46
 
 
 def _splitter_style() -> str:
@@ -43,9 +52,9 @@ def _splitter_style() -> str:
 
 class WorkspaceWidget(QWidget):
     """
-    Editor DaVinci layout:
-      - Colonna sinistra: preview (top) + timeline tabella (bottom)
-      - Colonna destra: inspector (full height)
+    Layout dell'editor:
+      - in alto: preview (monitor + forma d'onda) e trasporto
+      - sotto: toolbar a tutta larghezza, poi tabella (sinistra) e inspector (destra)
     Tutti i confini sono QSplitter ridimensionabili.
     """
 
@@ -61,35 +70,37 @@ class WorkspaceWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Splitter orizzontale: [colonna sinistra | inspector] ──────────────
-        self._hsplit = QSplitter(Qt.Horizontal)
-        self._hsplit.setChildrenCollapsible(False)
-        self._hsplit.setHandleWidth(1)
-        self._hsplit.setStyleSheet(_splitter_style())
-        root.addWidget(self._hsplit)
-
-        # ── Colonna sinistra: splitter verticale [preview | timeline] ─────────
+        # ── Splitter verticale: [preview + trasporto | area di lavoro] ─────────
         self._vsplit = QSplitter(Qt.Vertical)
         self._vsplit.setChildrenCollapsible(False)
         self._vsplit.setHandleWidth(1)
         self._vsplit.setStyleSheet(_splitter_style())
+        root.addWidget(self._vsplit)
 
         self.preview = PreviewArea()
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.preview.setMinimumHeight(120)
+        self.preview.setMinimumHeight(190)
         self._vsplit.addWidget(self.preview)
 
+        # ── Area di lavoro: toolbar + splitter orizzontale [tabella | inspector] ──
+        lower = QWidget()
+        lower_lay = QVBoxLayout(lower)
+        lower_lay.setContentsMargins(0, 0, 0, 0)
+        lower_lay.setSpacing(0)
+
         self.timeline = SubtitleTimeline()
-        self.timeline.setMinimumHeight(160)
-        self._vsplit.addWidget(self.timeline)
+        self.timeline.setMinimumHeight(120)
+        # La toolbar sta a tutta larghezza, sopra tabella e inspector
+        self._toolbar = self.timeline.detach_toolbar()
+        lower_lay.addWidget(self._toolbar)
 
-        # Preview ~38%, timeline ~62%
-        self._vsplit.setStretchFactor(0, 2)
-        self._vsplit.setStretchFactor(1, 3)
+        self._hsplit = QSplitter(Qt.Horizontal)
+        self._hsplit.setChildrenCollapsible(False)
+        self._hsplit.setHandleWidth(1)
+        self._hsplit.setStyleSheet(_splitter_style())
+        self._hsplit.addWidget(self.timeline)
 
-        self._hsplit.addWidget(self._vsplit)
-
-        # ── Inspector — colonna destra full height ────────────────────────────
+        # ── Inspector ──────────────────────────────────────────────────────────
         # Istanza UNICA: è quella della timeline, già collegata all'undo stack
         # in SubtitleTimeline._wire(). Qui viene solo inserita nel layout.
         self.inspector = self.timeline.inspector
@@ -97,18 +108,22 @@ class WorkspaceWidget(QWidget):
         self.inspector.setMaximumWidth(420)
         self.inspector.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self._hsplit.addWidget(self.inspector)
-
-        # Inspector width ~280px, left col stretch
         self._hsplit.setStretchFactor(0, 1)
         self._hsplit.setStretchFactor(1, 0)
+        self._hsplit.setSizes([1116, INSPECTOR_WIDTH])
+        lower_lay.addWidget(self._hsplit, 1)
+        self._vsplit.addWidget(lower)
+
+        # Il top (preview + trasporto) tiene la sua altezza, l'area di lavoro si espande
+        self._vsplit.setStretchFactor(0, 0)
+        self._vsplit.setStretchFactor(1, 1)
+        self._vsplit.setSizes([TOP_ZONE_HEIGHT + _TRANSPORT_HEIGHT, 560])
 
         # ── Unifica player ─────────────────────────────────────────────────────
         self.timeline.set_player(self.preview.player)
 
         # ── Inspector toggle dalla toolbar timeline ────────────────────────────
-        self.timeline.act_toggle_insp.triggered.connect(
-            lambda checked: self.inspector.setVisible(checked)
-        )
+        self.timeline.act_toggle_insp.triggered.connect(self._on_toggle_inspector)
 
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
@@ -122,6 +137,9 @@ class WorkspaceWidget(QWidget):
         self._restore_geometry()
 
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
+
+    def _on_toggle_inspector(self, checked: bool):
+        self.inspector.setVisible(bool(checked))
 
     def _on_theme_changed(self, _name=None):
         self._hsplit.setStyleSheet(_splitter_style())

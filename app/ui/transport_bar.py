@@ -15,13 +15,20 @@ Si interfaccia con AudioPlayer tramite metodi diretti e ricevendo i suoi segnali
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QSlider, QStyle, QStyleOptionSlider,
+    QWidget, QHBoxLayout, QLabel, QLayout, QSlider, QStyle, QStyleOptionSlider,
     QComboBox, QToolButton, QFrame, QSizePolicy
 )
 
 from core.audio_player import AudioPlayer
 from ui import icons, theme
+import platform_support
+
+# Altezza della barra (mockup)
+_BAR_HEIGHT = 46
+# Suggerimento dei tasti di scorrimento (riposo)
+_JKL_IDLE = "J K L"
 
 # Scala delle velocità: la combo e i tasti J/L (in riproduzione) la percorrono a passi
 RATE_STEPS = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0)
@@ -43,6 +50,14 @@ def _ms_to_label(ms: int) -> str:
     if hrs > 0:
         return f"{hrs:02d}:{mins:02d}:{secs:02d}.{mmm:03d}"
     return f"{mins:02d}:{secs:02d}.{mmm:03d}"
+
+
+def _ms_to_full_label(ms: int) -> str:
+    """Formatta i millisecondi come HH:MM:SS.mmm (sempre con le ore, come nel mockup)."""
+    total_ms = max(0, ms)
+    total_s = total_ms // 1000
+    return (f"{total_s // 3600:02d}:{(total_s // 60) % 60:02d}:{total_s % 60:02d}"
+            f".{total_ms % 1000:03d}")
 
 
 class _SeekSlider(QSlider):
@@ -70,8 +85,8 @@ class _SeekSlider(QSlider):
 
 class TransportBar(QWidget):
     """
-    Widget barra trasporto: si aggancia ad un AudioPlayer esistente
-    tramite `bind_player(player)`.
+    Widget barra trasporto (46 px, su `panel`): si aggancia ad un AudioPlayer
+    esistente tramite `bind_player(player)`.
 
     Segnali:
         loop_toggled(bool)      — l'utente ha attivato/disattivato il loop
@@ -82,8 +97,7 @@ class TransportBar(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("transportBar")
-        # Altezza minima dalle metriche del font (niente altezze fisse che tagliano)
-        self.setMinimumHeight(max(44, self.fontMetrics().height() * 2 + 12))
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self._player: AudioPlayer | None = None
@@ -107,85 +121,92 @@ class TransportBar(QWidget):
 
     def _build_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(12, 0, 12, 0)
         layout.setSpacing(6)
+        layout.setSizeConstraint(QLayout.SetNoConstraint)
 
-        # --- Play / Pausa ---
+        # --- Play / Pausa (primario, quadrato 36x28) ---
         self.btn_play = QToolButton()
-        self._play_icon = icons.bind_icon(self.btn_play, "play", "text")
+        self.btn_play.setObjectName("transportPlay")
+        self._play_icon = icons.bind_icon(self.btn_play, "play", "acc_ink")
         self.btn_play.setToolTip("Riproduci  (Spazio)")
         self.btn_play.setAccessibleName("Riproduci")
-        self.btn_play.setMinimumSize(34, 32)
+        self.btn_play.setFixedSize(36, 28)
         self.btn_play.clicked.connect(self._on_play_clicked)
         layout.addWidget(self.btn_play)
 
-        # --- Stop ---
+        # --- Stop (secondario, 32x28) ---
         self.btn_stop = QToolButton()
+        self.btn_stop.setObjectName("transportStop")
         icons.bind_icon(self.btn_stop, "stop", "text")
         self.btn_stop.setToolTip("Ferma")
         self.btn_stop.setAccessibleName("Ferma")
-        self.btn_stop.setMinimumSize(32, 32)
+        self.btn_stop.setFixedSize(32, 28)
         self.btn_stop.clicked.connect(self._on_stop_clicked)
         layout.addWidget(self.btn_stop)
 
-        layout.addWidget(_make_separator())
+        layout.addSpacing(10)
 
-        # --- Timecode corrente ---
-        tc_w = self.fontMetrics().horizontalAdvance("00:00:00.000") + 12
-        self.label_pos = QLabel("00:00.000")
+        # --- Timecode corrente (grande, mono) + durata ---
+        mono = QFont(platform_support.mono_font_family())
+        mono.setPixelSize(20)
+        mono.setWeight(QFont.Medium)
+        tc_w = QFontMetrics(mono).horizontalAdvance("00:00:00.000") + 4
+        self.label_pos = QLabel(_ms_to_full_label(0))
         self.label_pos.setObjectName("timecode")
+        self.label_pos.setFont(mono)
         self.label_pos.setMinimumWidth(tc_w)
-        self.label_pos.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.label_pos.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.label_pos.setAccessibleName("Posizione corrente")
         layout.addWidget(self.label_pos)
 
-        self._sep_label = QLabel("/")
-        layout.addWidget(self._sep_label)
-
-        self.label_dur = QLabel("00:00.000")
-        self.label_dur.setObjectName("timecode")
-        self.label_dur.setMinimumWidth(tc_w)
+        self.label_dur = QLabel("/ " + _ms_to_full_label(0))
+        self.label_dur.setObjectName("timecodeTotal")
         self.label_dur.setAccessibleName("Durata totale")
         layout.addWidget(self.label_dur)
 
-        # --- Slider seek ---
+        # --- Slider seek (linea da 2 px + marcatore 2x14) ---
         self.seek_slider = _SeekSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setValue(0)
         self.seek_slider.setSingleStep(5)
         self.seek_slider.setPageStep(50)
+        self.seek_slider.setFixedHeight(20)
         self.seek_slider.setToolTip("Posizione: clicca o trascina per spostarti")
         self.seek_slider.setAccessibleName("Posizione di riproduzione")
         self.seek_slider.setObjectName("seekSlider")
-        self.seek_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.seek_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self.seek_slider.sliderMoved.connect(self._on_seek_moved)
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
         # click sul binario e tastiera: valueChanged fuori da un trascinamento
         self.seek_slider.valueChanged.connect(self._on_seek_value_changed)
+        layout.addSpacing(10)
         layout.addWidget(self.seek_slider, 1)
+        layout.addSpacing(10)
 
-        layout.addWidget(_make_separator())
-
-        # --- Volume ---
-        self._lbl_vol = QLabel("Vol")
+        # --- Volume: icona (nome accessibile al posto della scritta "Vol") + slider 84 px ---
+        self._lbl_vol = QLabel()
+        self._lbl_vol.setFixedSize(16, 16)
         self._lbl_vol.setToolTip("Volume")
+        self._lbl_vol.setAccessibleName("Volume")
         layout.addWidget(self._lbl_vol)
 
         self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setObjectName("volumeSlider")
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
-        self.volume_slider.setFixedWidth(72)
+        self.volume_slider.setFixedSize(84, 20)
         self.volume_slider.setToolTip("Volume")
         self.volume_slider.setAccessibleName("Volume")
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        self._lbl_vol.setBuddy(self.volume_slider)
         layout.addWidget(self.volume_slider)
 
         layout.addWidget(_make_separator())
 
         # --- Velocità ---
         self.rate_combo = QComboBox()
+        self.rate_combo.setObjectName("rateCombo")
         for value in RATE_STEPS:
             self.rate_combo.addItem(_rate_label(value), value)
         self.rate_combo.setCurrentIndex(RATE_STEPS.index(1.0))
@@ -195,31 +216,31 @@ class TransportBar(QWidget):
         self.rate_combo.currentIndexChanged.connect(self._on_rate_changed)
         layout.addWidget(self.rate_combo)
 
-        layout.addWidget(_make_separator())
-
         # --- Toggle loop ---
         self.btn_loop = QToolButton()
-        icons.bind_icon(self.btn_loop, "loop", "text")
+        self.btn_loop.setObjectName("transportLoop")
+        self._loop_icon = icons.bind_icon(self.btn_loop, "loop", "dim")
         self.btn_loop.setToolTip("Ripeti il sottotitolo selezionato")
         self.btn_loop.setAccessibleName("Ripeti il sottotitolo selezionato")
         self.btn_loop.setCheckable(True)
-        self.btn_loop.setMinimumSize(32, 32)
+        self.btn_loop.setFixedSize(32, 28)
         self.btn_loop.toggled.connect(self.loop_toggled)
+        self.btn_loop.toggled.connect(self._on_loop_toggled)
         layout.addWidget(self.btn_loop)
 
-        layout.addWidget(_make_separator())
-
         # --- Indicatore JKL ---
-        self._jkl_lbl = QLabel("J·K·L")
+        self._jkl_lbl = QLabel(_JKL_IDLE)
         self._jkl_lbl.setObjectName("jklIndicator")
         self._jkl_lbl.setToolTip(
             "J: indietro di 2 s (in riproduzione: più lento)\n"
             "K: pausa e velocità 1×\n"
             "L: riproduci (in riproduzione: più veloce)"
         )
-        self._jkl_lbl.setMinimumWidth(self.fontMetrics().horizontalAdvance("J·K·L") + 12)
-        self._jkl_lbl.setAlignment(Qt.AlignCenter)
+        layout.addSpacing(6)
         layout.addWidget(self._jkl_lbl)
+
+        # dopo il layout: il layout imposterebbe da sé l'altezza minima del widget
+        self.setFixedHeight(_BAR_HEIGHT)
 
         # Stato iniziale disabilitato (nessun file caricato)
         self._set_enabled(False)
@@ -228,30 +249,67 @@ class TransportBar(QWidget):
     # Tema
     # ----------------------------------------------------------------
 
-    def _apply_palette(self):
+    def _apply_palette(self, _name=None):
         c = theme.c
-        tc_ss = (
-            f"font-family: {theme.FONT_MONO}; font-size: 14px; font-weight: 600;"
-            f" color: {c('text')}; background: transparent;"
+        self.setStyleSheet(
+            f"QWidget#transportBar {{ background: {c('panel')};"
+            f" border-bottom: 1px solid {c('line')}; }}"
+            "QWidget#transportBar QLabel { background: transparent; border: none; }"
+            "QWidget#transportBar QSlider { background: transparent; border: none; }"
+            f"QFrame#transportSep {{ background: {c('line')}; border: none; }}"
+            # slider di posizione: linea da 2 px, parte suonata in accento, marcatore 2x14
+            "QSlider#seekSlider::groove:horizontal {"
+            f" height: 2px; background: {c('line')}; border: none; border-radius: 0; }}"
+            "QSlider#seekSlider::sub-page:horizontal {"
+            f" background: {c('acc')}; height: 2px; border-radius: 0; }}"
+            "QSlider#seekSlider::add-page:horizontal {"
+            f" background: {c('line')}; height: 2px; border-radius: 0; }}"
+            "QSlider#seekSlider::handle:horizontal {"
+            f" background: {c('acc')}; width: 2px; height: 14px; margin: -6px 0; border-radius: 0; }}"
+            "QSlider#seekSlider::handle:horizontal:disabled { background: " + c('faint') + "; }"
+            # volume: linea da 2 px, livello in `dim`, marcatore 2x12 in `text`
+            "QSlider#volumeSlider::groove:horizontal {"
+            f" height: 2px; background: {c('line')}; border: none; border-radius: 0; }}"
+            "QSlider#volumeSlider::sub-page:horizontal {"
+            f" background: {c('dim')}; height: 2px; border-radius: 0; }}"
+            "QSlider#volumeSlider::add-page:horizontal {"
+            f" background: {c('line')}; height: 2px; border-radius: 0; }}"
+            "QSlider#volumeSlider::handle:horizontal {"
+            f" background: {c('text')}; width: 2px; height: 12px; margin: -5px 0; border-radius: 0; }}"
+            # play primario, stop e loop
+            f"QToolButton#transportPlay {{ background: {c('acc_fill')}; color: {c('acc_ink')};"
+            " border: 1px solid transparent; border-radius: 4px; padding: 0; }"
+            f"QToolButton#transportPlay:hover {{ background: {c('acc_fill_h')}; }}"
+            f"QToolButton#transportPlay:disabled {{ background: {c('raise')}; }}"
+            f"QToolButton#transportStop {{ background: transparent; border: 1px solid {c('line')};"
+            " border-radius: 4px; padding: 0; }"
+            f"QToolButton#transportStop:hover {{ background: {c('raise')};"
+            f" border-color: {c('line_2')}; }}"
+            f"QToolButton#transportStop:disabled {{ border-color: {c('line')}; }}"
+            "QToolButton#transportLoop { background: transparent; border: 1px solid transparent;"
+            " border-radius: 4px; padding: 0; }"
+            f"QToolButton#transportLoop:hover {{ background: {c('raise')}; }}"
+            f"QToolButton#transportLoop:checked {{ background: {c('raise')};"
+            f" border: 1px solid {c('acc')}; }}"
+            + theme.focus_rule("QToolButton#transportPlay", 4)
+            + theme.focus_rule("QToolButton#transportStop", 4)
+            + theme.focus_rule("QToolButton#transportLoop", 4)
+            # velocità: mono, bordo di 1 px
+            + f"QComboBox#rateCombo {{ background: transparent; color: {c('text')};"
+            f" border: 1px solid {c('line')}; border-radius: 4px; padding: 0 4px 0 9px;"
+            f" min-height: 26px; font-family: {theme.FONT_MONO}; font-size: 13px; }}"
+            f"QComboBox#rateCombo:hover {{ background: {c('raise')}; border-color: {c('line_2')}; }}"
         )
-        self.label_pos.setStyleSheet(tc_ss)
+        self.label_pos.setStyleSheet(
+            f"color: {c('text')}; letter-spacing: 0.2px; font-family: {theme.FONT_MONO};"
+            " font-size: 20px; font-weight: 500; background: transparent;"
+        )
         self.label_dur.setStyleSheet(
-            f"font-family: {theme.FONT_MONO}; font-size: 12px; color: {c('muted')};"
-            " background: transparent;"
+            f"font-family: {theme.FONT_MONO}; font-size: 12px; color: {c('dim')};"
+            " background: transparent; padding-top: 3px; padding-left: 4px;"
         )
-        self._sep_label.setStyleSheet(f"color: {c('muted')}; background: transparent;")
-        self._lbl_vol.setStyleSheet(
-            f"color: {c('muted')}; font-size: 11px; background: transparent;"
-        )
+        self._lbl_vol.setPixmap(icons.pixmap("volume", theme.qcolor("dim"), 16))
         self._jkl_reset()
-        # play button accentato
-        self.btn_play.setStyleSheet(
-            f"QToolButton {{ background: {c('acc_fill')}; color: {c('acc_ink')};"
-            " border: none; border-radius: 4px; font-size: 13px; }"
-            f"QToolButton:hover {{ background: {c('acc_fill_h')}; }}"
-            f"QToolButton:disabled {{ background: {c('card_2')}; color: {c('faint')}; }}"
-            + theme.focus_rule("QToolButton", 7)
-        )
 
     # ----------------------------------------------------------------
     # Binding con AudioPlayer
@@ -280,7 +338,7 @@ class TransportBar(QWidget):
     @Slot(int)
     def _on_position_changed(self, ms: int):
         if not self._dragging_seek:
-            self.label_pos.setText(_ms_to_label(ms))
+            self.label_pos.setText(_ms_to_full_label(ms))
             if self._duration_ms > 0:
                 self._syncing = True
                 self.seek_slider.setValue(int(ms * 1000 / self._duration_ms))
@@ -289,7 +347,7 @@ class TransportBar(QWidget):
     @Slot(int)
     def _on_duration_changed(self, ms: int):
         self._duration_ms = ms
-        self.label_dur.setText(_ms_to_label(ms))
+        self.label_dur.setText("/ " + _ms_to_full_label(ms))
 
     @Slot(str)
     def _on_state_changed(self, state: str):
@@ -339,7 +397,7 @@ class TransportBar(QWidget):
 
     def _on_seek_moved(self, value: int):
         if self._duration_ms > 0:
-            self.label_pos.setText(_ms_to_label(self._value_to_ms(value)))
+            self.label_pos.setText(_ms_to_full_label(self._value_to_ms(value)))
 
     def _on_seek_released(self):
         self._dragging_seek = False
@@ -352,7 +410,7 @@ class TransportBar(QWidget):
             return
         if self._player and self._duration_ms > 0:
             ms = self._value_to_ms(value)
-            self.label_pos.setText(_ms_to_label(ms))
+            self.label_pos.setText(_ms_to_full_label(ms))
             self._player.seek(ms)
 
     def _on_volume_changed(self, value: int):
@@ -373,6 +431,10 @@ class TransportBar(QWidget):
         for w in (self.btn_play, self.btn_stop, self.seek_slider, self.btn_loop):
             w.setEnabled(enabled)
 
+    def _on_loop_toggled(self, checked: bool) -> None:
+        """Il loop attivo si vede: icona piena di contrasto + sfondo rialzato e bordo."""
+        self._loop_icon.set_icon("loop", "text" if checked else "dim")
+
     def set_jkl_key(self, key: str):
         """
         Evidenzia il tasto JKL attivo nell'indicatore.
@@ -381,14 +443,13 @@ class TransportBar(QWidget):
         key = key.upper()
         c = theme.c
         parts = []
-        _colors = {"J": c("acc"), "K": c("warn"), "L": c("ok")}
         for k in ("J", "K", "L"):
             if k == key:
-                parts.append(f'<span style="color:{_colors[k]};font-weight:bold;">{k}</span>')
+                parts.append(f'<span style="color:{c("text")};font-weight:600;">{k}</span>')
             else:
-                parts.append(f'<span style="color:{c("muted")};">{k}</span>')
+                parts.append(f'<span style="color:{c("label")};">{k}</span>')
         self._jkl_lbl.setTextFormat(Qt.RichText)
-        self._jkl_lbl.setText("·".join(parts))
+        self._jkl_lbl.setText(" ".join(parts))
 
         # Reset automatico dopo 600 ms (timer figlio: muore con la barra)
         if key:
@@ -396,19 +457,16 @@ class TransportBar(QWidget):
 
     def _jkl_reset(self):
         self._jkl_lbl.setTextFormat(Qt.PlainText)
-        self._jkl_lbl.setText("J·K·L")
+        self._jkl_lbl.setText(_JKL_IDLE)
         self._jkl_lbl.setStyleSheet(
-            f"font-family: {theme.FONT_MONO};"
-            "font-size: 11px;"
-            f"color: {theme.c('muted')};"
-            "background: transparent;"
-            ""
+            f"font-family: {theme.FONT_MONO}; font-size: 11px;"
+            f" color: {theme.c('label')}; background: transparent;"
         )
 
 
 def _make_separator() -> QFrame:
     sep = QFrame()
     sep.setFrameShape(QFrame.NoFrame)
-    sep.setFixedWidth(1)
-    sep.setStyleSheet(f"background-color: {theme.c('line')}; border: none;")
+    sep.setFixedSize(1, 18)
+    sep.setObjectName("transportSep")   # colore dal foglio di stile della barra (segue il tema)
     return sep

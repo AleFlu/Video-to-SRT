@@ -21,14 +21,15 @@ import subprocess
 import threading
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal, QRect, QRectF, QPointF, QObject
+from PySide6.QtCore import Qt, Signal, QRect, QRectF, QObject
 from PySide6.QtGui import (
-    QPainter, QPainterPath, QPen, QBrush, QFont, QFontMetrics, QPixmap, QPolygonF,
+    QPainter, QPainterPath, QPen, QFont, QFontMetrics, QPixmap,
 )
 from PySide6.QtWidgets import QWidget, QSizePolicy
 
 from core.subtitle_model import Subtitle
 from ui import theme
+from ui.transport_bar import _ms_to_label
 import platform_support
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,12 @@ _BLOCK_FRAMES = 65536
 _FFMPEG_RATE = 8000
 # Soglia (px) sotto cui un trascinamento è considerato un click
 _CLICK_SLOP = 5
+# Geometria (mockup): righello 22 px in alto, corsia dei blocchi 52 px in basso
+_RULER_H = 22
+_LANE_H = 52
+# Barre della forma d'onda: 2 px di larghezza ogni 3
+_BAR_PITCH = 3
+_BAR_W = 2
 
 
 # -----------------------------------------------------------------------
@@ -267,7 +274,7 @@ class WaveformWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("waveformWidget")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(_RULER_H + _LANE_H + 41)
         self.setAccessibleName("Forma d'onda")
 
         # Dati audio (picchi normalizzati)
@@ -310,6 +317,8 @@ class WaveformWidget(QWidget):
         # Cache dello strato statico
         self._cache: QPixmap | None = None
         self._cache_key = None
+        self._played_cache: QPixmap | None = None   # barre in accento (parte già suonata)
+        self._played_key = None
         self._content_ver = 0   # incrementato quando cambiano dati/sottotitoli/selezione
 
         self.setMouseTracking(True)
@@ -369,10 +378,11 @@ class WaveformWidget(QWidget):
             self.update()
             return
         new_x = self._ms_to_x(ms)
-        h = self.height()
-        for x in (old_x, new_x):
-            if x is not None:
-                self.update(QRect(x - 7, 0, 14, h))
+        xs = [x for x in (old_x, new_x) if x is not None]
+        if xs:
+            # tra i due playhead cambia anche il colore delle barre; il flag è largo ~70 px
+            left, right = min(xs) - 45, max(xs) + 45
+            self.update(QRect(left, 0, right - left, self.height()))
 
     def set_subtitles(self, subtitles: List[Subtitle],
                       severity: List[str] | None = None) -> None:
@@ -450,21 +460,31 @@ class WaveformWidget(QWidget):
     # Rendering
     # ----------------------------------------------------------------
 
-    def _font(self, delta_pt: float, mono: bool = False) -> QFont:
+    def _font(self, px: int, mono: bool = False, weight=None) -> QFont:
+        """Font a dimensione in pixel (11 px per righello, blocchi e flag)."""
         family = platform_support.mono_font_family() if mono else platform_support.ui_font_family()
         f = QFont(family)
-        base = self.font().pointSizeF()
-        f.setPointSizeF(max(7.0, (base if base > 0 else 12.0) + delta_pt))
+        f.setPixelSize(px)
+        if weight is not None:
+            f.setWeight(weight)
         return f
 
-    def _static_layer(self) -> QPixmap:
+    def _cache_signature(self):
         dpr = self.devicePixelRatioF()
-        key = (self.width(), self.height(), dpr, self._view_start_ms, self._view_end_ms,
-               self._duration_ms, theme.get_theme(), self._content_ver, self._loading)
-        if self._cache is not None and self._cache_key == key:
-            return self._cache
+        return (self.width(), self.height(), dpr, self._view_start_ms, self._view_end_ms,
+                self._duration_ms, theme.get_theme(), self._content_ver, self._loading)
+
+    def _new_layer(self) -> QPixmap:
+        dpr = self.devicePixelRatioF()
         pix = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
         pix.setDevicePixelRatio(dpr)
+        return pix
+
+    def _static_layer(self) -> QPixmap:
+        key = self._cache_signature()
+        if self._cache is not None and self._cache_key == key:
+            return self._cache
+        pix = self._new_layer()
         p = QPainter(pix)
         try:
             self.render_static(p, self.width(), self.height())
@@ -473,42 +493,73 @@ class WaveformWidget(QWidget):
         self._cache, self._cache_key = pix, key
         return pix
 
+    def _played_layer(self) -> QPixmap:
+        """Strato (trasparente) con le sole barre in accento: se ne copia la parte già suonata."""
+        key = self._cache_signature()
+        if self._played_cache is not None and self._played_key == key:
+            return self._played_cache
+        pix = self._new_layer()
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        try:
+            if self._mins is not None and not self._loading:
+                self._draw_bars(p, self.width(), self.height(), theme.qcolor("acc"))
+        finally:
+            p.end()
+        self._played_cache, self._played_key = pix, key
+        return pix
+
     def render_static(self, painter: QPainter, w: int, h: int) -> None:
-        """Disegna lo strato statico (sfondo, onda, blocchi, righello) su `painter`."""
+        """Disegna lo strato statico (sfondo, onda, righello, corsia e blocchi) su `painter`."""
         painter.fillRect(0, 0, w, h, theme.qcolor("wave_bg"))
         if self._mins is not None and not self._loading:
-            self._draw_waveform(painter, w, h)
+            self._draw_bars(painter, w, h, theme.qcolor("wave"))
         if self._status_msg:
             self._draw_status(painter, w, h)
+        self._draw_ruler(painter, w, h)
+        self._draw_lane(painter, w, h)
         if not self._loading:
             self._draw_subtitle_blocks(painter, w, h)
-        self._draw_ticks(painter, w, h)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
+            w, h = self.width(), self.height()
             painter.drawPixmap(0, 0, self._static_layer())
-            self._draw_playhead(painter, self.width(), self.height())
+            x = self._ms_to_x(self._playhead_ms)
+            if x is not None and self._mins is not None and not self._loading:
+                # parte già suonata: copia delle barre in accento fino al playhead
+                dpr = self.devicePixelRatioF()
+                painter.drawPixmap(QRect(0, 0, x, h), self._played_layer(),
+                                   QRect(0, 0, int(x * dpr), int(h * dpr)))
+            self._draw_playhead(painter, w, h)
         finally:
             painter.end()
 
+    def _wave_area(self, h: int) -> Tuple[int, int]:
+        """(y alto, y basso) dell'area della forma d'onda, tra righello e corsia."""
+        return _RULER_H, max(_RULER_H + 1, h - _LANE_H - 1)
+
     def _draw_status(self, painter: QPainter, w: int, h: int):
-        painter.setPen(theme.qcolor("muted"))
-        painter.setFont(self._font(-1))
-        painter.drawText(QRect(12, 0, w - 24, h), Qt.AlignCenter | Qt.TextWordWrap,
+        top, bottom = self._wave_area(h)
+        painter.setPen(theme.qcolor("dim"))
+        painter.setFont(self._font(12))
+        painter.drawText(QRect(12, top, w - 24, bottom - top), Qt.AlignCenter | Qt.TextWordWrap,
                          self._status_msg)
 
-    def _draw_waveform(self, painter: QPainter, w: int, h: int):
+    def _draw_bars(self, painter: QPainter, w: int, h: int, color):
+        """Barre sottili (2 px ogni 3) con l'ampiezza massima del tratto di tempo coperto."""
         import numpy as np
         mins, maxs = self._mins, self._maxs
         n = len(mins) if mins is not None else 0
         view_start, view_end = self._view_start_ms, self._view_end_ms
         if n == 0 or w <= 0 or view_end <= view_start or self._bucket_ms <= 0:
             return
-        span = view_end - view_start
-        # Bucket coperti da ogni colonna di pixel
+        top, bottom = self._wave_area(h)
+        nb = max(1, w // _BAR_PITCH)
+        per_bar = (view_end - view_start) / w * _BAR_PITCH
         edges = np.floor(
-            (view_start + np.arange(w + 1) * (span / w)) / self._bucket_ms
+            (view_start + np.arange(nb + 1) * per_bar) / self._bucket_ms
         ).astype(np.int64)
         edges = np.clip(edges, 0, n)
         starts = edges[:-1]
@@ -517,22 +568,17 @@ class WaveformWidget(QWidget):
             return
         cols = np.nonzero(valid)[0]
         idx = starts[valid]
-        col_min = np.minimum.reduceat(mins, idx)
-        col_max = np.maximum.reduceat(maxs, idx)
-
-        cy = h / 2.0
-        half_h = cy * 0.88
-        top = [QPointF(float(x), cy - float(v) * half_h) for x, v in zip(cols, col_max)]
-        bottom = [QPointF(float(x), cy - float(v) * half_h)
-                  for x, v in zip(cols[::-1], col_min[::-1])]
-        path = QPainterPath()
-        path.addPolygon(QPolygonF(top + bottom))
-        path.closeSubpath()
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.fillPath(path, QBrush(theme.qcolor("wave_fill")))
-        painter.setPen(QPen(theme.qcolor("acc"), 0.6))
-        painter.drawPath(path)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        end = max(int(edges.max()), int(idx.max()) + 1)
+        col_min = np.minimum.reduceat(mins[:end], idx)
+        col_max = np.maximum.reduceat(maxs[:end], idx)
+        amp = np.maximum(np.abs(col_min), np.abs(col_max))
+        cy = (top + bottom) / 2.0
+        half = max(2.0, (bottom - top) / 2.0 - 6.0)
+        heights = np.maximum(2, np.rint(amp * half * 2)).astype(np.int64)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        for c, bh in zip(cols.tolist(), heights.tolist()):
+            painter.drawRect(c * _BAR_PITCH, int(cy - bh / 2), _BAR_W, bh)
 
     def _visible_subs(self, view_start: float, view_end: float):
         """Sottotitoli che intersecano la vista (bisect sull'indice ordinato)."""
@@ -543,8 +589,14 @@ class WaveformWidget(QWidget):
                 yield start, end, row
 
     def _block_geometry(self, h: int) -> Tuple[int, int]:
-        block_h = max(18, h // 4)
-        return h - block_h - 2, block_h
+        """(y, altezza) dei blocchi: dentro la corsia da 52 px, 10 px sotto il suo bordo."""
+        lane_y = h - _LANE_H
+        return lane_y + 10, 32
+
+    def _draw_lane(self, painter: QPainter, w: int, h: int):
+        lane_y = h - _LANE_H
+        painter.fillRect(0, lane_y, w, _LANE_H, theme.qcolor("panel"))
+        painter.fillRect(0, lane_y - 1, w, 1, theme.qcolor("line"))
 
     def _draw_subtitle_blocks(self, painter: QPainter, w: int, h: int):
         if not self._sub_index or self._duration_ms == 0:
@@ -555,38 +607,34 @@ class WaveformWidget(QWidget):
         span = view_end - view_start
 
         block_y, block_h = self._block_geometry(h)
-        font = self._font(-3)
+        font = self._font(11)
         painter.setFont(font)
         fm = QFontMetrics(font)
-        colors = {
-            "error": theme.qcolor("err"), "warning": theme.qcolor("warn"),
-            "ok": theme.qcolor("ok"), "sel": theme.qcolor("acc"),
-        }
-        for col in colors.values():
-            col.setAlpha(120)
-        colors["sel"].setAlpha(170)
-        outline = QPen(theme.qcolor("wave_outline"), 1)
-        text_pen = QPen(theme.qcolor("text"))
+        border = {"error": theme.qcolor("err"), "warning": theme.qcolor("warn"),
+                  "ok": theme.qcolor("line")}
+        sel_border = theme.qcolor("acc")
+        fill = theme.qcolor("raise")
+        sel_fill = theme.qcolor("sel")
+        text_dim = theme.qcolor("dim")
+        text_sel = theme.qcolor("text")
 
         for start, end, row in self._visible_subs(view_start, view_end):
             x1 = max(0, int((start - view_start) / span * w))
             x2 = min(w, int((end - view_start) / span * w))
             if x2 - x1 < 1:
                 continue
-            if row == self._selected_row:
-                color = colors["sel"]
-            else:
-                sev = self._severity[row] if row < len(self._severity) else "ok"
-                color = colors.get(sev, colors["ok"])
-            rect = QRect(x1, block_y, x2 - x1, block_h)
-            painter.fillRect(rect, color)
-            painter.setPen(outline)
+            selected = row == self._selected_row
+            sev = self._severity[row] if row < len(self._severity) else "ok"
+            rect = QRect(x1, block_y, max(1, x2 - x1 - 1), block_h - 1)
+            painter.fillRect(rect, sel_fill if selected else fill)
+            painter.setPen(QPen(sel_border if selected else border.get(sev, border["ok"]), 1))
+            painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
             if x2 - x1 > 20:
                 label = self._subtitles[row].text.replace("\n", " ")
-                elided = fm.elidedText(label, Qt.ElideRight, x2 - x1 - 6)
-                painter.setPen(text_pen)
-                painter.drawText(QRect(x1 + 3, block_y + 1, x2 - x1 - 6, block_h - 2),
+                elided = fm.elidedText(label, Qt.ElideRight, x2 - x1 - 14)
+                painter.setPen(text_sel if selected else text_dim)
+                painter.drawText(QRect(x1 + 6, block_y, x2 - x1 - 12, block_h - 1),
                                  Qt.AlignVCenter | Qt.AlignLeft, elided)
 
     def _ms_to_x(self, ms: float) -> Optional[int]:
@@ -599,21 +647,43 @@ class WaveformWidget(QWidget):
         return int(frac * self.width())
 
     def _draw_playhead(self, painter: QPainter, w: int, h: int):
+        """Linea da 1 px in accento su tutta l'altezza + flag mono con il tempo in alto."""
         x = self._ms_to_x(self._playhead_ms)
         if x is None:
             return
-        playhead = theme.qcolor("playhead")
-        painter.setPen(QPen(playhead, 2))
-        painter.drawLine(x, 0, x, h)
+        acc = theme.qcolor("acc")
+        painter.fillRect(x, 0, 1, h, acc)
+        font = self._font(11, mono=True)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        text = _ms_to_label(self._playhead_ms)
+        fw = fm.horizontalAdvance(text) + 10
+        fx = max(0, min(w - fw, x - fw // 2))
+        flag = QRect(fx, 2, fw, fm.height() + 2)
         path = QPainterPath()
-        path.moveTo(x - 5, 0)
-        path.lineTo(x + 5, 0)
-        path.lineTo(x, 8)
-        path.closeSubpath()
-        painter.fillPath(path, playhead)
+        path.addRoundedRect(QRectF(flag), 2, 2)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillPath(path, acc)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(theme.qcolor("acc_ink"))
+        painter.drawText(flag, Qt.AlignCenter, text)
 
-    def _draw_ticks(self, painter: QPainter, w: int, h: int):
-        """Righello temporale: tick ogni N secondi."""
+    @staticmethod
+    def _tick_label(t_ms: float, interval_s: float) -> str:
+        total = max(0.0, t_ms / 1000.0)
+        hrs, rem = divmod(int(total), 3600)
+        mins, secs = divmod(rem, 60)
+        if interval_s < 1:
+            frac = f".{int(round((total - int(total)) * 10)) % 10}"
+        else:
+            frac = ""
+        if hrs:
+            return f"{hrs}:{mins:02d}:{secs:02d}{frac}"
+        return f"{mins}:{secs:02d}{frac}"
+
+    def _draw_ruler(self, painter: QPainter, w: int, h: int):
+        """Righello da 22 px: tick da 1 px ogni N secondi con etichette mono da 11 px."""
+        painter.fillRect(0, _RULER_H - 1, w, 1, theme.qcolor("line"))
         view_start, view_end = self._view_start_ms, self._view_end_ms
         if view_end <= view_start or w == 0:
             return
@@ -624,24 +694,18 @@ class WaveformWidget(QWidget):
                 interval_s = cand
                 break
 
-        font = self._font(-4, mono=True)
+        font = self._font(11, mono=True)
         painter.setFont(font)
-        fm = QFontMetrics(font)
-        tick_pen = QPen(theme.qcolor("faint"))
-        label_pen = QPen(theme.qcolor("muted"))
+        line = theme.qcolor("line")
+        label_col = theme.qcolor("muted")
         step = interval_s * 1000
         t = math.floor(view_start / step) * step
         while t <= view_end:
             x = int((t - view_start) / (view_end - view_start) * w)
-            painter.setPen(tick_pen)
-            painter.drawLine(x, 0, x, 8)
-            total_s = t / 1000.0
-            m = int(total_s) // 60
-            s = total_s % 60
-            label = f"{m}:{s:04.1f}" if m > 0 else f"{s:.1f}s"
-            painter.setPen(label_pen)
-            painter.drawText(QRectF(x + 3, 2, fm.horizontalAdvance(label) + 4,
-                                    fm.height()), Qt.AlignLeft | Qt.AlignTop, label)
+            painter.fillRect(x, 0, 1, _RULER_H - 1, line)
+            painter.setPen(label_col)
+            painter.drawText(QRect(x + 6, 0, 120, _RULER_H - 1), Qt.AlignLeft | Qt.AlignVCenter,
+                             self._tick_label(t, interval_s))
             t += step
 
     # ----------------------------------------------------------------

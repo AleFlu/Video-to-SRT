@@ -22,17 +22,21 @@ import bisect
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal, QByteArray, QModelIndex, QSettings, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence, QUndoStack, QShortcut
+from PySide6.QtCore import Qt, Signal, QByteArray, QModelIndex, QRect, QSettings, QSize, QTimer
+from PySide6.QtGui import (
+    QAction, QBrush, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QUndoStack, QShortcut,
+)
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QMainWindow, QTableView,
-    QToolBar, QHeaderView, QAbstractItemView,
+    QAbstractButton, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QTableView,
+    QToolBar, QToolButton, QHeaderView, QAbstractItemView, QStyle, QStyledItemDelegate,
     QPushButton, QSizePolicy, QMenu, QLineEdit, QFileDialog, QLabel, QStackedLayout,
 )
 
 from core.subtitle_model import Subtitle
+from core.constants import WARN_CPS
 from core.subtitle_table_model import (
-    SubtitleTableModel, COL_INDEX, COL_START, COL_END, COL_DUR, COL_CPS, COL_TEXT
+    SubtitleTableModel, COL_INDEX, COL_START, COL_END, COL_DUR, COL_CPS, COL_TEXT,
+    ISSUE_EMPTY, ISSUE_END_BEFORE_START, ISSUE_OVERLAP, ISSUE_TOO_FAST, ISSUE_TOO_SHORT,
 )
 from core.undo_commands import (
     EditFieldCommand, DeleteSubtitleCommand,
@@ -48,6 +52,14 @@ from ui import icons, theme
 import platform_support
 
 _sl = platform_support.shortcut_label
+
+# Misure del mockup (px)
+_TOOLBAR_HEIGHT = 42
+_BTN_HEIGHT = 28
+_SEARCH_WIDTH = 250
+_ROW_HEIGHT = 34
+_HINT_PAD = 9    # padding laterale dei pulsanti
+_HINT_GAP = 6    # spazio tra testo e scorciatoia
 
 # Ritardo con cui si raggruppano gli aggiornamenti O(N) (status, overlay preview)
 SYNC_DEBOUNCE_MS = 50
@@ -68,6 +80,210 @@ def theme_color_provider(name: str) -> Optional[QColor]:
     return theme.qcolor(token) if token else None
 
 logger = logging.getLogger(__name__)
+
+
+# ── Parole d'avviso della cella Testo ─────────────────────────────────────────
+# codice problema del modello → (parola breve, token colore). Il rosso è anche il
+# colore del CPS oltre il massimo; il giallo segnala gli avvisi.
+_ISSUE_WORDS = {
+    ISSUE_EMPTY:            ("vuoto", "err"),
+    ISSUE_END_BEFORE_START: ("tempi errati", "err"),
+    ISSUE_OVERLAP:          ("sovrapposto", "err"),
+    ISSUE_TOO_FAST:         ("troppo veloce", "err"),
+    ISSUE_TOO_SHORT:        ("troppo breve", "warn"),
+}
+# Ordine di precedenza quando una riga ha più problemi (ne compare uno solo)
+_ISSUE_PRIORITY = (ISSUE_EMPTY, ISSUE_END_BEFORE_START, ISSUE_OVERLAP,
+                   ISSUE_TOO_FAST, ISSUE_TOO_SHORT)
+
+
+def issue_word(codes, cps: Optional[float] = None) -> Optional[tuple]:
+    """
+    Parola breve (e token colore) per i problemi di una riga, ricavata dai codici di
+    `SubtitleTableModel.row_issue_codes`. Senza codici, un CPS sopra la soglia di
+    avviso ma sotto il massimo dà "veloce". None se la riga è a posto.
+    """
+    for code in _ISSUE_PRIORITY:
+        if code in codes:
+            return _ISSUE_WORDS[code]
+    if cps is not None and cps > WARN_CPS:
+        return ("veloce", "warn")
+    return None
+
+
+# ── Suggerimenti di scorciatoia (mono, a destra del testo) ────────────────────
+
+def _hint_font() -> QFont:
+    f = QFont(platform_support.mono_font_family())
+    f.setPixelSize(11)
+    return f
+
+
+def _hint_width(hint: str) -> int:
+    return QFontMetrics(_hint_font()).horizontalAdvance(hint) if hint else 0
+
+
+def _paint_hint(widget: QWidget, hint: str) -> None:
+    """Disegna la scorciatoia mono da 11 px allineata a destra del pulsante."""
+    if not hint:
+        return
+    active = widget.underMouse() or (isinstance(widget, QAbstractButton) and widget.isChecked())
+    if not widget.isEnabled():
+        token = "faint"
+    else:
+        token = "dim" if active else "label"   # `label` non va su sfondi rialzati
+    p = QPainter(widget)
+    try:
+        p.setFont(_hint_font())
+        p.setPen(theme.qcolor(token))
+        p.drawText(QRect(0, 0, widget.width() - _HINT_PAD, widget.height()),
+                   Qt.AlignRight | Qt.AlignVCenter, hint)
+    finally:
+        p.end()
+
+
+class _HintButton(QPushButton):
+    """Pulsante della toolbar: icona + testo e, a destra, la scorciatoia in mono."""
+
+    def __init__(self, text: str, hint: str = "", parent=None):
+        super().__init__(text, parent)
+        self._hint = hint
+        self.setObjectName("tbButton")
+
+    def hint(self) -> str:
+        return self._hint
+
+    def paintEvent(self, event):  # noqa: N802 (override Qt)
+        super().paintEvent(event)
+        _paint_hint(self, self._hint)
+
+
+class _HintToolButton(QToolButton):
+    """Come `_HintButton`, per l'azione dell'Ispettore (QToolButton con azione di default)."""
+
+    def __init__(self, hint: str = "", parent=None):
+        super().__init__(parent)
+        self._hint = hint
+        self.setObjectName("tbInspector")
+
+    def paintEvent(self, event):  # noqa: N802 (override Qt)
+        super().paintEvent(event)
+        _paint_hint(self, self._hint)
+
+
+class _SearchField(QLineEdit):
+    """Campo di ricerca della toolbar: icona a sinistra e scorciatoia a destra (se vuoto)."""
+
+    def __init__(self, hint: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("tbSearch")
+        self._hint_lbl = QLabel(hint, self)
+        self._hint_lbl.setObjectName("tbSearchHint")
+        self._hint_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.textChanged.connect(self._sync_hint)
+
+    def _sync_hint(self, text: str) -> None:
+        self._hint_lbl.setVisible(not text)
+
+    def resizeEvent(self, event):  # noqa: N802 (override Qt)
+        super().resizeEvent(event)
+        w = self._hint_lbl.sizeHint().width()
+        self._hint_lbl.setGeometry(self.width() - w - 8, 0, w, self.height())
+
+    def sizeHint(self):  # noqa: N802 (override Qt)
+        return QSize(_SEARCH_WIDTH, _BTN_HEIGHT)
+
+
+# ── Delegato della tabella: solo disegno (l'editing resta quello di default) ──
+
+class _TableDelegate(QStyledItemDelegate):
+    """
+    Disegna le celle come nel mockup: solo la linea sotto la riga, numeri in mono,
+    riga selezionata su `sel` con barra d'accento da 2 px a sinistra e, nella colonna
+    Testo, la parola d'avviso a destra nel colore della gravità.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._mono = QFont(platform_support.mono_font_family())
+        self._mono.setPixelSize(13)
+        self._ui = QFont(platform_support.ui_font_family())
+        self._ui.setPixelSize(13)
+        self._small = QFont(platform_support.ui_font_family())
+        self._small.setPixelSize(11)
+
+    def paint(self, painter, option, index):  # noqa: N802 (override Qt)
+        painter.save()
+        try:
+            self._paint_cell(painter, option, index)
+        finally:
+            painter.restore()
+
+    def _paint_cell(self, painter, option, index):
+        rect = option.rect
+        selected = bool(option.state & QStyle.State_Selected)
+        col = index.column()
+
+        if selected:
+            painter.fillRect(rect, theme.qcolor("sel"))
+        else:
+            tint = index.data(Qt.BackgroundRole)
+            if isinstance(tint, QBrush):
+                painter.fillRect(rect, tint)
+        painter.fillRect(rect.x(), rect.bottom(), rect.width(), 1, theme.qcolor("line"))
+        if selected and col == COL_INDEX:
+            painter.fillRect(rect.x(), rect.y(), 2, rect.height(), theme.qcolor("acc"))
+
+        text = str(index.data(Qt.DisplayRole) if index.data(Qt.DisplayRole) is not None else "")
+        inner = rect.adjusted(10, 0, -10, 0)
+        if col == COL_TEXT:
+            self._paint_text_cell(painter, inner, index, text, selected)
+            return
+
+        painter.setFont(self._mono)
+        if col == COL_INDEX:
+            color = theme.qcolor("dim" if selected else "muted")
+        elif col == COL_DUR:
+            color = theme.qcolor("dim")
+        elif col == COL_CPS:
+            fg = index.data(Qt.ForegroundRole)
+            color = fg.color() if isinstance(fg, QBrush) else theme.qcolor("text")
+        else:
+            color = theme.qcolor("text")
+        painter.setPen(color)
+        elided = painter.fontMetrics().elidedText(text, Qt.ElideRight, inner.width())
+        painter.drawText(inner, Qt.AlignLeft | Qt.AlignVCenter, elided)
+
+    def _paint_text_cell(self, painter, inner, index, text, selected):
+        model = index.model()
+        word = None
+        try:
+            sub = model.subtitle_at(index.row())
+            cps = (len(sub.text.strip()) / sub.duration
+                   if sub is not None and sub.duration > 0 and sub.text.strip() else None)
+            word = issue_word(model.row_issue_codes(index.row()), cps)
+        except AttributeError:   # modello diverso da SubtitleTableModel: nessuna parola
+            pass
+
+        text_w = inner.width()
+        if word is not None:
+            painter.setFont(self._small)
+            word_w = painter.fontMetrics().horizontalAdvance(word[0])
+            painter.setPen(theme.qcolor(word[1]))
+            painter.drawText(inner, Qt.AlignRight | Qt.AlignVCenter, word[0])
+            text_w = max(0, inner.width() - word_w - 8)
+
+        painter.setFont(self._ui)
+        flat = text.replace("\n", " ")
+        if flat.strip():
+            painter.setPen(theme.qcolor("text"))
+            shown = flat
+        else:
+            painter.setPen(theme.qcolor("dim" if selected else "label"))
+            shown = "Testo vuoto"
+        elided = painter.fontMetrics().elidedText(shown, Qt.ElideRight, text_w)
+        painter.drawText(QRect(inner.x(), inner.y(), text_w, inner.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, elided)
 
 
 class SubtitleTimeline(QWidget):
@@ -110,6 +326,7 @@ class SubtitleTimeline(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        self._root_layout = layout
 
         self._inner = QMainWindow()
         self._inner.setDockOptions(
@@ -126,22 +343,25 @@ class SubtitleTimeline(QWidget):
         self._empty_lbl.setWordWrap(True)
 
         self._build_toolbar()
+        layout.insertWidget(0, self._toolbar)
 
         # TableView
         self.view = QTableView()
         self.view.setModel(self.model)
-        self.view.setAlternatingRowColors(True)
+        self.view.setAlternatingRowColors(False)
+        self.view.setShowGrid(False)
+        self.view.setItemDelegate(_TableDelegate(self.view))
         self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.view.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
         self.view.verticalHeader().setVisible(False)
-        self.view.setWordWrap(True)
-        # Altezza riga dalle metriche del font (due righe di testo + padding QSS):
-        # niente valori fissi che tagliano il testo con font grandi / HiDPI
+        self.view.setWordWrap(False)
+        self.view.setTextElideMode(Qt.ElideRight)
+        # Righe da 34 px (mockup); almeno una riga di testo con font grandi / HiDPI
         line_h = self.view.fontMetrics().lineSpacing()
-        self.view.verticalHeader().setDefaultSectionSize(max(44, 2 * line_h + 18))
+        self.view.verticalHeader().setDefaultSectionSize(max(_ROW_HEIGHT, line_h + 12))
         self.view.setAccessibleName("Elenco sottotitoli")
 
         self._setup_header()
@@ -173,16 +393,20 @@ class SubtitleTimeline(QWidget):
         h.setSectionResizeMode(COL_TEXT, QHeaderView.Stretch)
         h.setStretchLastSection(True)
         h.setSectionsMovable(False)
+        # allineamento e altezza anche dopo restoreState (lo stato salvato li include)
+        h.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        h.setFixedHeight(30)
 
     def _setup_header(self):
         """Colonne ridimensionabili (testo elastico); larghezze ripristinate dalle preferenze."""
         h = self.view.horizontalHeader()
         self._apply_header_modes()
         fm = self.view.fontMetrics()
-        samples = {COL_INDEX: "0000", COL_START: "00:00:00,000", COL_END: "00:00:00,000",
-                   COL_DUR: "00,00 s", COL_CPS: "000,0"}
-        for col, sample in samples.items():
-            h.resizeSection(col, max(h.sectionSizeHint(col), fm.horizontalAdvance(sample) + 32))
+        # Larghezze del mockup (52 / 108 / 108 / 84 / 70), allargate se il testo non ci sta
+        samples = {COL_INDEX: ("0000", 52), COL_START: ("00:00.000", 108),
+                   COL_END: ("00:00.000", 108), COL_DUR: ("00,00 s", 84), COL_CPS: ("000,0", 70)}
+        for col, (sample, width) in samples.items():
+            h.resizeSection(col, max(width, fm.horizontalAdvance(sample) + 24))
         self._restore_header_state()
 
         self._header_timer = QTimer(self)
@@ -220,11 +444,13 @@ class SubtitleTimeline(QWidget):
     # ---- Toolbar ----
 
     def _build_toolbar(self):
-        self._tb_buttons = []   # bottoni "feriali" da ri-tematizzare
+        self._tb_buttons = []   # pulsanti con icona + testo + scorciatoia da ri-tematizzare
 
-        tb = QToolBar("TimelineToolbar", self._inner)
+        tb = QToolBar("TimelineToolbar", self)
         tb.setMovable(False)
-        self._inner.addToolBar(tb)
+        tb.setFloatable(False)
+        tb.setIconSize(QSize(16, 16))
+        tb.setFixedHeight(_TOOLBAR_HEIGHT)
         # Il pulsante "»" di overflow non deve usare l'icona di sistema (crash su macOS)
         protect_extension_buttons(tb)
 
@@ -255,9 +481,10 @@ class SubtitleTimeline(QWidget):
 
         # ── Operazioni sottotitoli ─────────────────────────────────────────────
         # Le scorciatoie indicate nei tooltip sono registrate dalla MainWindow.
-        def _tb_btn(text, name, tooltip, icon_name):
-            b = QPushButton(text)
-            icons.bind_icon(b, icon_name, "dim")
+        # Il suggerimento mono a destra è solo disegnato: nome accessibile = solo il nome.
+        def _tb_btn(text, name, tooltip, icon_name, hint=""):
+            b = _HintButton(text, hint)
+            icons.bind_icon(b, icon_name, "text")
             b.setToolTip(tooltip)
             b.setAccessibleName(name)
             b.setCursor(Qt.PointingHandCursor)
@@ -265,16 +492,19 @@ class SubtitleTimeline(QWidget):
             return b
 
         btn_split = _tb_btn("Dividi", "Dividi",
-                            f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}", "split")
+                            f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}", "split",
+                            _sl("Ctrl+K"))
         btn_split.clicked.connect(self._split_current)
         tb.addWidget(btn_split)
 
-        btn_merge = _tb_btn("Unisci", "Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}", "merge")
+        btn_merge = _tb_btn("Unisci", "Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}", "merge",
+                            _sl("Ctrl+M"))
         btn_merge.clicked.connect(self._merge_next)
         tb.addWidget(btn_merge)
 
         btn_del = _tb_btn("Elimina", "Elimina",
-                          f"Elimina selezionati  {_sl('Ctrl+Shift+K')}  ·  Canc", "trash")
+                          f"Elimina selezionati  {_sl('Ctrl+Shift+K')}  ·  Canc", "trash",
+                          _sl("Ctrl+Shift+K"))
         btn_del.clicked.connect(self._delete_selected)
         tb.addWidget(btn_del)
 
@@ -285,12 +515,10 @@ class SubtitleTimeline(QWidget):
         btn_import.clicked.connect(self._import_file)
         tb.addWidget(btn_import)
 
-        tb.addSeparator()
-
         # ── Trova e sostituisci ────────────────────────────────────────────────
         self.btn_find_replace = _tb_btn(
             "Sostituisci", "Trova e sostituisci", f"Trova e sostituisci  {_sl('Ctrl+Alt+F')}",
-            "replace",
+            "replace", _sl("Ctrl+Alt+F"),
         )
         self.btn_find_replace.clicked.connect(self.open_find_replace)
         tb.addWidget(self.btn_find_replace)
@@ -299,15 +527,18 @@ class SubtitleTimeline(QWidget):
 
         # ── Inspector toggle ───────────────────────────────────────────────────
         self.act_toggle_insp = QAction("Ispettore", self)
-        icons.bind_icon(self.act_toggle_insp, "panel_right", "dim")
+        icons.bind_icon(self.act_toggle_insp, "panel_right", "text")
         self.act_toggle_insp.setCheckable(True)
         self.act_toggle_insp.setChecked(True)
         self.act_toggle_insp.setToolTip(f"Mostra/nascondi Ispettore  {_sl('Ctrl+I')}")
-        # Il toggle_insp ora controlla l'inspector esterno — segnale gestito da workspace
-        tb.addAction(self.act_toggle_insp)
-        insp_btn = tb.widgetForAction(self.act_toggle_insp)
-        if insp_btn is not None:   # icona + testo (undo/redo restano a sola icona)
-            insp_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        # Il toggle_insp ora controlla l'inspector esterno — segnale gestito da workspace.
+        # Acceso = sfondo `raise` (QToolButton:checked); il suggerimento ⌘I è disegnato a destra.
+        self._insp_btn = _HintToolButton(_sl("Ctrl+I"))
+        self._insp_btn.setDefaultAction(self.act_toggle_insp)
+        self._insp_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._insp_btn.setIconSize(QSize(16, 16))
+        self._insp_btn.setCursor(Qt.PointingHandCursor)
+        tb.addWidget(self._insp_btn)
 
         # ── Spacer ────────────────────────────────────────────────────────────
         spacer = QWidget()
@@ -316,39 +547,43 @@ class SubtitleTimeline(QWidget):
         tb.addWidget(spacer)
 
         # ── Ricerca inline ────────────────────────────────────────────────────
-        self._search_box = QLineEdit()
+        self._search_box = _SearchField(_sl("Ctrl+F"))
         self._search_box.setPlaceholderText("Cerca sottotitolo…")
         self._search_box.setAccessibleName("Cerca nei sottotitoli")
-        self._search_box.setMinimumWidth(160)
-        self._search_box.setMaximumWidth(240)
+        self._search_box.setFixedSize(_SEARCH_WIDTH, _BTN_HEIGHT)
         self._search_box.setClearButtonEnabled(True)
+        self._search_icon = QAction(self._search_box)
+        icons.bind_icon(self._search_icon, "search", "dim")
+        self._search_box.addAction(self._search_icon, QLineEdit.LeadingPosition)
         self._search_box.textChanged.connect(self._on_search)
         self._search_box.returnPressed.connect(self._on_search_next)
         self._search_box.setToolTip(f"Cerca nel testo  {_sl('Ctrl+F')}")
         tb.addWidget(self._search_box)
         self._search_idx = -1   # indice corrente ricerca
 
-        tb.addSeparator()
+        # ── Esporta (btn + freccia dropdown, separati da 1 px) ────────────────
+        split = QWidget()
+        split.setStyleSheet("background: transparent;")
+        split_lay = QHBoxLayout(split)
+        split_lay.setContentsMargins(8, 0, 0, 0)
+        split_lay.setSpacing(1)
 
-        # ── Esporta (btn + freccia dropdown) ──────────────────────────────────
         self._export_btn = QPushButton("Esporta SRT")
         icons.bind_icon(self._export_btn, "export", "acc_ink")
         self._export_btn.setToolTip(f"Esporta SRT  {_sl('Ctrl+S')}")
         self._export_btn.setAccessibleName("Esporta SRT")
-        tb.addWidget(self._export_btn)
+        self._export_btn.setCursor(Qt.PointingHandCursor)
+        split_lay.addWidget(self._export_btn)
 
         self._export_arrow = QPushButton()
         icons.bind_icon(self._export_arrow, "chevron_down", "acc_ink", 14)
         self._export_arrow.setToolTip("Scegli formato di esportazione")
         self._export_arrow.setAccessibleName("Altri formati di esportazione")
-        self._export_arrow.setFixedWidth(22)
+        self._export_arrow.setFixedWidth(28)
+        self._export_arrow.setCursor(Qt.PointingHandCursor)
         self._export_arrow.clicked.connect(self._show_export_menu)
-        tb.addWidget(self._export_arrow)
-
-        right_margin = QWidget()
-        right_margin.setStyleSheet("background: transparent;")
-        right_margin.setFixedWidth(4)
-        tb.addWidget(right_margin)
+        split_lay.addWidget(self._export_arrow)
+        tb.addWidget(split)
 
         # ── Actions ────────────────────────────────────────────────────────────
         self.act_export = QAction("Esporta SRT", self)
@@ -376,6 +611,19 @@ class SubtitleTimeline(QWidget):
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._apply_toolbar_palette)
 
+    def toolbar(self) -> QToolBar:
+        """La toolbar (42 px) dell'editor."""
+        return self._toolbar
+
+    def detach_toolbar(self) -> QToolBar:
+        """
+        Stacca la toolbar dal widget e la restituisce: il workspace la mette a tutta
+        larghezza sopra tabella e ispettore. Gli oggetti e i collegamenti restano gli stessi.
+        """
+        self._root_layout.removeWidget(self._toolbar)
+        self._toolbar.setParent(None)
+        return self._toolbar
+
     def _sync_undo_tips(self, *_):
         u, r = self.undo_stack.undoText(), self.undo_stack.redoText()
         self.act_undo.setToolTip(f"Annulla{(' ' + u) if u else ''}  {_sl('Ctrl+Z')}")
@@ -385,46 +633,67 @@ class SubtitleTimeline(QWidget):
         c = theme.c
         self._toolbar.setStyleSheet(
             "QToolBar {"
-            f"  background: {c('panel')};"
+            f"  background: {c('bg')};"
+            "  border: none;"
             f"  border-bottom: 1px solid {c('line')};"
             "  spacing: 2px;"
-            "  padding: 3px 6px;"
+            "  padding: 0 8px;"
             "}"
             "QToolBar::separator {"
             f"  background: {c('line')};"
             "  width: 1px;"
-            "  margin: 4px 4px;"
+            "  height: 18px;"
+            "  margin: 0 6px;"
             "}"
-        )
-        btn_ss = (
-            "QPushButton {"
-            "  background: transparent;"
-            "  border: 1px solid transparent;"
-            "  border-radius: 4px;"
-            f"  color: {c('text')};"
-            "  font-size: 13px;"
-            "  font-weight: 400;"
-            "  padding: 0 9px;"
-            "  min-height: 26px;"
+            # undo / redo: solo icona 28x28
+            "QToolBar QToolButton {"
+            "  background: transparent; border: 1px solid transparent; border-radius: 4px;"
+            "  padding: 0; min-width: 26px; min-height: 26px;"
             "}"
-            f"QPushButton:hover {{ background: {c('raise')}; color: {c('text')}; }}"
-            f"QPushButton:pressed {{ background: {c('raise')}; }}"
-            + theme.focus_rule("QPushButton", 4)
+            f"QToolBar QToolButton:hover {{ background: {c('raise')}; }}"
+            f"QToolBar QToolButton:checked {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QToolBar QToolButton", 4)
+            # campo di ricerca
+            + f"QLineEdit#tbSearch {{ background: {c('bg')}; border: 1px solid {c('line')};"
+            f" border-radius: 4px; color: {c('text')}; font-size: 13px; padding: 0 8px; }}"
+            f"QLineEdit#tbSearch:focus {{ border-color: {c('focus')}; }}"
+            f"QLabel#tbSearchHint {{ color: {c('label')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO}; font-size: 11px; }}"
         )
         for b in self._tb_buttons:
-            b.setStyleSheet(btn_ss)
-        self._search_box.setStyleSheet(
-            "QLineEdit {"
-            f"  background: {c('bg')}; border: 1px solid {c('line')}; border-radius: 4px;"
-            f"  color: {c('text')}; font-size: 13px; padding: 4px 8px;"
+            right = _HINT_PAD + (_HINT_GAP + _hint_width(b.hint()) if b.hint() else 0)
+            b.setStyleSheet(
+                "QPushButton {"
+                "  background: transparent;"
+                "  border: 1px solid transparent;"
+                "  border-radius: 4px;"
+                f"  color: {c('text')};"
+                "  font-size: 13px;"
+                "  font-weight: 400;"
+                f"  padding: 0 {right}px 0 {_HINT_PAD}px;"
+                f"  min-height: {_BTN_HEIGHT - 2}px;"
+                "}"
+                f"QPushButton:hover {{ background: {c('raise')}; color: {c('text')}; }}"
+                f"QPushButton:pressed {{ background: {c('raise')}; }}"
+                f"QPushButton:disabled {{ color: {c('faint')}; }}"
+                + theme.focus_rule("QPushButton", 4)
+            )
+        right = _HINT_PAD + _HINT_GAP + _hint_width(self._insp_btn._hint)
+        self._insp_btn.setStyleSheet(
+            "QToolButton#tbInspector {"
+            f"  color: {c('text')}; padding: 0 {right}px 0 {_HINT_PAD}px;"
+            "  background: transparent; border: 1px solid transparent; border-radius: 4px;"
+            f"  min-height: {_BTN_HEIGHT - 2}px; font-size: 13px;"
             "}"
-            f"QLineEdit:focus {{ border-color: {c('focus')}; }}"
+            f"QToolButton#tbInspector:hover {{ background: {c('raise')}; }}"
+            f"QToolButton#tbInspector:checked {{ background: {c('raise')}; }}"
         )
+        # Esporta: primario con angoli esterni a 4 px, freccia attaccata (1 px di stacco)
         self._export_btn.setStyleSheet(
             "QPushButton {"
             f"  background: {c('acc_fill')}; color: {c('acc_ink')}; font-weight: 600;"
-            "  font-size: 13px; border: none; border-radius: 4px 0 0 4px; padding: 0 12px;"
-            "  min-height: 28px;"
+            f"  font-size: 13px; border: none; border-radius: 4px; border-top-right-radius: 0;"
+            f"  border-bottom-right-radius: 0; padding: 0 9px; min-height: {_BTN_HEIGHT}px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
             f"QPushButton:pressed {{ background: {c('acc_fill_d')}; }}"
@@ -432,14 +701,15 @@ class SubtitleTimeline(QWidget):
         )
         self._export_arrow.setStyleSheet(
             "QPushButton {"
-            f"  background: {c('acc_fill_d')}; color: {c('acc_ink')};"
-            "  border: none; border-radius: 0 4px 4px 0; padding: 0; min-height: 28px;"
+            f"  background: {c('acc_fill')}; color: {c('acc_ink')};"
+            "  border: none; border-radius: 4px; border-top-left-radius: 0;"
+            f"  border-bottom-left-radius: 0; padding: 0; min-height: {_BTN_HEIGHT}px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
             + theme.focus_rule("QPushButton")
         )
         self._empty_lbl.setStyleSheet(
-            f"color: {c('muted')}; font-size: 13px; background: {c('bg')};"
+            f"color: {c('dim')}; font-size: 13px; background: {c('bg')};"
         )
 
     def _show_export_menu(self):
@@ -604,6 +874,7 @@ class SubtitleTimeline(QWidget):
     def _on_theme_changed(self, _name=None):
         # Riemette dataChanged su tutte le righe: i colori del provider seguono il tema
         self.model.set_color_provider(theme_color_provider)
+        self.view.viewport().update()
 
     # ---- Selezione → Inspector ----
 
