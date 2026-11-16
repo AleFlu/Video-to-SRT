@@ -124,6 +124,8 @@ class ProjectWidget(QWidget):
 
         self._project_number = project_number
         self._title = f"Progetto {project_number}"
+        # Ultimo messaggio di stato emesso (la MainWindow lo ripristina al cambio tab)
+        self.last_status: str = "Pronto"
 
         self._ffmpeg_ok = ffmpeg_ok
         self._model_ok  = model_ok
@@ -234,7 +236,19 @@ class ProjectWidget(QWidget):
 
     # ── Tab switching ──────────────────────────────────────────────────────────
 
+    def title(self) -> str:
+        """Titolo corrente del progetto (quello mostrato nella tab)."""
+        return self._title
+
+    def pause_playback(self) -> None:
+        """Mette in pausa la riproduzione dell'anteprima (senza mai riprenderla da sola)."""
+        player = self.workspace.preview.player
+        if player.is_playing():
+            player.pause()
+
     def _on_tab_changed(self, index: int):
+        if index != _TAB_EDITOR:
+            self.pause_playback()
         self._main_stack.setCurrentIndex(index)
         if index == _TAB_EDITOR:
             if self.workspace.get_subtitles():

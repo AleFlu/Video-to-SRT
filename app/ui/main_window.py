@@ -139,10 +139,20 @@ class MainWindow(QMainWindow):
     def _on_tab_selected(self, index: int):
         """Mostra il ProjectWidget corrispondente."""
         if 0 <= index < len(self._projects):
-            self._stack.setCurrentWidget(self._projects[index])
+            previous = self._stack.currentWidget()
+            new = self._projects[index]
+            if isinstance(previous, ProjectWidget) and previous is not new:
+                previous.pause_playback()
+            self._stack.setCurrentWidget(new)
             self._refresh_menu_for_active()
-            # Aggiorna status bar con info del progetto selezionato
-            self._on_project_status("")
+            # Status bar e titolo finestra seguono il progetto selezionato
+            self.status_main.setText(new.last_status or "Pronto")
+            self._refresh_window_title()
+
+    def _refresh_window_title(self):
+        active = self._active()
+        title = active.title() if active else ""
+        self.setWindowTitle(f"{title} — Video → SRT" if title else "Video → SRT")
 
     def _on_tab_close_requested(self, index: int):
         """
@@ -223,7 +233,7 @@ class MainWindow(QMainWindow):
         self.proj_tab_bar.set_tab_title(index, title)
         # Aggiorna titolo finestra se è il progetto attivo
         if index == self.proj_tab_bar.current_index():
-            self.setWindowTitle(f"{title} — Video → SRT")
+            self._refresh_window_title()
 
     def _on_project_modified_changed(self, modified: bool, index: Optional[int] = None):
         if index is None:
@@ -238,6 +248,8 @@ class MainWindow(QMainWindow):
         Tutti i ProjectWidget sono connessi a questo slot; filtra per sender().
         """
         sender = self.sender()
+        if isinstance(sender, ProjectWidget):
+            sender.last_status = text if text else "Pronto"
         active = self._active()
         if sender is active or sender is None:
             self.status_main.setText(text if text else "Pronto")

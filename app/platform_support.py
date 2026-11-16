@@ -120,19 +120,19 @@ def native_media_exts() -> frozenset:
 def font_stack_ui() -> str:
     """Stringa CSS ``font-family`` per l'interfaccia."""
     if IS_MAC:
-        return '".AppleSystemUIFont", "Helvetica Neue", sans-serif'
+        return '".AppleSystemUIFont", "Helvetica Neue"'
     if IS_WIN:
-        return '"Segoe UI", Arial, sans-serif'
-    return '"Inter", "Noto Sans", "DejaVu Sans", sans-serif'
+        return '"Segoe UI", "Arial"'
+    return '"Inter", "Noto Sans", "DejaVu Sans"'
 
 
 def font_stack_mono() -> str:
     """Stringa CSS ``font-family`` per il testo a spaziatura fissa."""
     if IS_MAC:
-        return '"Menlo", "Monaco", monospace'
+        return '"Menlo", "Monaco"'
     if IS_WIN:
-        return '"Cascadia Mono", "Consolas", monospace'
-    return '"DejaVu Sans Mono", monospace'
+        return '"Cascadia Mono", "Consolas"'
+    return '"DejaVu Sans Mono", "Liberation Mono"'
 
 
 def ui_font_family() -> str:

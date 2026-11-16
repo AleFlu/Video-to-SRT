@@ -19,9 +19,14 @@ per retro-compatibilità: usarli solo dove il valore non deve cambiare col tema.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+import logging
+
+from PySide6.QtCore import QObject, QPointF, Qt, Signal
+from PySide6.QtGui import QImage, QPainter, QPen
 
 import platform_support
+
+logger = logging.getLogger(__name__)
 
 
 # ── Palette: token "Studio" ─────────────────────────────────────────────────
@@ -248,6 +253,68 @@ def focus_rule(selector: str, radius: int | None = None) -> str:
 # ── Font ─────────────────────────────────────────────────────────────────────
 FONT_UI   = platform_support.font_stack_ui()
 FONT_MONO = platform_support.font_stack_mono()
+
+
+# ── Chevron dei menu a tendina ────────────────────────────────────────────────
+# Il trucco CSS del triangolo con i bordi non è renderizzato da Qt (appare un
+# quadratino): la freccia è un piccolo PNG (1x + @2x per HiDPI) disegnato con
+# QPainter nel colore "muted" del tema e salvato nella cache dell'app.
+
+_CHEVRON_SIZE = 10
+_CHEVRON_CACHE: dict = {}
+
+
+def _draw_chevron(path, color, scale: int) -> bool:
+    size = _CHEVRON_SIZE * scale
+    img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    try:
+        p.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(color)
+        pen.setWidthF(1.6 * scale)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        k = scale
+        p.drawPolyline([QPointF(1.8 * k, 3.4 * k), QPointF(5.0 * k, 6.6 * k),
+                        QPointF(8.2 * k, 3.4 * k)])
+    finally:
+        p.end()
+    return img.save(str(path), "PNG")
+
+
+def chevron_url(theme: str | None = None) -> str | None:
+    """
+    Percorso (barre normali, pronto per ``url(...)`` del QSS) del chevron per il tema,
+    generato al volo. None se il file non si può scrivere: il QSS toglie la freccia.
+    """
+    name = theme or _current
+    color = qcolor("muted", name)
+    try:
+        folder = platform_support.app_cache_dir() / "icons"
+        key = (str(folder), name, color.rgba())
+        cached = _CHEVRON_CACHE.get(key)
+        if cached is not None and folder.joinpath(cached).exists():
+            return (folder / cached).as_posix()
+        folder.mkdir(parents=True, exist_ok=True)
+        fname = f"chevron-{name}-{color.rgba():08x}.png"
+        ok1 = _draw_chevron(folder / fname, color, 1)
+        ok2 = _draw_chevron(folder / fname.replace(".png", "@2x.png"), color, 2)
+        if not (ok1 and ok2):
+            return None
+        _CHEVRON_CACHE[key] = fname
+        return (folder / fname).as_posix()
+    except OSError:
+        logger.warning("Chevron dei menu non scrivibile: freccia omessa", exc_info=True)
+        return None
+
+
+def combo_arrow_rule(theme: str | None = None) -> str:
+    """Regola QSS ``QComboBox::down-arrow`` (chevron PNG, o nessuna immagine se non disponibile)."""
+    url = chevron_url(theme)
+    image = f"url({url})" if url else "none"
+    return f"QComboBox::down-arrow {{ image: {image}; width: 10px; height: 10px; margin-right: 8px; }}"
 
 
 # ── Stylesheet globale ────────────────────────────────────────────────────────
@@ -513,13 +580,7 @@ def build_stylesheet(theme: str | None = None) -> str:
         border: none;
         width: 22px;
     }}
-    QComboBox::down-arrow {{
-        image: none;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 5px solid {TEXT_MUTED};
-        margin-right: 8px;
-    }}
+    {combo_arrow_rule(theme)}
     QComboBox QAbstractItemView {{
         background-color: {BG_LIGHT};
         color: {TEXT};

@@ -6,6 +6,7 @@ import ast
 import subprocess
 from pathlib import Path
 
+import pytest
 
 import platform_support as ps
 
@@ -125,8 +126,7 @@ def test_reveal_mac_and_failure(monkeypatch):
 
 
 def test_font_helpers_non_empty():
-    assert "sans-serif" in ps.font_stack_ui()
-    assert "monospace" in ps.font_stack_mono()
+    assert ps.font_stack_ui() and ps.font_stack_mono()
     assert ps.ui_font_family() and ps.mono_font_family()
 
 
@@ -162,3 +162,22 @@ def test_no_platform_checks_outside_platform_support():
                 if full in ("sys.platform", "platform.system"):
                     offenders.append(f"{rel}:{node.lineno}")
     assert not offenders, offenders
+
+
+@pytest.mark.parametrize("mac,win", [(True, False), (False, True), (False, False)])
+def test_font_stacks_have_no_generic_css_families(monkeypatch, mac, win):
+    """Qt tratta 'sans-serif'/'monospace' come nomi letterali: "missing font family"."""
+    monkeypatch.setattr(ps, "IS_MAC", mac)
+    monkeypatch.setattr(ps, "IS_WIN", win)
+    for stack in (ps.font_stack_ui(), ps.font_stack_mono()):
+        for fam in stack.split(","):
+            assert fam.strip().strip('"').lower() not in (
+                "sans-serif", "serif", "monospace", "cursive", "fantasy")
+            assert fam.strip().startswith('"')
+
+
+def test_mac_font_stacks_exact(monkeypatch):
+    monkeypatch.setattr(ps, "IS_MAC", True)
+    monkeypatch.setattr(ps, "IS_WIN", False)
+    assert ps.font_stack_ui() == '".AppleSystemUIFont", "Helvetica Neue"'
+    assert ps.font_stack_mono() == '"Menlo", "Monaco"'

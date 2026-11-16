@@ -19,9 +19,10 @@ di riproduzione, attive solo quando la timeline è visibile.
 
 from __future__ import annotations
 import bisect
+import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer
+from PySide6.QtCore import Qt, Signal, QByteArray, QModelIndex, QSettings, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence, QUndoStack, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QMainWindow, QTableView,
@@ -65,6 +66,8 @@ def theme_color_provider(name: str) -> Optional[QColor]:
     """Provider colori per SubtitleTableModel basato sui token del tema corrente."""
     token = _MODEL_COLOR_TOKENS.get(name)
     return theme.qcolor(token) if token else None
+
+logger = logging.getLogger(__name__)
 
 
 class SubtitleTimeline(QWidget):
@@ -141,14 +144,7 @@ class SubtitleTimeline(QWidget):
         self.view.verticalHeader().setDefaultSectionSize(max(44, 2 * line_h + 18))
         self.view.setAccessibleName("Elenco sottotitoli")
 
-        h = self.view.horizontalHeader()
-        h.setSectionResizeMode(COL_INDEX, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(COL_START, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(COL_END,   QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(COL_DUR,   QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(COL_CPS,   QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(COL_TEXT,  QHeaderView.Stretch)
-        h.setStretchLastSection(True)
+        self._setup_header()
 
         central = QWidget()
         self._central_stack = QStackedLayout(central)
@@ -165,6 +161,61 @@ class SubtitleTimeline(QWidget):
         # Lo stato viene emesso via status_text signal.
 
         self._wire()
+
+    # ---- Intestazione tabella: larghezze colonne persistite ----
+
+    _HEADER_KEY = "subtitle_table_header"
+
+    def _apply_header_modes(self):
+        h = self.view.horizontalHeader()
+        for col in (COL_INDEX, COL_START, COL_END, COL_DUR, COL_CPS):
+            h.setSectionResizeMode(col, QHeaderView.Interactive)
+        h.setSectionResizeMode(COL_TEXT, QHeaderView.Stretch)
+        h.setStretchLastSection(True)
+        h.setSectionsMovable(False)
+
+    def _setup_header(self):
+        """Colonne ridimensionabili (testo elastico); larghezze ripristinate dalle preferenze."""
+        h = self.view.horizontalHeader()
+        self._apply_header_modes()
+        fm = self.view.fontMetrics()
+        samples = {COL_INDEX: "0000", COL_START: "00:00:00,000", COL_END: "00:00:00,000",
+                   COL_DUR: "00,00 s", COL_CPS: "000,0"}
+        for col, sample in samples.items():
+            h.resizeSection(col, max(h.sectionSizeHint(col), fm.horizontalAdvance(sample) + 32))
+        self._restore_header_state()
+
+        self._header_timer = QTimer(self)
+        self._header_timer.setSingleShot(True)
+        self._header_timer.setInterval(400)
+        self._header_timer.timeout.connect(self._save_header_state)
+        h.sectionResized.connect(self._schedule_header_save)
+
+    def _schedule_header_save(self, *_a):
+        self._header_timer.start()
+
+    def _save_header_state(self):
+        try:
+            QSettings("VideoSRT", "v2").setValue(
+                self._HEADER_KEY, self.view.horizontalHeader().saveState())
+        except Exception:  # noqa: BLE001
+            logger.warning("Salvataggio larghezze colonne fallito", exc_info=True)
+
+    def _restore_header_state(self):
+        """Ripristina lo stato salvato; uno stato assente, vecchio o invalido è ignorato."""
+        h = self.view.horizontalHeader()
+        try:
+            state = QSettings("VideoSRT", "v2").value(self._HEADER_KEY)
+            if isinstance(state, (bytes, bytearray)):
+                state = QByteArray(bytes(state))
+            if isinstance(state, QByteArray) and not state.isEmpty():
+                h.restoreState(state)
+        except Exception:  # noqa: BLE001
+            logger.warning("Larghezze colonne salvate non valide: ignorate", exc_info=True)
+        # uno stato vecchio non deve nascondere colonne né cambiare le modalità
+        for col in range(h.count()):
+            h.setSectionHidden(col, False)
+        self._apply_header_modes()
 
     # ---- Toolbar ----
 

@@ -842,3 +842,157 @@ def test_accuracy_toggle_enabled_when_whisperx_present(app, monkeypatch):
     assert home.accuracy_toggle.isEnabled()
     home.accuracy_toggle._toggle()
     assert home._get_settings()["high_accuracy"] is True
+
+
+# ── Cambio tab progetto: status bar, titolo finestra, riproduzione ───────────
+
+def _two_project_window(app):
+    from ui.main_window import MainWindow
+    win = MainWindow(ffmpeg_ok=True, model_ok=True)
+    win._new_project()
+    assert len(win._projects) == 2
+    return win
+
+
+def _dispose_window(win):
+    for pw in win._projects:
+        pw.teardown()
+    win.deleteLater()
+
+
+def test_switching_project_tab_refreshes_status_bar_and_title(app):
+    win = _two_project_window(app)
+    p1, p2 = win._projects
+    p1._set_title("Alfa")
+    p1.status_text.emit("5 sottotitoli  ●  Modificato")
+    p2._set_title("Beta")
+    p2.status_text.emit("2 sottotitoli")
+    # p2 è attivo: lo stato di p1 (emesso in background) non deve sovrascriverlo
+    assert win.status_main.text() == "2 sottotitoli"
+    assert win.windowTitle().startswith("Beta")
+
+    win.proj_tab_bar.select_tab(0)
+    assert win.status_main.text() == "5 sottotitoli  ●  Modificato"
+    assert win.windowTitle().startswith("Alfa")
+
+    win.proj_tab_bar.select_tab(1)
+    assert win.status_main.text() == "2 sottotitoli"
+    assert win.windowTitle().startswith("Beta")
+    _dispose_window(win)
+
+
+def test_status_survives_closing_another_project_tab(app):
+    win = _two_project_window(app)
+    win._new_project()
+    p1, p2, p3 = win._projects
+    p1.status_text.emit("7 sottotitoli")
+    win._on_tab_close_requested(2)           # ricollega i segnali dei rimasti
+    p1.status_text.emit("8 sottotitoli")
+    win.proj_tab_bar.select_tab(1)
+    win.proj_tab_bar.select_tab(0)
+    assert win.status_main.text() == "8 sottotitoli"
+    _dispose_window(win)
+
+
+def _spy_playback(pw, monkeypatch):
+    calls = []
+    player = pw.workspace.preview.player
+    monkeypatch.setattr(player, "is_playing", lambda: True)
+    monkeypatch.setattr(player, "pause", lambda: calls.append("pause"))
+    monkeypatch.setattr(player, "play", lambda: calls.append("play"))
+    return calls
+
+
+def test_leaving_editor_tab_pauses_playback(app, monkeypatch):
+    from ui.project_widget import ProjectWidget
+    pw = ProjectWidget(1, ffmpeg_ok=True, model_ok=True)
+    calls = _spy_playback(pw, monkeypatch)
+    pw._on_tab_changed(1)
+    assert calls == []
+    pw._on_tab_changed(2)        # Editor → Esportazione
+    assert calls == ["pause"]
+    pw._on_tab_changed(1)
+    pw._on_tab_changed(0)        # Editor → Trascrizione
+    assert calls == ["pause", "pause"]
+    assert "play" not in calls   # nessuna ripresa automatica
+    pw.teardown()
+    pw.deleteLater()
+
+
+def test_switching_project_tab_pauses_previous_player(app, monkeypatch):
+    win = _two_project_window(app)
+    p1, p2 = win._projects
+    c1 = _spy_playback(p1, monkeypatch)
+    c2 = _spy_playback(p2, monkeypatch)
+    win.proj_tab_bar.select_tab(0)       # da p2 a p1
+    assert c2 == ["pause"] and c1 == []
+    win.proj_tab_bar.select_tab(1)       # da p1 a p2
+    assert c1 == ["pause"] and c2 == ["pause"]
+    _dispose_window(win)
+
+
+# ── Larghezze colonne tabella sottotitoli persistite ─────────────────────────
+
+def test_table_header_state_is_persisted(app, monkeypatch):
+    import ui.subtitle_timeline as stl
+    from PySide6.QtTest import QTest
+    monkeypatch.setattr(stl, "QSettings", _FakeSettings, raising=False)
+    tl = stl.SubtitleTimeline()
+    tl.view.horizontalHeader().resizeSection(stl.COL_START, 187)
+    QTest.qWait(700)                      # debounce del salvataggio
+    assert _FakeSettings.store.get("subtitle_table_header")
+    tl.deleteLater()
+
+    tl2 = stl.SubtitleTimeline()
+    assert tl2.view.horizontalHeader().sectionSize(stl.COL_START) == 187
+    tl2.deleteLater()
+
+
+@pytest.mark.parametrize("bad", [b"garbage", b"", "stringa", 42])
+def test_table_header_state_stale_is_ignored(app, monkeypatch, bad):
+    import ui.subtitle_timeline as stl
+    monkeypatch.setattr(stl, "QSettings", _FakeSettings, raising=False)
+    _FakeSettings.store["subtitle_table_header"] = bad
+    tl = stl.SubtitleTimeline()          # non deve sollevare
+    assert tl.view.horizontalHeader().count() == 6
+    tl.deleteLater()
+
+
+# ── Freccia dei combo: chevron PNG, non triangolo CSS ────────────────────────
+
+@pytest.mark.parametrize("name", ["dark", "light"])
+def test_combo_arrow_uses_chevron_image(app, name):
+    from ui import theme
+    qss = theme.build_stylesheet(name)
+    block = qss.split("QComboBox::down-arrow")[1].split("}")[0]
+    assert "image: url(" in block
+    assert "border-top" not in block and "transparent" not in block
+    url = block.split("url(")[1].split(")")[0].strip("\"'")
+    assert "\\" not in url
+    img = QPixmap(url)
+    assert not img.isNull()
+    # il chevron è disegnato col colore "muted" del tema
+    want = theme.qcolor("muted", name)
+    seen = {img.toImage().pixelColor(x, y).rgb()
+            for x in range(img.width()) for y in range(img.height())
+            if img.toImage().pixelColor(x, y).alpha() > 200}
+    assert want.rgb() in seen
+    assert Path(url).name.startswith("chevron")
+
+
+def test_combo_arrow_falls_back_when_cache_unwritable(app, monkeypatch, tmp_path):
+    from ui import theme
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setattr(platform_support, "app_cache_dir", lambda: blocker)
+    theme._CHEVRON_CACHE.clear()
+    qss = theme.build_stylesheet("dark")        # non deve sollevare
+    assert "QComboBox::down-arrow" in qss
+    assert "QComboBox::down-arrow {\n        image: none" in qss or "url(" not in \
+        qss.split("QComboBox::down-arrow")[1].split("}")[0]
+
+
+def test_home_combo_uses_chevron_image(app):
+    from ui import home_widget
+    ss = home_widget._combo_ss()
+    assert "image: url(" in ss and "border-top: 5px" not in ss
