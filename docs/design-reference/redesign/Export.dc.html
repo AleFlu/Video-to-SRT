@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Esportazione</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+.vex{--bg:#141414;--pn:#1b1b1b;--rs:#262626;--ln:#303030;--tx:#f2f2f2;--dm:#a6a6a6;--ft:#8c8c8c;--ac:#ffffff;--ai:#141414;--er:#f2706b;--wn:#f0a63c;--sel:#2e2e2e;--wv:#5c5c5c;width:1440px;height:900px;box-sizing:border-box;background:var(--bg);color:var(--tx);font:13px/1.35 "IBM Plex Sans",system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+.vex *{box-sizing:border-box}
+.vex .m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.vex .r{display:flex;align-items:center}
+.vex .d{color:var(--dm)}
+.vex button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.vex .b{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:4px;color:var(--dm);white-space:nowrap}
+.vex .i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.vex .k{font:11px "IBM Plex Mono",monospace;color:var(--ft)}
+.vex .h{font-size:12px;font-weight:600;letter-spacing:.01em}
+.vex .x{display:flex;align-items:center;gap:16px;width:100%;height:56px;padding:0 14px;border-bottom:1px solid var(--ln)}
+.vex .tag{width:64px;height:28px;border:1px solid var(--ln);border-radius:3px;display:flex;align-items:center;justify-content:center;font:500 12px "IBM Plex Mono",monospace;flex:none}
+</style>
+</helmet>
+<div class="vex">
+
+<header class="r" style="height:40px;flex:none;background:var(--pn);border-bottom:1px solid var(--ln);padding:0 10px">
+<div class="r" style="gap:2px;flex:1">
+<button class="r" style="height:40px;padding:0 12px;gap:8px;border-bottom:2px solid var(--ac)"><span>matteo scpt final.mov</span><span title="Modifiche non salvate" style="width:6px;height:6px;border-radius:50%;background:var(--wn)"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:12px;height:12px;color:var(--ft)"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+<button class="b" aria-label="Nuovo progetto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+</div>
+<nav class="r" style="gap:4px">
+<button class="r d" style="height:40px;padding:0 14px;gap:8px">Trascrizione</button>
+<button class="r d" style="height:40px;padding:0 14px;gap:8px">Editor<span style="width:6px;height:6px;border-radius:50%;background:var(--ac)"></span></button>
+<button class="r" style="height:40px;padding:0 14px;gap:8px;border-bottom:2px solid var(--ac);font-weight:500">Esportazione</button>
+</nav>
+<div class="r" style="flex:1;justify-content:flex-end">
+<button class="b" aria-label="Passa al tema chiaro"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z"/></svg>Scuro</button>
+</div>
+</header>
+
+<section class="r" style="flex:none;height:56px;padding:0 40px;gap:20px;border-bottom:1px solid var(--ln);background:var(--pn)">
+<span class="m" style="font-size:15px;font-weight:500">14 sottotitoli</span>
+<span class="d">Fonte: matteo scpt final.mov</span>
+<span style="border:1px solid var(--ln);border-radius:3px;padding:2px 8px;font-size:12px">Versione dell'editor</span>
+<span class="r" style="gap:6px;color:var(--wn);font-size:12px"><span style="width:6px;height:6px;border-radius:50%;background:var(--wn)"></span>modificato nell'editor</span>
+<span class="r" style="gap:6px;color:var(--er);font-size:12px;margin-left:auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:14px;height:14px"><path d="M12 4l9 16H3zM12 10v4M12 17v.5"/></svg>Attenzione: 1 sottotitolo senza testo.</span>
+</section>
+
+<main class="r" style="flex:1;min-height:0;align-items:stretch">
+<section style="flex:1;min-width:0;padding:24px 40px;display:flex;flex-direction:column;gap:26px">
+<div>
+<div class="h" style="margin-bottom:8px">Salva file</div>
+<div style="border-top:1px solid var(--ln)">
+<button class="x" style="background:var(--pn);box-shadow:inset 2px 0 0 var(--ac)"><span class="tag" style="border-color:var(--ac);color:var(--ac)">SRT</span><span style="flex:1"><span style="font-weight:600;display:block">SRT</span><span class="d" style="font-size:12px">SubRip Subtitle — standard universale</span></span><span class="k">⌘S</span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></button>
+<button class="x"><span class="tag">VTT</span><span style="flex:1"><span style="font-weight:600;display:block">VTT</span><span class="d" style="font-size:12px">WebVTT — per video HTML5 e web player</span></span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></button>
+<button class="x"><span class="tag">TXT</span><span style="flex:1"><span style="font-weight:600;display:block">TXT</span><span class="d" style="font-size:12px">Testo semplice — solo dialoghi, senza timing</span></span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></button>
+<button class="x"><span class="tag">ASS</span><span style="flex:1"><span style="font-weight:600;display:block">ASS</span><span class="d" style="font-size:12px">Advanced SubStation Alpha — stili avanzati</span></span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></button>
+<button class="x"><span class="tag">V2SRT</span><span style="flex:1"><span style="font-weight:600;display:block">Progetto .v2srt</span><span class="d" style="font-size:12px">Salva tutto il progetto — riapribile e modificabile</span></span><span class="k">⌘⇧S</span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></button>
+</div>
+</div>
+<div>
+<div class="h" style="margin-bottom:8px">Pubblica direttamente</div>
+<div style="border-top:1px solid var(--ln)">
+<button class="x"><span class="tag"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v11H9zM5 15V4h10"/></svg></span><span style="flex:1"><span style="font-weight:600;display:block">YouTube Studio</span><span class="d" style="font-size:12px">Copia il testo SRT negli appunti — da incollare in YouTube Studio</span></span></button>
+<button class="x"><span class="tag"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></span><span style="flex:1"><span style="font-weight:600;display:block">Vimeo</span><span class="d" style="font-size:12px">Esporta SRT da caricare nei sottotitoli di Vimeo</span></span></button>
+<button class="x"><span class="tag"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg></span><span style="flex:1"><span style="font-weight:600;display:block">Premiere Pro / DaVinci</span><span class="d" style="font-size:12px">Esporta SRT da importare nella timeline del montaggio</span></span></button>
+<button class="x"><span class="tag"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v11H9zM5 15V4h10"/></svg></span><span style="flex:1"><span style="font-weight:600;display:block">Copia negli appunti</span><span class="d" style="font-size:12px">Copia tutto il testo SRT — incolla dove vuoi</span></span></button>
+</div>
+</div>
+</section>
+
+<aside style="width:560px;flex:none;border-left:1px solid var(--ln);background:var(--pn);display:flex;flex-direction:column">
+<div class="r" style="height:44px;padding:0 20px;border-bottom:1px solid var(--ln)"><span class="h">Anteprima SRT</span></div>
+<pre class="m" aria-label="Anteprima SRT" style="flex:1;margin:0;padding:16px 20px;font-size:12px;line-height:1.6;color:var(--dm);overflow:hidden;white-space:pre-wrap"><span style="color:var(--ft)">1</span>
+00:00:00,000 --&gt; 00:00:02,900
+<span style="color:var(--tx)">Buongiorno Marta, grazie di essere qui</span>
+
+<span style="color:var(--ft)">2</span>
+00:00:03,100 --&gt; 00:00:06,000
+<span style="color:var(--tx)">Oggi parliamo di sottotitoli, e di</span>
+
+<span style="color:var(--ft)">3</span>
+00:00:06,240 --&gt; 00:00:08,240
+<span style="color:var(--tx)">come funziona davvero
+la trascrizione automatica</span>
+
+<span style="color:var(--ft)">4</span>
+00:00:08,700 --&gt; 00:00:11,400
+<span style="color:var(--tx)">Partiamo dal modello:
+cosa ascolta, esattamente?</span>
+
+<span style="color:var(--ft)">5</span>
+00:00:12,900 --&gt; 00:00:15,600
+<span style="color:var(--tx)">Ascolta tutto, anche i silenzi</span>
+
+<span style="color:var(--ft)">6</span>
+00:00:15,800 --&gt; 00:00:18,900
+<span style="color:var(--tx)">ed è lì che nascono le frasi inventate</span>
+
+… e altri 8 sottotitoli</pre>
+</aside>
+</main>
+
+<footer class="r m" style="height:26px;flex:none;padding:0 12px;gap:16px;font-size:11px;border-top:1px solid var(--ln);background:var(--pn);color:var(--dm)">
+<span>14 sottotitoli</span><span style="color:var(--er)">2 errori</span><span style="color:var(--wn)">3 avvisi</span><span style="margin-left:auto">Modificato</span>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

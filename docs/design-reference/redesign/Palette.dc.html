@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Quattro palette a confronto</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+.vpl{width:1440px;height:1000px;box-sizing:border-box;background:#8b8b8b;padding:20px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;font:13px/1.35 "IBM Plex Sans",system-ui,sans-serif}
+.vpl *{box-sizing:border-box}
+.vpl .t{background:var(--bg);color:var(--tx);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--ln)}
+.vpl .m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.vpl .r{display:flex;align-items:center}
+.vpl .b{display:inline-flex;align-items:center;height:26px;padding:0 9px;border-radius:4px;white-space:nowrap}
+.vpl .c{padding:0 10px;height:30px;display:flex;align-items:center;border-bottom:1px solid var(--ln);white-space:nowrap;overflow:hidden}
+</style>
+</helmet>
+<div class="vpl">
+<sc-for list="{{tiles}}" as="p" hint-placeholder-count="8">
+<div class="t" style="--bg:{{p.bg}};--pn:{{p.pn}};--ln:{{p.ln}};--tx:{{p.tx}};--dm:{{p.dm}};--ac:{{p.ac}};--ai:{{p.ai}};--sel:{{p.sel}};--wv:{{p.wv}};--er:{{p.er}};--wn:{{p.wn}}">
+<div class="r" style="height:34px;padding:0 12px;gap:10px;background:var(--pn);border-bottom:1px solid var(--ln)"><span style="font-weight:600">{{p.name}}</span><span class="m" style="color:var(--dm);font-size:11px">{{p.mode}} · accento {{p.ac}}</span><span style="margin-left:auto;color:var(--dm);font-size:12px">{{p.note}}</span></div>
+<div class="r" style="height:54px;gap:1px;padding:8px 0;position:relative">
+<sc-for list="{{p.bars}}" as="b" hint-placeholder-count="40"><span style="flex:1;height:{{b.h}};background:{{b.c}}"></span></sc-for>
+<span style="position:absolute;left:22%;top:0;bottom:0;width:1px;background:var(--ac)"></span>
+</div>
+<div class="r" style="height:38px;padding:0 10px;gap:6px;background:var(--pn);border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)">
+<span class="b" style="background:var(--ac);color:var(--ai);font-weight:600">Riproduci</span>
+<span class="m" style="font-size:16px;font-weight:500;margin:0 8px">00:00:07.020</span>
+<span class="b">Dividi</span><span class="b">Unisci</span><span class="b" style="border:1px solid var(--ln)">Importa</span>
+<span class="b" style="margin-left:auto;background:var(--ac);color:var(--ai);font-weight:600">Esporta SRT</span>
+</div>
+<div style="display:grid;grid-template-columns:40px 100px 60px minmax(0,1fr)">
+<div class="c m" style="color:var(--dm)">2</div><div class="c m">00:03.100</div><div class="c m">11.7</div><div class="c">Oggi parliamo di sottotitoli, e di</div>
+<div class="c m" style="color:var(--dm);background:var(--sel);box-shadow:inset 2px 0 0 var(--ac)">3</div><div class="c m" style="background:var(--sel)">00:06.240</div><div class="c m" style="background:var(--sel);color:var(--er)">24.0</div><div class="c" style="background:var(--sel);justify-content:space-between">come funziona davvero la trascrizione automatica<span style="color:var(--er);font-size:11px">troppo veloce</span></div>
+<div class="c m" style="color:var(--dm)">4</div><div class="c m">00:08.700</div><div class="c m" style="color:var(--wn)">17.8</div><div class="c" style="justify-content:space-between">Partiamo dal modello: cosa ascolta, esattamente?<span style="color:var(--wn);font-size:11px">veloce</span></div>
+</div>
+</div>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+renderVals() {
+function bars() { var o = []; for (var i = 0; i < 110; i++) { var v = Math.abs(Math.sin(i * 0.23) * Math.sin(i * 0.05 + 1)) * 0.8 + ((i * 37) % 9) / 60; o.push({ h: Math.round(Math.min(v + 0.1, 1) * 100) + '%', c: i < 24 ? 'var(--ac)' : 'var(--wv)' }); } return o; }
+var P = [
+['A · Lime', 'quella di ora', ['#151516', '#1c1c1e', '#2f2f33', '#e8e8ea', '#a3a3ab', '#d4f04c', '#171a05', '#2b2e1d', '#5d5d66', '#f2706b', '#f0a63c'], ['#f3f3ef', '#fbfbf8', '#d6d6cf', '#1b1b1a', '#55555a', '#4c5c00', '#ffffff', '#e9f0c4', '#b4b4ac', '#b92f2a', '#8f5400']],
+['B · Ambra', 'calda, da sala di montaggio', ['#171615', '#1f1d1b', '#33302c', '#ece8e2', '#a9a39a', '#f2a93b', '#1d1404', '#33291a', '#615c55', '#f2706b', '#e6d35a'], ['#f5f2ec', '#fdfbf7', '#dcd6ca', '#1e1b17', '#5b554c', '#8a5200', '#ffffff', '#f6e6c8', '#bcb5a8', '#b92f2a', '#6b5d00']],
+['C · Azzurro', 'fredda, tecnica', ['#13161a', '#1a1e23', '#2b3138', '#e6eaee', '#9aa5b1', '#5cc8ff', '#04202e', '#17303f', '#56616d', '#f2706b', '#f0a63c'], ['#f1f4f6', '#fafcfd', '#d3dae0', '#151a1f', '#4d5964', '#005f8f', '#ffffff', '#d6ecf8', '#aab5bf', '#b92f2a', '#8f5400']],
+['D · Bianco e nero', 'nessun colore, solo contrasto', ['#141414', '#1b1b1b', '#303030', '#f2f2f2', '#a6a6a6', '#ffffff', '#141414', '#2e2e2e', '#5c5c5c', '#f2706b', '#f0a63c'], ['#f4f4f4', '#ffffff', '#d4d4d4', '#141414', '#595959', '#141414', '#ffffff', '#e4e4e4', '#b3b3b3', '#b92f2a', '#8f5400']]
+];
+var k = ['bg', 'pn', 'ln', 'tx', 'dm', 'ac', 'ai', 'sel', 'wv', 'er', 'wn'], tiles = [];
+P.forEach(function (p) { [['scuro', p[2]], ['chiaro', p[3]]].forEach(function (m) { var t = { name: p[0], note: p[1], mode: m[0], bars: bars() }; k.forEach(function (key, i) { t[key] = m[1][i]; }); tiles.push(t); }); });
+return { tiles: tiles };
+}
+}
+</script>
+</body>
+</html>

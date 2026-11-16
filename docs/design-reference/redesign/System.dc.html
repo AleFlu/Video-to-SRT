@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Sistema di design</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+.vsy{--bg:#141414;--pn:#1b1b1b;--rs:#262626;--ln:#303030;--tx:#f2f2f2;--dm:#a6a6a6;--ft:#8c8c8c;--ac:#ffffff;--ai:#141414;--er:#f2706b;--wn:#f0a63c;--sel:#2e2e2e;--wv:#5c5c5c;width:1440px;height:900px;box-sizing:border-box;background:var(--bg);color:var(--tx);font:13px/1.4 "IBM Plex Sans",system-ui,sans-serif;padding:36px 40px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr);gap:40px;overflow:hidden}
+.vsy *{box-sizing:border-box}
+.vsy .m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.vsy .r{display:flex;align-items:center}
+.vsy .d{color:var(--dm)}
+.vsy button{font:inherit;color:inherit;background:none;border:0;padding:0}
+.vsy .b{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:4px;color:var(--dm);white-space:nowrap}
+.vsy .b.o{border:1px solid var(--ln);color:var(--tx)}
+.vsy .b.p{background:var(--ac);color:var(--ai);font-weight:600}
+.vsy .i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.vsy .k{font:11px "IBM Plex Mono",monospace;color:var(--ft)}
+.vsy .h{font-size:12px;font-weight:600;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--ln)}
+.vsy .sw{height:44px;gap:12px;border-bottom:1px solid var(--ln)}
+.vsy .f{height:28px;border:1px solid var(--ln);border-radius:4px;background:var(--bg);padding:0 8px;display:flex;align-items:center}
+.vsy .c{padding:0 10px;height:34px;display:flex;align-items:center;border-bottom:1px solid var(--ln);white-space:nowrap;overflow:hidden}
+.vsy ul{margin:0;padding:0;list-style:none}
+.vsy li{padding:7px 0;border-bottom:1px solid var(--ln);display:flex;gap:10px}
+</style>
+</helmet>
+<div class="vsy">
+
+<section>
+<h2 class="h">Colore · tema scuro</h2>
+<sc-for list="{{dark}}" as="s" hint-placeholder-count="10"><div class="r sw"><span style="width:44px;height:28px;background:{{s.v}};border:1px solid #3a3a3f;flex:none"></span><span style="width:104px;font-weight:500">{{s.n}}</span><span class="m d" style="width:74px;font-size:12px">{{s.v}}</span><span class="d" style="font-size:12px">{{s.u}}</span></div></sc-for>
+<h2 class="h" style="margin-top:26px">Colore · tema chiaro</h2>
+<sc-for list="{{light}}" as="s" hint-placeholder-count="6"><div class="r sw"><span style="width:44px;height:28px;background:{{s.v}};border:1px solid #3a3a3f;flex:none"></span><span style="width:104px;font-weight:500">{{s.n}}</span><span class="m d" style="width:74px;font-size:12px">{{s.v}}</span><span class="d" style="font-size:12px">{{s.u}}</span></div></sc-for>
+</section>
+
+<section>
+<h2 class="h">Tipografia</h2>
+<div style="font-size:22px;font-weight:500;line-height:1.2">Trascrizione completata</div><div class="m d" style="font-size:11px;margin:2px 0 14px">IBM Plex Sans 500 · 22 px · titoli di stato</div>
+<div style="font-size:14px">come funziona davvero la trascrizione automatica</div><div class="m d" style="font-size:11px;margin:2px 0 14px">IBM Plex Sans 400 · 14 px · testo dei sottotitoli</div>
+<div style="font-size:13px">Sostituisci tutto · Apri nell'editor · Filtro VAD</div><div class="m d" style="font-size:11px;margin:2px 0 14px">IBM Plex Sans 400/500 · 13 px · interfaccia</div>
+<div style="font-size:11px;font-weight:500;color:var(--ft)">Inizio · Fine · Durata · CPS</div><div class="m d" style="font-size:11px;margin:2px 0 14px">IBM Plex Sans 500 · 11 px · etichette, mai in maiuscolo</div>
+<div class="m" style="font-size:20px;font-weight:500">00:00:07.020</div><div class="m d" style="font-size:11px;margin:2px 0 14px">IBM Plex Mono 500 · 20 px · timecode</div>
+<div class="m">00:06.240 &nbsp; 24.0 &nbsp; 110,3 MB</div><div class="m d" style="font-size:11px;margin:2px 0 0">IBM Plex Mono 400 · 13 px · tempi, numeri, log</div>
+
+<h2 class="h" style="margin-top:26px">Regole</h2>
+<ul>
+<li><span class="m" style="color:var(--ac)">01</span><span>Bianco e nero. Il colore compare solo per errori e avvisi; posizione, selezione e azione principale usano il contrasto.</span></li>
+<li><span class="m" style="color:var(--ac)">02</span><span>Linee al posto delle card: i pannelli si dividono con un filo da 1 px.</span></li>
+<li><span class="m" style="color:var(--ac)">03</span><span>Raggio 4 px per i controlli, 0 per pannelli e righe. Niente pillole.</span></li>
+<li><span class="m" style="color:var(--ac)">04</span><span>Nessuna sfumatura, ombra decorativa o animazione di sfondo.</span></li>
+<li><span class="m" style="color:var(--ac)">05</span><span>Ogni numero è in monospazio con cifre tabulari.</span></li>
+<li><span class="m" style="color:var(--ac)">06</span><span>Errore e avviso hanno sempre un'icona o una parola, mai solo il colore.</span></li>
+<li><span class="m" style="color:var(--ac)">07</span><span>La finestra si usa tutta: niente colonna stretta centrata.</span></li>
+</ul>
+</section>
+
+<section>
+<h2 class="h">Componenti</h2>
+<div class="r" style="gap:8px;flex-wrap:wrap;margin-bottom:6px">
+<button class="b p"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg>Esporta SRT</button>
+<button class="b o">Nuova trascrizione</button>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M5 8l4 4-4 4M19 8l-4 4 4 4"/></svg>Dividi<span class="k">⌘K</span></button>
+<button class="b o" style="border-color:var(--er);color:var(--er)">Interrompi</button>
+<button class="b o" aria-disabled="true" style="color:var(--ft)">Non attivo</button>
+</div>
+<div class="m d" style="font-size:11px;margin-bottom:16px">primario · secondario · barra strumenti · distruttivo · disattivato</div>
+
+<div class="r" style="gap:10px;margin-bottom:6px">
+<div class="f" style="width:200px;justify-content:space-between"><span>Italiano</span><svg class="i d" viewBox="0 0 24 24" aria-hidden="true" style="width:14px;height:14px"><path d="M6 9l6 6 6-6"/></svg></div>
+<div class="f m" style="width:130px;border-color:var(--ac)">00:06.240</div>
+<button role="switch" aria-checked="true" aria-label="Interruttore attivo" style="width:38px;height:20px;border-radius:3px;background:var(--ac);position:relative"><span style="position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:2px;background:var(--ai)"></span></button>
+<button role="switch" aria-checked="false" aria-label="Interruttore spento" style="width:38px;height:20px;border-radius:3px;border:1px solid var(--dm);position:relative"><span style="position:absolute;left:2px;top:1px;width:16px;height:16px;border-radius:2px;background:var(--dm)"></span></button>
+<button role="switch" aria-checked="false" aria-disabled="true" aria-label="Interruttore non disponibile" style="width:38px;height:20px;border-radius:3px;border:1px solid var(--ln);position:relative"><span style="position:absolute;left:2px;top:1px;width:16px;height:16px;border-radius:2px;background:var(--ln)"></span></button>
+</div>
+<div class="m d" style="font-size:11px;margin-bottom:16px">menu · campo con focus · interruttore attivo, spento, non disponibile</div>
+
+<div style="display:grid;grid-template-columns:40px 96px 60px minmax(0,1fr)">
+<div class="c m" style="color:var(--ft)">1</div><div class="c m">00:00.000</div><div class="c m">13.1</div><div class="c">Riga normale</div>
+<div class="c m" style="color:var(--ft);background:var(--sel);box-shadow:inset 2px 0 0 var(--ac)">2</div><div class="c m" style="background:var(--sel)">00:06.240</div><div class="c m" style="background:var(--sel)">17.0</div><div class="c" style="background:var(--sel);color:#fff">Riga selezionata</div>
+<div class="c m" style="color:var(--ft)">3</div><div class="c m">00:08.700</div><div class="c m" style="color:var(--wn)">17.8</div><div class="c" style="justify-content:space-between">Avviso<span style="color:var(--wn);font-size:11px">veloce</span></div>
+<div class="c m" style="color:var(--ft)">4</div><div class="c m">00:19.200</div><div class="c m" style="color:var(--er)">24.0</div><div class="c" style="justify-content:space-between">Errore<span style="color:var(--er);font-size:11px">troppo veloce</span></div>
+</div>
+<div class="m d" style="font-size:11px;margin:6px 0 16px">righe della tabella: normale, selezionata, avviso, errore</div>
+
+<div class="r" style="gap:14px;border:1px solid var(--ln);border-radius:6px;background:var(--pn);padding:14px 16px">
+<svg class="i d" viewBox="0 0 24 24" aria-hidden="true" style="width:24px;height:24px"><path d="M4 6h11v12H4zM15 10l5-3v10l-5-3"/></svg>
+<div style="flex:1;min-width:0"><div style="font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">matteo scpt final.mov</div><div class="m d" style="font-size:12px">110,3 MB · MOV</div></div>
+<button class="b o">Cambia</button>
+</div>
+<div class="m d" style="font-size:11px;margin:6px 0 16px">sorgente caricata: sostituisce la zona di rilascio nella schermata iniziale</div>
+
+<div class="r" style="gap:10px;border:1px solid var(--wn);border-radius:4px;padding:10px 12px;align-items:flex-start">
+<svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="color:var(--wn);margin-top:1px"><path d="M12 4l9 16H3zM12 10v4M12 17v.5"/></svg>
+<div><div style="font-weight:500;color:var(--wn)">Modello Whisper non disponibile</div><div class="d" style="font-size:12px;margin-top:2px">Esegui lo script di setup (setup_mac.sh o setup_windows.bat) per scaricarlo: circa 3 GB.</div></div>
+</div>
+<div class="m d" style="font-size:11px;margin-top:6px">avviso dipendenze: una riga sopra la schermata iniziale, solo quando serve</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+dark: [
+{ n: 'Fondo', v: '#141414', u: 'area di lavoro, campi' },
+{ n: 'Pannello', v: '#1b1b1b', u: 'barre, ispettore, log' },
+{ n: 'Rialzo', v: '#262626', u: 'controllo premuto, blocchi' },
+{ n: 'Linea', v: '#303030', u: 'divisori, bordi' },
+{ n: 'Testo', v: '#f2f2f2', u: '15,4:1 sul pannello' },
+{ n: 'Secondario', v: '#a6a6a6', u: '7,1:1 sul pannello' },
+{ n: 'Etichetta', v: '#8c8c8c', u: '5,1:1 sul pannello' },
+{ n: 'Accento', v: '#ffffff', u: 'cursore, selezione, primario' },
+{ n: 'Errore', v: '#f2706b', u: 'unico colore, con icona o parola' },
+{ n: 'Avviso', v: '#f0a63c', u: 'unico colore, con icona o parola' }
+],
+light: [
+{ n: 'Fondo', v: '#f4f4f4', u: 'area di lavoro' },
+{ n: 'Pannello', v: '#ffffff', u: 'barre, ispettore' },
+{ n: 'Linea', v: '#d4d4d4', u: 'divisori, bordi' },
+{ n: 'Testo', v: '#141414', u: '18,4:1 sul pannello; anche accento' },
+{ n: 'Secondario', v: '#595959', u: '7,0:1 sul pannello' },
+{ n: 'Errore', v: '#b92f2a', u: '6,0:1 sul pannello' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

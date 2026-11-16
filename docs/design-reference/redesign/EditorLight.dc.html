@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Editor, tema chiaro, con Trova e sostituisci</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+.vel{--bg:#f4f4f4;--pn:#ffffff;--rs:#e8e8e8;--ln:#d4d4d4;--tx:#141414;--dm:#595959;--ft:#6b6b6b;--ac:#141414;--ai:#ffffff;--er:#b92f2a;--wn:#8f5400;--sel:#e4e4e4;--wv:#b3b3b3;position:relative;width:1440px;height:900px;box-sizing:border-box;background:var(--bg);color:var(--tx);font:13px/1.35 "IBM Plex Sans",system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+.vel *{box-sizing:border-box}
+.vel .m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.vel .r{display:flex;align-items:center}
+.vel .d{color:var(--dm)}
+.vel button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.vel .b{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:4px;color:var(--dm);white-space:nowrap}
+.vel .b.o{border:1px solid var(--ln);color:var(--tx)}
+.vel .b.p{background:var(--ac);color:var(--ai);font-weight:600}
+.vel .i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.vel .k{font:11px "IBM Plex Mono",monospace;color:var(--ft)}
+.vel .sep{width:1px;height:18px;background:var(--ln);margin:0 6px}
+.vel .lb{font-size:11px;color:var(--ft);font-weight:500}
+.vel .f{height:28px;border:1px solid var(--ln);border-radius:4px;background:var(--bg);padding:0 8px;display:flex;align-items:center}
+.vel .c{padding:0 10px;height:34px;display:flex;align-items:center;border-bottom:1px solid var(--ln);overflow:hidden;white-space:nowrap}
+</style>
+</helmet>
+<div class="vel">
+
+<header class="r" style="height:40px;flex:none;background:var(--pn);border-bottom:1px solid var(--ln);padding:0 10px">
+<div class="r" style="gap:2px;flex:1">
+<button class="r" style="height:40px;padding:0 12px;gap:8px;border-bottom:2px solid var(--ac);color:var(--tx)"><span>intervista_marta_03.mov</span><span title="Modifiche non salvate" style="width:6px;height:6px;border-radius:50%;background:var(--wn)"></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:12px;height:12px;color:var(--ft)"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+<button class="r d" style="height:40px;padding:0 12px;gap:8px"><span>Progetto 2</span><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:12px;height:12px;color:var(--ft)"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+<button class="b" aria-label="Nuovo progetto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+</div>
+<nav class="r" style="gap:4px">
+<button class="r d" style="height:40px;padding:0 14px;gap:8px">Trascrizione</button>
+<button class="r" style="height:40px;padding:0 14px;gap:8px;border-bottom:2px solid var(--ac);font-weight:500">Editor</button>
+<button class="r d" style="height:40px;padding:0 14px;gap:8px">Esportazione</button>
+</nav>
+<div class="r" style="flex:1;justify-content:flex-end">
+<button class="b" aria-label="Passa al tema scuro"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.500 17.500L19 19M19 5l-1.5 1.5M6.500 17.500L5 19"/></svg>Chiaro</button>
+</div>
+</header>
+
+<section class="r" style="height:286px;flex:none;align-items:stretch;border-bottom:1px solid var(--ln)">
+<div style="width:452px;flex:none;padding:12px;border-right:1px solid var(--ln);background:var(--bg)">
+<div style="height:100%;background:#0b0b0c;border:1px solid var(--ln);position:relative;display:flex;align-items:flex-end;justify-content:center">
+<span class="m d" style="position:absolute;left:10px;top:8px;font-size:11px">1920 × 1080 · 25 fps</span>
+<span style="margin-bottom:22px;background:rgba(0,0,0,.72);color:#fff;padding:5px 12px;font-size:16px;text-align:center;line-height:1.3">come funziona davvero<br>la trascrizione automatica</span>
+</div>
+</div>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)">
+<div class="r" style="height:26px;padding:0 12px;gap:12px;border-bottom:1px solid var(--ln)">
+<span class="d" style="font-size:12px">intervista_marta_03.mov</span>
+<span class="m d" style="font-size:11px;margin-left:auto">durata 00:00:49.640</span>
+</div>
+<div class="r m" style="height:22px;border-bottom:1px solid var(--ln);font-size:11px;color:var(--ft);position:relative">
+<sc-for list="{{ticks}}" as="t" hint-placeholder-count="10"><span style="flex:1;padding-left:6px;border-left:1px solid var(--ln);height:22px;line-height:22px">{{t}}</span></sc-for>
+</div>
+<div style="flex:1;position:relative;padding:0 0 0 0">
+<div class="r" style="height:100%;gap:1px;padding:14px 0">
+<sc-for list="{{bars}}" as="b" hint-placeholder-count="60"><span style="flex:1;height:{{b.h}};background:{{b.c}}"></span></sc-for>
+</div>
+<span style="position:absolute;left:14.1%;top:-22px;bottom:-52px;width:1px;background:var(--ac)"></span>
+<span class="m" style="position:absolute;left:14.1%;top:-22px;transform:translateX(-50%);background:var(--ac);color:var(--ai);font-size:11px;padding:1px 5px;border-radius:2px">00:07.020</span>
+</div>
+<div style="height:52px;border-top:1px solid var(--ln);position:relative;background:var(--pn)">
+<sc-for list="{{blocks}}" as="s" hint-placeholder-count="8"><span style="position:absolute;top:10px;height:32px;left:{{s.l}};width:{{s.w}};border:1px solid {{s.bd}};background:{{s.bg}};color:{{s.fg}};font-size:11px;padding:0 6px;line-height:30px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{s.t}}</span></sc-for>
+</div>
+</div>
+</section>
+
+<section class="r" style="height:46px;flex:none;padding:0 12px;gap:6px;background:var(--pn);border-bottom:1px solid var(--ln)">
+<button class="b p" aria-label="Riproduci (Spazio)" style="width:36px;justify-content:center;padding:0"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M8 5l11 7-11 7z"/></svg></button>
+<button class="b o" aria-label="Ferma" style="width:32px;justify-content:center;padding:0"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M7 7h10v10H7z"/></svg></button>
+<span class="m" style="font-size:20px;font-weight:500;margin-left:10px;letter-spacing:.01em">00:00:07.020</span>
+<span class="m d" style="font-size:12px;margin:3px 0 0 4px">/ 00:00:49.640</span>
+<div aria-label="Posizione" style="flex:1;height:20px;margin:0 16px;position:relative">
+<span style="position:absolute;left:0;right:0;top:9px;height:2px;background:var(--ln)"></span>
+<span style="position:absolute;left:0;width:14.1%;top:9px;height:2px;background:var(--ac)"></span>
+<span style="position:absolute;left:14.1%;top:3px;width:2px;height:14px;background:var(--ac)"></span>
+</div>
+<svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4zM17 9a4 4 0 0 1 0 6"/></svg>
+<div aria-label="Volume" style="width:84px;height:20px;position:relative"><span style="position:absolute;left:0;right:0;top:9px;height:2px;background:var(--ln)"></span><span style="position:absolute;left:0;width:72%;top:9px;height:2px;background:var(--dm)"></span><span style="position:absolute;left:72%;top:4px;width:2px;height:12px;background:var(--tx)"></span></div>
+<span class="sep"></span>
+<button class="b o m" aria-label="Velocità di riproduzione">1×<svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></button>
+<button class="b" aria-label="Ripeti il sottotitolo selezionato"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4M3 12v-2a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 12v2a4 4 0 0 1-4 4H3"/></svg></button>
+<span class="k" style="margin-left:6px">J K L</span>
+</section>
+
+<section class="r" style="height:42px;flex:none;padding:0 8px;gap:2px;border-bottom:1px solid var(--ln)">
+<button class="b" aria-label="Annulla"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+<button class="b" aria-label="Ripeti" style="color:var(--ft)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+<span class="sep"></span>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M5 8l4 4-4 4M19 8l-4 4 4 4"/></svg>Dividi<span class="k">⌘K</span></button>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l4 4-4 4M20 8l-4 4 4 4M8 12h8"/></svg>Unisci<span class="k">⌘M</span></button>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Elimina<span class="k">⌘⇧K</span></button>
+<span class="sep"></span>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Importa</button>
+<button class="b" style="color:var(--tx)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>Sostituisci<span class="k">⌘⌥F</span></button>
+<span class="sep"></span>
+<button class="b" aria-pressed="true" style="color:var(--tx);background:var(--rs)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM15 5v14"/></svg>Ispettore<span class="k">⌘I</span></button>
+<label class="f" style="margin-left:auto;width:250px;gap:8px"><svg class="i d" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a7 7 0 1 0 14 0 7 7 0 1 0-14 0M21 21l-5-5"/></svg><span class="d">Cerca sottotitolo…</span><span class="k" style="margin-left:auto">⌘F</span></label>
+<span class="r" style="margin-left:8px"><button class="b p" style="border-radius:4px 0 0 4px"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg>Esporta SRT</button><button class="b p" aria-label="Scegli formato di esportazione" style="border-radius:0 4px 4px 0;padding:0 7px;margin-left:1px"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width:13px;height:13px"><path d="M6 9l6 6 6-6"/></svg></button></span>
+</section>
+
+<section class="r" style="flex:1;min-height:0;align-items:stretch">
+<div style="flex:1;min-width:0;display:grid;grid-template-columns:52px 108px 108px 84px 70px minmax(0,1fr);align-content:start">
+<div class="c lb" style="height:30px">#</div><div class="c lb" style="height:30px">Inizio</div><div class="c lb" style="height:30px">Fine</div><div class="c lb" style="height:30px">Durata</div><div class="c lb" style="height:30px">CPS</div><div class="c lb" style="height:30px">Testo</div>
+<sc-for list="{{rows}}" as="x" hint-placeholder-count="12">
+<div class="c m" style="background:{{x.bg}};color:var(--ft);box-shadow:{{x.mark}}">{{x.n}}</div>
+<div class="c m" style="background:{{x.bg}}">{{x.a}}</div>
+<div class="c m" style="background:{{x.bg}}">{{x.z}}</div>
+<div class="c m d" style="background:{{x.bg}}">{{x.d}}</div>
+<div class="c m" style="background:{{x.bg}};color:{{x.cc}}">{{x.cps}}</div>
+<div class="c" style="background:{{x.bg}};color:{{x.tc}};gap:8px"><span style="overflow:hidden;text-overflow:ellipsis">{{x.t}}</span><span style="color:{{x.ic}};font-size:11px;margin-left:auto;flex:none">{{x.issue}}</span></div>
+</sc-for>
+</div>
+<aside style="width:324px;flex:none;border-left:1px solid var(--ln);background:var(--pn);padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+<div class="r" style="justify-content:space-between"><span style="font-weight:600">Sottotitolo 3</span><span class="m d">3 / 14</span></div>
+<div style="display:grid;grid-template-columns:52px 1fr;gap:8px 10px;align-items:center">
+<label class="lb" for="in">Inizio</label><div class="f m" id="in" style="justify-content:space-between">00:06.240<span class="d">s</span></div>
+<label class="lb" for="out">Fine</label><div class="f m" id="out" style="justify-content:space-between">00:08.240<span class="d">s</span></div>
+<span class="lb">Durata</span><span class="m">2.00 s</span>
+</div>
+<div><div class="lb" style="margin-bottom:6px">Sposta inizio e fine</div>
+<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px"><button class="b o m" style="justify-content:center;padding:0">−100 ms</button><button class="b o m" style="justify-content:center;padding:0">−10 ms</button><button class="b o m" style="justify-content:center;padding:0">+10 ms</button><button class="b o m" style="justify-content:center;padding:0">+100 ms</button></div></div>
+<div><div class="r lb" style="justify-content:space-between;margin-bottom:6px"><span>Testo</span><span>⌘↵ per applicare</span></div>
+<div style="border:1px solid var(--ac);border-radius:4px;background:var(--bg);padding:8px 10px;height:92px;font-size:14px;line-height:1.45">come funziona davvero la trascrizione automatica</div>
+<div class="r m" style="justify-content:space-between;margin-top:6px;font-size:12px"><span class="d">48 caratteri · 6 parole</span><span style="color:var(--er)">24.0 CPS</span></div></div>
+<div style="border-top:1px solid var(--ln);padding-top:12px"><div class="lb" style="margin-bottom:6px">Diagnostica</div>
+<div class="r" style="gap:8px;color:var(--er);align-items:flex-start"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="margin-top:1px"><path d="M12 4l9 16H3zM12 10v4M12 17v.5"/></svg><span>Troppo veloce: 24.0 CPS, massimo 20</span></div></div>
+</aside>
+</section>
+
+<footer class="r m" style="height:26px;flex:none;padding:0 12px;gap:16px;font-size:11px;border-top:1px solid var(--ln);background:var(--pn);color:var(--dm)">
+<span>14 sottotitoli</span><span style="color:var(--er)">2 errori</span><span style="color:var(--wn)">3 avvisi</span><span style="margin-left:auto">Modificato</span>
+</footer>
+
+<div role="dialog" aria-label="Trova e sostituisci" style="position:absolute;left:420px;top:392px;width:500px;background:var(--pn);border:1px solid var(--dm);border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.18)">
+<div class="r" style="height:40px;padding:0 14px;border-bottom:1px solid var(--ln);justify-content:space-between"><span style="font-weight:600">Trova e sostituisci</span><button class="b" aria-label="Chiudi" style="padding:0 4px"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+<div style="padding:14px;display:grid;grid-template-columns:84px 1fr;gap:10px;align-items:center">
+<label class="lb" for="fq">Trova</label><div class="f" id="fq" style="border-color:var(--ac);background:var(--pn)">trascrizione</div>
+<label class="lb" for="fr">Sostituisci</label><div class="f d" id="fr" style="background:var(--pn)">Sostituisci con…</div>
+<span></span><div class="r" style="gap:6px"><button class="b o m" aria-pressed="false">Aa<span style="font-family:'IBM Plex Sans'">Maiuscole/minuscole</span></button><button class="b o m" aria-pressed="true" style="background:var(--sel);border-color:var(--ac)">W<span style="font-family:'IBM Plex Sans'">Parole intere</span></button><button class="b o m" aria-pressed="false">.*<span style="font-family:'IBM Plex Sans'">Regex</span></button></div>
+</div>
+<div class="r" style="padding:10px 14px;border-top:1px solid var(--ln);gap:8px"><button class="b o" style="margin-left:auto">Chiudi</button><button class="b o">Sostituisci tutto</button><button class="b p">Trova successivo<span class="k" style="color:var(--ai)">↵</span></button></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+var bars = [];
+for (var i = 0; i < 230; i++) {
+var v = Math.abs(Math.sin(i * 0.19) * Math.sin(i * 0.043 + 1)) * 0.82 + ((i * 37) % 9) / 60;
+var gap = (i > 44 && i < 52) || (i > 118 && i < 127) || (i > 176 && i < 181);
+bars.push({ h: Math.round((gap ? 0.04 : Math.min(v + 0.08, 1)) * 100) + '%', c: i < 33 ? 'var(--ac)' : 'var(--wv)' });
+}
+var subs = [
+[0.0, 2.9, 'Buongiorno Marta, grazie di essere qui', 13.1, ''],
+[3.1, 6.0, 'Oggi parliamo di sottotitoli, e di', 11.7, ''],
+[6.24, 8.24, 'come funziona davvero la trascrizione automatica', 24.0, 'e'],
+[8.7, 11.4, 'Partiamo dal modello: cosa ascolta, esattamente?', 17.8, 'w'],
+[12.9, 15.6, 'Ascolta tutto, anche i silenzi', 11.1, ''],
+[15.8, 18.9, 'ed è lì che nascono le frasi inventate', 12.3, ''],
+[19.2, 21.0, '', 0, 'v'],
+[21.4, 24.6, 'Per questo il filtro VAD toglie le pause', 12.5, ''],
+[26.3, 29.8, 'prima ancora che il modello le senta', 10.3, ''],
+[30.0, 32.2, 'Poi arriva la parte che preferisco: i tempi', 19.1, 'w'],
+[32.4, 36.0, 'Ogni parola ha un inizio e una fine', 9.7, ''],
+[36.1, 39.4, 'e il sottotitolo si chiude quando chi parla respira', 15.5, '']
+];
+function tc(s) { var m = Math.floor(s / 60), r = (s - m * 60).toFixed(3); return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r; }
+var rows = subs.map(function (s, i) {
+var sel = i === 2, e = s[4];
+return { n: i + 1, a: tc(s[0]), z: tc(s[1]), d: (s[1] - s[0]).toFixed(2) + ' s', cps: s[3] ? s[3].toFixed(1) : '—', t: s[2] || 'Testo vuoto',
+bg: sel ? 'var(--sel)' : 'transparent', mark: sel ? 'inset 2px 0 0 var(--ac)' : 'none',
+cc: e === 'e' ? 'var(--er)' : e === 'w' ? 'var(--wn)' : 'var(--tx)', tc: e === 'v' ? 'var(--ft)' : 'var(--tx)',
+ic: e === 'w' ? 'var(--wn)' : 'var(--er)', issue: e === 'e' ? 'troppo veloce' : e === 'w' ? 'veloce' : e === 'v' ? 'vuoto' : '' };
+});
+var blocks = subs.map(function (s, i) {
+var sel = i === 2, e = s[4];
+return { l: (s[0] / 49.64 * 100).toFixed(2) + '%', w: ((s[1] - s[0]) / 49.64 * 100).toFixed(2) + '%', t: s[2],
+bd: sel ? 'var(--ac)' : e === 'e' || e === 'v' ? 'var(--er)' : e === 'w' ? 'var(--wn)' : 'var(--ln)', bg: sel ? 'var(--sel)' : 'var(--rs)', fg: sel ? 'var(--tx)' : 'var(--dm)' };
+});
+return { bars: bars, rows: rows, blocks: blocks, ticks: ['0:00', '0:05', '0:10', '0:15', '0:20', '0:25', '0:30', '0:35', '0:40', '0:45'] };
+}
+}
+</script>
+</body>
+</html>
