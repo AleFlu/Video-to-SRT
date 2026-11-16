@@ -39,11 +39,12 @@ from PySide6.QtWidgets import (
     QFileDialog, QScrollArea, QStackedLayout,
 )
 
-from core.constants import SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS
+from core.constants import (
+    SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS,
+)
 from ui.prefs import RECENT_KEY, add_recent, read_list
-from ui.theme import AuroraMixin
-from ui.widgets import DepsBanner, ElidedLabel, fmt_size
-from ui import theme
+from ui.widgets import DepsBanner, ElidedLabel, SwitchPill, ToggleSwitch, fmt_size
+from ui import icons, theme
 import platform_support
 
 
@@ -66,7 +67,7 @@ def _is_subtitle(path: str) -> bool:
 def _combo_ss() -> str:
     c = theme.c
     return (
-        f"QComboBox {{ background: {c('card_2')}; border: 1px solid transparent; border-radius: 8px;"
+        f"QComboBox {{ background: {c('card_2')}; border: 1px solid transparent; border-radius: 4px;"
         f" color: {c('text')}; padding: 5px 10px; font-size: 13px; font-weight: 500; min-height: 22px; }}"
         f"QComboBox:hover {{ border-color: {c('line_2')}; }}"
         f"QComboBox:focus {{ border: 2px solid {c('focus')}; }}"
@@ -74,11 +75,11 @@ def _combo_ss() -> str:
         f"{theme.combo_arrow_rule()}"
         f"QComboBox QAbstractItemView {{ background: {c('card')}; border: 1px solid {c('line_2')};"
         f" color: {c('text')}; selection-background-color: {c('acc_fill')};"
-        f" selection-color: {c('acc_ink')}; border-radius: 8px; }}"
+        f" selection-color: {c('acc_ink')}; border-radius: 4px; }}"
     )
 
 
-class HomeWidget(AuroraMixin, QWidget):
+class HomeWidget(QWidget):
     """Schermata iniziale: drag&drop + impostazioni + avvia."""
 
     start_requested = Signal(str, dict)   # (source_path, settings)
@@ -88,7 +89,6 @@ class HomeWidget(AuroraMixin, QWidget):
         super().__init__(parent)
         self.setObjectName("contentPanel")
         self._source_path: str | None = None
-        self._aurora_init()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -126,7 +126,7 @@ class HomeWidget(AuroraMixin, QWidget):
         cl.addSpacing(8)
 
         # ── Header ───────────────────────────────────────────────────────────
-        self._eyebrow = QLabel("TRASCRIZIONE")
+        self._eyebrow = QLabel("Trascrizione")
         cl.addWidget(self._eyebrow)
         cl.addSpacing(10)
 
@@ -165,6 +165,7 @@ class HomeWidget(AuroraMixin, QWidget):
         ar.addWidget(self._estimate_lbl, 1)
         self.start_btn = QPushButton("Avvia trascrizione")
         self.start_btn.setObjectName("primary")
+        self._start_icon = icons.bind_icon(self.start_btn, "play", "acc_ink")
         self.start_btn.setMinimumHeight(44)
         self.start_btn.setMinimumWidth(200)
         self.start_btn.setCursor(Qt.PointingHandCursor)
@@ -199,11 +200,11 @@ class HomeWidget(AuroraMixin, QWidget):
         self._refresh_recents()
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
-    # ── Aurora ────────────────────────────────────────────────────────────────
+    # ── Sfondo piatto ─────────────────────────────────────────────────────────
 
     def paintEvent(self, event):
         p = QPainter(self)
-        self._aurora_paint(p)
+        p.fillRect(self.rect(), theme.qcolor("bg"))
         p.end()
 
     def keyPressEvent(self, event):
@@ -231,11 +232,11 @@ class HomeWidget(AuroraMixin, QWidget):
         c = theme.c
         self._eyebrow.setStyleSheet(
             f"font-size: 11px; font-weight: 600; color: {c('muted')};"
-            " letter-spacing: 1.6px; background: transparent;"
+            " background: transparent;"
         )
         self._title.setStyleSheet(
             f"font-size: 30px; font-weight: 600; color: {c('text')};"
-            " letter-spacing: -0.6px; background: transparent;"
+            " background: transparent;"
         )
         self._sub.setStyleSheet(f"font-size: 14.5px; color: {c('dim')}; background: transparent;")
         self._estimate_lbl.setStyleSheet(
@@ -244,11 +245,11 @@ class HomeWidget(AuroraMixin, QWidget):
         )
         self._settings_card.setStyleSheet(
             f"QFrame#settingsCard {{ background-color: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 11px; }}"
+            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
         )
         self._head_lbl.setStyleSheet(
             f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-            " letter-spacing: 1.2px; background: transparent;"
+            " background: transparent;"
         )
         self._preset_lbl.setStyleSheet(
             f"font-size: 11px; color: {c('muted')}; background: transparent;"
@@ -257,7 +258,7 @@ class HomeWidget(AuroraMixin, QWidget):
         for lbl in self._field_labels:
             lbl.setStyleSheet(
                 f"font-size: 10px; font-weight: 600; color: {c('muted')};"
-                " letter-spacing: 1px; background: transparent;"
+                " background: transparent;"
             )
 
     # ── Settings card ─────────────────────────────────────────────────────────
@@ -276,7 +277,7 @@ class HomeWidget(AuroraMixin, QWidget):
         # header row: titolo a sinistra, riepilogo impostazioni a destra
         head_row = QHBoxLayout()
         head_row.setContentsMargins(0, 0, 0, 0)
-        self._head_lbl = QLabel("IMPOSTAZIONI DI TRASCRIZIONE")
+        self._head_lbl = QLabel("Impostazioni di trascrizione")
         head_row.addWidget(self._head_lbl)
         head_row.addStretch()
         self._preset_lbl = ElidedLabel("", Qt.ElideRight)
@@ -291,19 +292,19 @@ class HomeWidget(AuroraMixin, QWidget):
         self._field_labels = []
         ss = _combo_ss()
 
-        col_m = self._col("MODELLO WHISPER")
+        col_m = self._col("Modello Whisper")
         self.model_combo = QComboBox()
         self.model_combo.setAccessibleName("Modello Whisper")
         self.model_combo.setStyleSheet(ss)
         for k in self._model_keys:
-            self.model_combo.addItem(self._models[k]["label"], k)
+            self.model_combo.addItem(self._models[k]["label"].rstrip(" ★").rstrip(), k)
         self.model_combo.setCurrentIndex(self._model_keys.index(DEFAULT_MODEL))
         self.model_combo.currentIndexChanged.connect(self._update_estimate)
         self.model_combo.currentIndexChanged.connect(self._update_preset_label)
         col_m.addWidget(self.model_combo)
         grid.addLayout(col_m, 2)
 
-        col_l = self._col("LINGUA")
+        col_l = self._col("Lingua")
         self.lang_combo = QComboBox()
         self.lang_combo.setAccessibleName("Lingua dell'audio")
         self.lang_combo.setStyleSheet(ss)
@@ -316,7 +317,7 @@ class HomeWidget(AuroraMixin, QWidget):
         col_l.addWidget(self.lang_combo)
         grid.addLayout(col_l, 2)
 
-        col_v = self._col("FILTRO VAD")
+        col_v = self._col("Filtro VAD")
         self.vad_toggle = _ToggleSwitch("Attivo", "Disattivo", name="Filtro VAD")
         self.vad_toggle.setToolTip("Salta i tratti senza parlato (consigliato)")
         self.vad_toggle.setChecked(True)
@@ -325,7 +326,7 @@ class HomeWidget(AuroraMixin, QWidget):
         col_v.addStretch()
         grid.addLayout(col_v, 1)
 
-        col_hp = self._col("ALTA PRECISIONE")
+        col_hp = self._col("Alta precisione")
         self.accuracy_toggle = _ToggleSwitch("Attiva", "Standard", name="Alta precisione")
         self.accuracy_toggle.setChecked(False)
         self.accuracy_toggle.setToolTip(
@@ -396,13 +397,14 @@ class HomeWidget(AuroraMixin, QWidget):
         c = theme.c
         if enabled:
             self.start_btn.setEnabled(True)
-            self.start_btn.setText("▶  Avvia trascrizione")
+            self.start_btn.setText("Avvia trascrizione")
+            self._start_icon.set_icon("play", "acc_ink")
             self.start_btn.setStyleSheet(
                 "QPushButton {"
                 f"  background-color: {c('acc_fill')};"
                 f"  color: {c('acc_ink')};"
                 "  border: none;"
-                "  border-radius: 8px;"
+                "  border-radius: 4px;"
                 "  font-size: 14px;"
                 "  font-weight: 600;"
                 "  padding: 0 22px;"
@@ -415,12 +417,13 @@ class HomeWidget(AuroraMixin, QWidget):
         else:
             self.start_btn.setEnabled(False)
             self.start_btn.setText("Avvia trascrizione")
+            self._start_icon.set_icon("play", "muted")
             self.start_btn.setStyleSheet(
                 "QPushButton {"
                 f"  background-color: {c('card')};"
                 f"  color: {c('muted')};"
                 f"  border: 1px solid {c('line')};"
-                "  border-radius: 8px;"
+                "  border-radius: 4px;"
                 "  font-size: 14px;"
                 "  font-weight: 500;"
                 "  padding: 0 22px;"
@@ -561,7 +564,7 @@ class _DesignDropZone(QWidget):
 
         # ── Idle ──────────────────────────────────────────────────────────────
         self._w_idle, lay_idle = _state_page()
-        self._idle_icon = _icon("↓")
+        self._idle_icon = _icon("")
         lay_idle.addWidget(self._idle_icon, 0, Qt.AlignCenter)
         self._idle_t1 = _centered("Trascina qui un file video o audio")
         lay_idle.addWidget(self._idle_t1)
@@ -573,14 +576,14 @@ class _DesignDropZone(QWidget):
 
         # ── Hover ─────────────────────────────────────────────────────────────
         self._w_hover, lay_hover = _state_page()
-        self._hover_icon = _icon("↓")
+        self._hover_icon = _icon("")
         lay_hover.addWidget(self._hover_icon, 0, Qt.AlignCenter)
         self._hover_t1 = _centered("Rilascia per caricare")
         lay_hover.addWidget(self._hover_t1)
 
         # ── Error ─────────────────────────────────────────────────────────────
         self._w_error, lay_error = _state_page()
-        self._err_icon = _icon("!")
+        self._err_icon = _icon("")
         lay_error.addWidget(self._err_icon, 0, Qt.AlignCenter)
         self._err_t1 = _centered("Formato non supportato")
         lay_error.addWidget(self._err_t1)
@@ -594,7 +597,7 @@ class _DesignDropZone(QWidget):
         lay_loaded.setContentsMargins(20, 12, 20, 12)
         lay_loaded.setAlignment(Qt.AlignVCenter)
 
-        self._loaded_icon = QLabel("▶")
+        self._loaded_icon = QLabel()
         self._loaded_icon.setAlignment(Qt.AlignCenter)
         self._loaded_icon.setFixedSize(46, 46)
         lay_loaded.addWidget(self._loaded_icon)
@@ -624,29 +627,29 @@ class _DesignDropZone(QWidget):
     def _apply_palette(self):
         c = theme.c
         self._idle_icon.setStyleSheet(
-            f"font-size: 23px; color: {c('muted')}; background: {c('card_2')};"
-            " border: none; border-radius: 14px;"
+            f"background: {c('raise')}; border: none; border-radius: 4px;"
         )
+        self._idle_icon.setPixmap(icons.pixmap("import", theme.qcolor("dim"), 28))
         self._idle_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;")
         self._idle_t2.setStyleSheet(
             f"font-size: 12px; color: {c('muted')}; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
         self._hover_icon.setStyleSheet(
-            f"font-size: 21px; font-weight: 700; color: {c('acc')};"
-            f" background: {c('acc_soft_2')}; border: 1px solid {c('acc')}; border-radius: 14px;"
+            f"background: {c('acc_soft_2')}; border: 1px solid {c('acc')}; border-radius: 4px;"
         )
+        self._hover_icon.setPixmap(icons.pixmap("import", theme.qcolor("acc"), 28))
         self._hover_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;")
         self._err_icon.setStyleSheet(
-            f"font-size: 21px; font-weight: 700; color: {c('err')};"
-            f" background: {c('err_soft')}; border: 1px solid {c('err')}; border-radius: 14px;"
+            f"background: {c('err_soft')}; border: 1px solid {c('err')}; border-radius: 4px;"
         )
+        self._err_icon.setPixmap(icons.pixmap("alert", theme.qcolor("err"), 28))
         self._err_t1.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {c('err')}; background: transparent;")
         self._err_t2.setStyleSheet(f"font-size: 12px; color: {c('muted')}; background: transparent;")
         self._loaded_icon.setStyleSheet(
-            f"font-size: 18px; color: {c('acc')}; background: {c('card_2')};"
-            " border: none; border-radius: 11px;"
+            f"background: {c('raise')}; border: none; border-radius: 4px;"
         )
+        self._loaded_icon.setPixmap(icons.pixmap("video", theme.qcolor("dim"), 24))
         self._loaded_name.setStyleSheet(
             f"font-size: 15px; font-weight: 600; color: {c('text')}; background: transparent;"
         )
@@ -656,7 +659,7 @@ class _DesignDropZone(QWidget):
         )
         self._change_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {c('line_2')};"
-            f" border-radius: 7px; color: {c('dim')}; font-size: 12.5px; font-weight: 500; padding: 4px 13px; }}"
+            f" border-radius: 4px; color: {c('dim')}; font-size: 12.5px; font-weight: 500; padding: 4px 13px; }}"
             f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('line_2')}; color: {c('text')}; }}"
             f"QPushButton:pressed {{ background: {c('card')}; }}"
             + theme.focus_rule("QPushButton", 7)
@@ -687,16 +690,7 @@ class _DesignDropZone(QWidget):
         if self._state != self._LOADED:
             pen.setStyle(Qt.DashLine)
         p.setPen(pen)
-        p.drawRoundedRect(r, 16, 16)
-
-        if self._state == self._HOVER:
-            glow = theme.qcolor("acc")
-            glow.setAlpha(45)
-            glow_pen = QPen(glow)
-            glow_pen.setWidth(6)
-            p.setPen(glow_pen)
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(-2, -2, 2, 2), 18, 18)
+        p.drawRoundedRect(r, 6, 6)
 
         if self.hasFocus():
             # Anello di focus da tastiera
@@ -704,7 +698,7 @@ class _DesignDropZone(QWidget):
             focus_pen.setWidth(2)
             p.setPen(focus_pen)
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(2, 2, -2, -2), 14, 14)
+            p.drawRoundedRect(r.adjusted(2, 2, -2, -2), 4, 4)
         p.end()
 
     def focusInEvent(self, event):
@@ -800,125 +794,10 @@ class _DesignDropZone(QWidget):
         self._set_state(self._IDLE)
 
 
-# ── _ToggleSwitch ─────────────────────────────────────────────────────────────
+# ── Interruttore: ToggleSwitch vive in ui.widgets (alias storici qui sotto) ──
 
-class _ToggleSwitch(QWidget):
-    """
-    Interruttore stile design (pill + etichetta). Usabile da tastiera
-    (Tab per il focus, Spazio/Invio per cambiare) e con nome accessibile.
-    """
-
-    toggled = Signal(bool)
-
-    def __init__(self, label_on: str = "Attivo", label_off: str = "Disattivo",
-                 name: str = "", parent=None):
-        super().__init__(parent)
-        self._checked = False
-        self._on = label_on
-        self._off = label_off
-        self._name = name
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setObjectName("toggleSwitch")
-        self.setMinimumHeight(max(38, self.fontMetrics().height() + 18))
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 12, 0)
-        lay.setSpacing(10)
-
-        self._pill = _SwitchPill()
-        lay.addWidget(self._pill)
-
-        # larghezza minima dell'etichetta: evita resize del layout al cambio testo
-        self._lbl = QLabel(self._off)
-        fm = self._lbl.fontMetrics()
-        self._lbl.setMinimumWidth(max(fm.horizontalAdvance(label_on),
-                                      fm.horizontalAdvance(label_off)) + 8)
-        lay.addWidget(self._lbl)
-        lay.addStretch()
-
-        self._apply_palette()
-        self._update_accessible()
-
-    def _apply_palette(self):
-        c = theme.c
-        self.setStyleSheet(
-            f"QWidget#toggleSwitch {{ background: {c('card_2')}; border: 2px solid transparent;"
-            " border-radius: 8px; }"
-            f"QWidget#toggleSwitch:focus {{ border: 2px solid {c('focus')}; }}"
-        )
-        self._lbl.setStyleSheet(
-            f"font-size: 12.5px; font-weight: 500;"
-            f" color: {c('text') if self.isEnabled() else c('muted')};"
-            " background: transparent; border: none;"
-        )
-        self._pill.update()
-
-    def _update_accessible(self):
-        state = self._on if self._checked else self._off
-        self.setAccessibleName(f"{self._name}: {state}" if self._name else state)
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setChecked(self, val: bool):
-        self._checked = bool(val)
-        self._pill.set_on(self._checked)
-        self._lbl.setText(self._on if self._checked else self._off)
-        self._update_accessible()
-
-    def set_unavailable(self, label: str, tooltip: str):
-        """Blocca l'interruttore su spento, con etichetta e spiegazione del motivo."""
-        self._off = label
-        self.setChecked(False)
-        self.setEnabled(False)
-        self.setCursor(Qt.ArrowCursor)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.setToolTip(tooltip)
-        self._apply_palette()
-
-    def _toggle(self):
-        if not self.isEnabled():
-            return
-        self.setChecked(not self._checked)
-        self.toggled.emit(self._checked)
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.setFocus(Qt.MouseFocusReason)
-            self._toggle()
-
-    def keyPressEvent(self, e):
-        if e.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
-            self._toggle()
-            return
-        super().keyPressEvent(e)
-
-
-class _SwitchPill(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._on = False
-        self.setFixedSize(32, 19)
-
-    def set_on(self, val: bool):
-        self._on = val
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(theme.qcolor("acc_fill") if self._on else theme.qcolor("inset"))
-        p.setPen(QPen(theme.qcolor("acc_fill") if self._on else theme.qcolor("line_2")))
-        p.drawRoundedRect(0, 0, 32, 19, 10, 10)
-        p.setPen(Qt.NoPen)
-        p.setBrush(theme.qcolor("knob") if self._on else theme.qcolor("muted"))
-        x = 14 if self._on else 1
-        p.drawEllipse(x, 1, 16, 16)
-        p.end()
-
+_ToggleSwitch = ToggleSwitch
+_SwitchPill = SwitchPill
 
 # ── _RecentsWidget ────────────────────────────────────────────────────────────
 
@@ -941,7 +820,7 @@ class _RecentCard(QFrame):
         lay.setContentsMargins(13, 8, 13, 8)
         lay.setSpacing(11)
 
-        self._ic = QLabel("▦")
+        self._ic = QLabel()
         self._ic.setFixedSize(32, 32)
         self._ic.setAlignment(Qt.AlignCenter)
         lay.addWidget(self._ic)
@@ -956,18 +835,24 @@ class _RecentCard(QFrame):
         lay.addLayout(info, 1)
         self.apply_palette()
 
+    def _icon_name(self) -> str:
+        ext = Path(self._path).suffix.lower()
+        if ext in SUPPORTED_SUBTITLE_EXTS:
+            return "document"
+        return "audio" if ext in SUPPORTED_AUDIO_EXTS else "video"
+
     def apply_palette(self):
         c = theme.c
         self.setStyleSheet(
             f"QFrame#recentCard {{ background: {c('card')}; border: 1px solid {c('card_border')};"
-            " border-radius: 10px; }"
+            " border-radius: 4px; }"
             f"QFrame#recentCard:hover {{ border-color: {c('acc')}; background: {c('card_2')}; }}"
             f"QFrame#recentCard:focus {{ border: 2px solid {c('focus')}; }}"
         )
         self._ic.setStyleSheet(
-            f"background: {c('card_2')}; border: none; border-radius: 8px;"
-            f" color: {c('muted')}; font-size: 14px;"
+            f"background: {c('raise')}; border: none; border-radius: 4px;"
         )
+        self._ic.setPixmap(icons.pixmap(self._icon_name(), theme.qcolor("dim"), 16))
         self._name.setStyleSheet(
             f"font-size: 12.5px; font-weight: 500; color: {c('text')};"
             " background: transparent; border: none;"
@@ -1002,7 +887,7 @@ class _RecentsWidget(QWidget):
         self.setStyleSheet("background: transparent;")
         self._paths: list = []
 
-        self._title = QLabel("RECENTI")
+        self._title = QLabel("Recenti")
         self._lay.addWidget(self._title)
         self._row = QHBoxLayout()
         self._row.setSpacing(12)
@@ -1013,7 +898,7 @@ class _RecentsWidget(QWidget):
     def _apply_palette(self):
         self._title.setStyleSheet(
             f"font-size: 10px; font-weight: 600; color: {theme.c('muted')};"
-            " letter-spacing: 1.2px; background: transparent;"
+            " background: transparent;"
         )
         for card in self._cards:
             card.apply_palette()

@@ -116,9 +116,14 @@ def native_media_exts() -> frozenset:
 
 
 # ── Font ─────────────────────────────────────────────────────────────────────
+# IBM Plex (inclusi in assets/fonts, caricati da ui/fonts.py) vengono per primi;
+# i font di sistema restano come ripiego se il caricamento fallisce.
 
-def font_stack_ui() -> str:
-    """Stringa CSS ``font-family`` per l'interfaccia."""
+UI_FONT = "IBM Plex Sans"
+MONO_FONT = "IBM Plex Mono"
+
+
+def _system_ui_stack() -> str:
     if IS_MAC:
         return '".AppleSystemUIFont", "Helvetica Neue"'
     if IS_WIN:
@@ -126,8 +131,7 @@ def font_stack_ui() -> str:
     return '"Inter", "Noto Sans", "DejaVu Sans"'
 
 
-def font_stack_mono() -> str:
-    """Stringa CSS ``font-family`` per il testo a spaziatura fissa."""
+def _system_mono_stack() -> str:
     if IS_MAC:
         return '"Menlo", "Monaco"'
     if IS_WIN:
@@ -135,22 +139,24 @@ def font_stack_mono() -> str:
     return '"DejaVu Sans Mono", "Liberation Mono"'
 
 
+def font_stack_ui() -> str:
+    """Stringa CSS ``font-family`` per l'interfaccia."""
+    return f'"{UI_FONT}", {_system_ui_stack()}'
+
+
+def font_stack_mono() -> str:
+    """Stringa CSS ``font-family`` per il testo a spaziatura fissa."""
+    return f'"{MONO_FONT}", {_system_mono_stack()}'
+
+
 def ui_font_family() -> str:
     """Primo nome di famiglia per ``QFont`` dell'interfaccia."""
-    if IS_MAC:
-        return ".AppleSystemUIFont"
-    if IS_WIN:
-        return "Segoe UI"
-    return "Noto Sans"
+    return UI_FONT
 
 
 def mono_font_family() -> str:
     """Famiglia monospace per ``QFont``."""
-    if IS_MAC:
-        return "Menlo"
-    if IS_WIN:
-        return "Consolas"
-    return "DejaVu Sans Mono"
+    return MONO_FONT
 
 
 # ── Scorciatoie ──────────────────────────────────────────────────────────────

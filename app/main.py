@@ -367,6 +367,13 @@ def main():
     app.setApplicationVersion("2.0.0")
     app.setOrganizationName("Video SRT")
 
+    # ---- Font IBM Plex (prima del tema: il QSS li richiama per nome) ----
+    from ui.fonts import load_app_fonts
+    load_app_fonts()
+    app_font = QFont(platform_support.ui_font_family())
+    app_font.setPixelSize(13)
+    app.setFont(app_font)
+
     # ---- Icona app (Dock macOS + titolo finestra) ----
     app_icon = _make_app_icon()
     app.setWindowIcon(app_icon)

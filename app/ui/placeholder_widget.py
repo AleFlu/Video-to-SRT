@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.constants import SUPPORTED_ALL_EXTS
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 
@@ -45,7 +45,7 @@ class PlaceholderWidget(QWidget):
         root.setAlignment(Qt.AlignCenter)
         root.addStretch(1)
 
-        self._icon = QLabel("◻")
+        self._icon = QLabel()
         self._icon.setAlignment(Qt.AlignCenter)
         root.addWidget(self._icon)
 
@@ -84,8 +84,9 @@ class PlaceholderWidget(QWidget):
     def _apply_palette(self, _name=None):
         c = theme.c
         self._icon.setStyleSheet(
-            f"font-size: 56px; color: {c('faint')}; background: transparent;"
+            "background: transparent;"
         )
+        self._icon.setPixmap(icons.pixmap("document", theme.qcolor("faint"), 48))
         self._title.setStyleSheet(
             f"font-size: 18px; font-weight: 600; color: {c('dim')}; background: transparent;"
         )

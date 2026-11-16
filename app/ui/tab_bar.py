@@ -13,10 +13,10 @@ Segnali:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QSizePolicy
 
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 
@@ -71,7 +71,8 @@ class TabBar(QWidget):
         self._btn_editor.clicked.connect(self._on_editor_clicked)
         ec_layout.addWidget(self._btn_editor)
 
-        self._badge = QLabel("●")
+        self._badge = QLabel()
+        self._badge.setFixedSize(6, 6)
         self._badge.setToolTip("L'editor contiene sottotitoli")
         self._badge.setVisible(False)
         ec_layout.addWidget(self._badge)
@@ -117,18 +118,20 @@ class TabBar(QWidget):
     def _refresh_theme_btn(self):
         c = theme.c
         is_dark = theme.get_theme() == "dark"
-        self._theme_btn.setText("☾  Scuro" if is_dark else "☀  Chiaro")
+        self._theme_btn.setText("Scuro" if is_dark else "Chiaro")
+        self._theme_btn.setIcon(icons.icon("moon" if is_dark else "sun", "dim"))
+        self._theme_btn.setIconSize(QSize(16, 16))
         tip = "Passa al tema chiaro" if is_dark else "Passa al tema scuro"
         self._theme_btn.setToolTip(f"{tip}  {platform_support.shortcut_label('Ctrl+Shift+L')}")
         self._theme_btn.setAccessibleName(tip)
         self._theme_btn.setStyleSheet(
             "QPushButton {"
-            f"  background: {c('card_2')}; color: {c('dim')};"
-            f"  border: 1px solid {c('line')}; border-radius: 7px;"
-            "  font-size: 11.5px; padding: 4px 11px; min-height: 20px;"
+            f"  background: transparent; color: {c('dim')};"
+            "  border: 1px solid transparent; border-radius: 4px;"
+            "  font-size: 13px; padding: 0 9px; min-height: 26px;"
             "}"
-            f"QPushButton:hover {{ color: {c('text')}; border-color: {c('line_2')}; }}"
-            + theme.focus_rule("QPushButton", 7)
+            f"QPushButton:hover {{ color: {c('text')}; background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton", 4)
         )
 
     # ── API pubblica ───────────────────────────────────────────────────────────
@@ -197,11 +200,11 @@ class TabBar(QWidget):
         c = theme.c
         # Selettore esplicito: il bordo inferiore non deve propagarsi ai figli
         self.setStyleSheet(
-            f"QWidget#innerTabBar {{ background-color: {c('bg')};"
+            f"QWidget#innerTabBar {{ background-color: {c('panel')};"
             f" border-bottom: 1px solid {c('line')}; }}"
         )
         self._badge.setStyleSheet(
-            f"color: {c('acc')}; font-size: 10px; background: transparent; border: none;"
+            f"background-color: {c('acc')}; border: none; border-radius: 3px;"
         )
 
     # ── Privato ────────────────────────────────────────────────────────────────
@@ -232,7 +235,7 @@ class TabBar(QWidget):
             "  padding: 0 18px;"
             "}"
             f"{hover}"
-            f"QPushButton:focus {{ border: 2px solid {c('focus')}; border-radius: 6px; }}"
+            f"QPushButton:focus {{ border: 1px solid {c('focus')}; border-radius: 4px; }}"
         )
 
     def _refresh_styles(self):

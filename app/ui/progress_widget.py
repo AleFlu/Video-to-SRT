@@ -23,9 +23,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.transcription_worker import TranscriptionWorker
-from ui.theme import AuroraMixin
 from ui.widgets import ElidedLabel
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 log = logging.getLogger(__name__)
@@ -108,7 +107,7 @@ class _Spinner(QWidget):
         p.end()
 
 
-class ProgressWidget(AuroraMixin, QWidget):
+class ProgressWidget(QWidget):
     """Schermata di trascrizione in corso."""
 
     transcription_done      = Signal(list, str)   # segments, source_path
@@ -117,7 +116,6 @@ class ProgressWidget(AuroraMixin, QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._aurora_init()
         self.setObjectName("contentPanel")
 
         self._thread: QThread | None = None
@@ -207,7 +205,8 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.copy_log_btn.setVisible(False)
         btn_row.addWidget(self.copy_log_btn)
         btn_row.addStretch(1)
-        self.stop_btn = QPushButton("■  Interrompi")
+        self.stop_btn = QPushButton("Interrompi")
+        self._stop_icon = icons.bind_icon(self.stop_btn, "stop", "err", 14)
         self.stop_btn.setObjectName("danger")
         self.stop_btn.setMinimumHeight(40)
         self.stop_btn.setMinimumWidth(140)
@@ -225,7 +224,7 @@ class ProgressWidget(AuroraMixin, QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        self._aurora_paint(p)
+        p.fillRect(self.rect(), theme.qcolor("bg"))
         p.end()
 
     def _muted(self, txt: str) -> QLabel:
@@ -260,7 +259,8 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.status_lbl.setText("")
         self.copy_log_btn.setVisible(False)
         self.stop_btn.setEnabled(True)
-        self.stop_btn.setText("■  Interrompi")
+        self.stop_btn.setText("Interrompi")
+        self._stop_icon.set_icon("stop", "err")
         self.stop_btn.setToolTip("Interrompi la trascrizione  (Esc)")
         if self.stop_btn.objectName() != "danger":
             # dopo un errore il bottone era diventato "primary" (torna alla home)
@@ -357,6 +357,7 @@ class ProgressWidget(AuroraMixin, QWidget):
         self.log.appendPlainText(f"ERRORE: {err}")
         self.copy_log_btn.setVisible(True)
         self.stop_btn.setText("← Torna alla Home")
+        self._stop_icon.set_icon(None)
         self.stop_btn.setToolTip("Torna alla schermata iniziale")
         self.stop_btn.setObjectName("primary")
         self.stop_btn.style().unpolish(self.stop_btn)
@@ -406,7 +407,7 @@ class ProgressWidget(AuroraMixin, QWidget):
 
     def _apply_palette(self, _name=None):
         self._log_header.setStyleSheet(
-            f"color: {theme.c('muted')}; font-size: 10px; font-weight: bold; letter-spacing: 1px;"
+            f"color: {theme.c('muted')}; font-size: 10px; font-weight: bold;"
         )
         self.log.setStyleSheet(
             f"QPlainTextEdit {{ font-family: {theme.FONT_MONO}; font-size: 11.5px;"

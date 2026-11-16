@@ -179,23 +179,24 @@ class InspectorWidget(QWidget):
     def _on_theme_changed(self, _name=None):
         c = theme.c
         for sep, lbl in self._sections:
-            sep.setStyleSheet(f"background-color: {c('line')}; max-height: 1px; margin: 6px 0;")
-            lbl.setStyleSheet(f"color: {c('muted')}; letter-spacing: 1px; background: transparent;")
+            sep.setStyleSheet(f"background-color: {c('line')}; border: none;")
+            lbl.setStyleSheet(f"color: {c('muted')}; background: transparent;")
         self._refresh()
 
     # ---- Utilities UI ----
     def _section(self, layout: QVBoxLayout, title: str):
         c = theme.c
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"background-color: {c('line')}; max-height: 1px; margin: 6px 0;")
+        sep.setFrameShape(QFrame.NoFrame)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background-color: {c('line')}; border: none;")
         layout.addWidget(sep)
-        lbl = QLabel(title.upper())
+        lbl = QLabel(title)
         f = QFont()
         f.setPointSize(10)
         f.setBold(True)
         lbl.setFont(f)
-        lbl.setStyleSheet(f"color: {c('muted')}; letter-spacing: 1px; background: transparent;")
+        lbl.setStyleSheet(f"color: {c('muted')}; background: transparent;")
         layout.addWidget(lbl)
         self._sections.append((sep, lbl))
 

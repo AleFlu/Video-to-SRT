@@ -24,9 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.subtitle_model import Subtitle
-from ui.theme import AuroraMixin
 from ui.widgets import ElidedLabel
-from ui import theme
+from ui import icons, theme
 
 
 # ── Stili bottone export (theme-aware) ──────────────────────────────────────────
@@ -35,7 +34,7 @@ def _ss_btn() -> str:
     c = theme.c
     return (
         "QPushButton {"
-        f"  background: {c('card')}; border: 1px solid {c('card_border')}; border-radius: 10px;"
+        f"  background: {c('card')}; border: 1px solid {c('card_border')}; border-radius: 4px;"
         f"  color: {c('text')}; text-align: left; padding: 0 16px;"
         "}"
         f"QPushButton:hover {{ background: {c('card_2')}; border-color: {c('acc')}; }}"
@@ -49,7 +48,7 @@ def _ss_btn_accent() -> str:
     return (
         "QPushButton {"
         f"  background: {c('acc_soft')}; border: 1px solid {c('acc')};"
-        f"  border-radius: 10px; color: {c('text')}; text-align: left; padding: 0 16px;"
+        f"  border-radius: 4px; color: {c('text')}; text-align: left; padding: 0 16px;"
         "}"
         f"QPushButton:hover {{ background: {c('acc_soft_2')}; border-color: {c('acc')}; }}"
         f"QPushButton:pressed {{ background: {c('acc_soft')}; }}"
@@ -111,17 +110,17 @@ def _style_export_btn(b: QPushButton, kind: str, t: QLabel, s: QLabel):
 
 
 def _section_label(text: str) -> QLabel:
-    lbl = QLabel(text.upper())
+    lbl = QLabel(text)
     lbl.setStyleSheet(
         f"color: {theme.c('muted')}; font-size: 10px; font-weight: 700;"
-        f" letter-spacing: 1.5px; font-family: {theme.FONT_MONO};"
+        f" font-family: {theme.FONT_MONO};"
     )
     return lbl
 
 
 # ── ExportTab ─────────────────────────────────────────────────────────────────
 
-class ExportTab(AuroraMixin, QWidget):
+class ExportTab(QWidget):
 
     export_srt_requested  = Signal()
     export_vtt_requested  = Signal()
@@ -131,7 +130,6 @@ class ExportTab(AuroraMixin, QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._aurora_init()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._subtitles: List[Subtitle] = []
@@ -163,7 +161,7 @@ class ExportTab(AuroraMixin, QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        self._aurora_paint(p)
+        p.fillRect(self.rect(), theme.qcolor("bg"))
         p.end()
 
     # ── API pubblica ───────────────────────────────────────────────────────────
@@ -216,7 +214,7 @@ class _ExportPlaceholder(QWidget):
         lay.setAlignment(Qt.AlignCenter)
         lay.setSpacing(12)
 
-        self._icon = QLabel("↑")
+        self._icon = QLabel()
         self._icon.setAlignment(Qt.AlignCenter)
         self._icon.setFixedSize(60, 60)
         lay.addWidget(self._icon, alignment=Qt.AlignCenter)
@@ -236,9 +234,9 @@ class _ExportPlaceholder(QWidget):
     def _apply_palette(self, _name=None):
         c = theme.c
         self._icon.setStyleSheet(
-            f"font-size: 24px; font-weight: 700; color: {c('muted')};"
-            f" background: {c('card_2')}; border: none; border-radius: 14px;"
+            f"background: {c('raise')}; border: none; border-radius: 4px;"
         )
+        self._icon.setPixmap(icons.pixmap("export", theme.qcolor("muted"), 28))
         self._msg.setStyleSheet(
             f"color: {c('muted')}; font-size: 15px; font-weight: 600; background: transparent;"
         )
@@ -288,7 +286,7 @@ class _ExportPanel(QWidget):
         self._lbl_count = QLabel("—")
         top_row.addWidget(self._lbl_count)
 
-        self._badge_modified = QLabel("● modificato nell'editor")
+        self._badge_modified = QLabel("Modificato nell'editor")
         self._badge_modified.setVisible(False)
         top_row.addWidget(self._badge_modified)
         top_row.addStretch()
@@ -436,7 +434,7 @@ class _ExportPanel(QWidget):
         )
         self._info_card.setStyleSheet(
             f"QFrame#exportInfo {{ background: {c('card')}; border: 1px solid {c('card_border')};"
-            " border-radius: 11px; }"
+            " border-radius: 4px; }"
         )
         self._lbl_count.setStyleSheet(
             f"color: {c('text')}; font-size: 14px; font-weight: 600;"
@@ -457,7 +455,7 @@ class _ExportPanel(QWidget):
         self._preview.setStyleSheet(
             "QPlainTextEdit {"
             f"  background: {c('inset')}; color: {c('dim')};"
-            f"  border: 1px solid {c('line')}; border-radius: 9px;"
+            f"  border: 1px solid {c('line')}; border-radius: 4px;"
             f"  font-family: {theme.FONT_MONO}; font-size: 12px;"
             "  padding: 10px;"
             "}"

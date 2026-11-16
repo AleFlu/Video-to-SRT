@@ -2,7 +2,7 @@
 transport_bar.py — Barra di controllo del player audio/video.
 
 Contiene:
-  - Pulsanti ▶/⏸ play-pausa e ⏹ stop
+  - Pulsanti play/pausa e stop (icone di ui.icons)
   - Timecode corrente / totale
   - Slider di posizione (click = salto alla posizione cliccata, trascinamento, tastiera)
   - Slider volume
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.audio_player import AudioPlayer
-from ui import theme
+from ui import icons, theme
 
 # Scala delle velocità: la combo e i tasti J/L (in riproduzione) la percorrono a passi
 RATE_STEPS = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0)
@@ -112,7 +112,7 @@ class TransportBar(QWidget):
 
         # --- Play / Pausa ---
         self.btn_play = QToolButton()
-        self.btn_play.setText("▶")
+        self._play_icon = icons.bind_icon(self.btn_play, "play", "text")
         self.btn_play.setToolTip("Riproduci  (Spazio)")
         self.btn_play.setAccessibleName("Riproduci")
         self.btn_play.setMinimumSize(34, 32)
@@ -121,7 +121,7 @@ class TransportBar(QWidget):
 
         # --- Stop ---
         self.btn_stop = QToolButton()
-        self.btn_stop.setText("⏹")
+        icons.bind_icon(self.btn_stop, "stop", "text")
         self.btn_stop.setToolTip("Ferma")
         self.btn_stop.setAccessibleName("Ferma")
         self.btn_stop.setMinimumSize(32, 32)
@@ -199,7 +199,7 @@ class TransportBar(QWidget):
 
         # --- Toggle loop ---
         self.btn_loop = QToolButton()
-        self.btn_loop.setText("⟳")
+        icons.bind_icon(self.btn_loop, "loop", "text")
         self.btn_loop.setToolTip("Ripeti il sottotitolo selezionato")
         self.btn_loop.setAccessibleName("Ripeti il sottotitolo selezionato")
         self.btn_loop.setCheckable(True)
@@ -247,7 +247,7 @@ class TransportBar(QWidget):
         # play button accentato
         self.btn_play.setStyleSheet(
             f"QToolButton {{ background: {c('acc_fill')}; color: {c('acc_ink')};"
-            " border: none; border-radius: 7px; font-size: 13px; }"
+            " border: none; border-radius: 4px; font-size: 13px; }"
             f"QToolButton:hover {{ background: {c('acc_fill_h')}; }}"
             f"QToolButton:disabled {{ background: {c('card_2')}; color: {c('faint')}; }}"
             + theme.focus_rule("QToolButton", 7)
@@ -294,11 +294,11 @@ class TransportBar(QWidget):
     @Slot(str)
     def _on_state_changed(self, state: str):
         if state == "playing":
-            self.btn_play.setText("⏸")
+            self._play_icon.set_icon("pause")
             self.btn_play.setToolTip("Pausa  (Spazio)")
             self.btn_play.setAccessibleName("Pausa")
         else:
-            self.btn_play.setText("▶")
+            self._play_icon.set_icon("play")
             self.btn_play.setToolTip("Riproduci  (Spazio)")
             self.btn_play.setAccessibleName("Riproduci")
 
@@ -402,13 +402,13 @@ class TransportBar(QWidget):
             "font-size: 11px;"
             f"color: {theme.c('muted')};"
             "background: transparent;"
-            "letter-spacing: 1px;"
+            ""
         )
 
 
 def _make_separator() -> QFrame:
     sep = QFrame()
-    sep.setFrameShape(QFrame.VLine)
-    sep.setFrameShadow(QFrame.Sunken)
-    sep.setFixedWidth(2)
+    sep.setFrameShape(QFrame.NoFrame)
+    sep.setFixedWidth(1)
+    sep.setStyleSheet(f"background-color: {theme.c('line')}; border: none;")
     return sep

@@ -44,7 +44,7 @@ from ui.inspector_widget import InspectorWidget
 from ui.find_replace_dialog import FindReplaceDialog
 from ui.transport_bar import RATE_STEPS
 from ui.widgets import protect_extension_buttons
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 _sl = platform_support.shortcut_label
@@ -231,12 +231,14 @@ class SubtitleTimeline(QWidget):
         # ── Undo / Redo ────────────────────────────────────────────────────────
         # Nessuna scorciatoia qui: Ctrl+Z / redo sono le azioni del menu Modifica
         # (QUndoGroup della MainWindow), altrimenti sarebbero ambigue.
-        # Azioni del toolbar: glifo come testo, nome accessibile e tooltip completi
-        self.act_undo = QAction("↩", self)
+        # Azioni del toolbar: solo icona, nome accessibile e tooltip completi
+        self.act_undo = QAction("Annulla", self)
+        icons.bind_icon(self.act_undo, "undo", "dim")
         self.act_undo.triggered.connect(self.undo_stack.undo)
         self.act_undo.setEnabled(False)
         self.undo_stack.canUndoChanged.connect(self.act_undo.setEnabled)
-        self.act_redo = QAction("↪", self)
+        self.act_redo = QAction("Ripeti", self)
+        icons.bind_icon(self.act_redo, "redo", "dim")
         self.act_redo.triggered.connect(self.undo_stack.redo)
         self.act_redo.setEnabled(False)
         self.undo_stack.canRedoChanged.connect(self.act_redo.setEnabled)
@@ -253,32 +255,33 @@ class SubtitleTimeline(QWidget):
 
         # ── Operazioni sottotitoli ─────────────────────────────────────────────
         # Le scorciatoie indicate nei tooltip sono registrate dalla MainWindow.
-        def _tb_btn(text, name, tooltip):
+        def _tb_btn(text, name, tooltip, icon_name):
             b = QPushButton(text)
+            icons.bind_icon(b, icon_name, "dim")
             b.setToolTip(tooltip)
             b.setAccessibleName(name)
             b.setCursor(Qt.PointingHandCursor)
             self._tb_buttons.append(b)
             return b
 
-        btn_split = _tb_btn("÷ Dividi", "Dividi",
-                            f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}")
+        btn_split = _tb_btn("Dividi", "Dividi",
+                            f"Dividi sottotitolo al cursore  {_sl('Ctrl+K')}", "split")
         btn_split.clicked.connect(self._split_current)
         tb.addWidget(btn_split)
 
-        btn_merge = _tb_btn("⊔ Unisci", "Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}")
+        btn_merge = _tb_btn("Unisci", "Unisci", f"Unisci al successivo  {_sl('Ctrl+M')}", "merge")
         btn_merge.clicked.connect(self._merge_next)
         tb.addWidget(btn_merge)
 
-        btn_del = _tb_btn("× Elimina", "Elimina",
-                          f"Elimina selezionati  {_sl('Ctrl+Shift+K')}  ·  Canc")
+        btn_del = _tb_btn("Elimina", "Elimina",
+                          f"Elimina selezionati  {_sl('Ctrl+Shift+K')}  ·  Canc", "trash")
         btn_del.clicked.connect(self._delete_selected)
         tb.addWidget(btn_del)
 
         tb.addSeparator()
 
         # ── Importa ────────────────────────────────────────────────────────────
-        btn_import = _tb_btn("+ Importa", "Importa", "Importa file SRT o progetto .v2srt")
+        btn_import = _tb_btn("Importa", "Importa", "Importa file SRT o progetto .v2srt", "import")
         btn_import.clicked.connect(self._import_file)
         tb.addWidget(btn_import)
 
@@ -286,7 +289,8 @@ class SubtitleTimeline(QWidget):
 
         # ── Trova e sostituisci ────────────────────────────────────────────────
         self.btn_find_replace = _tb_btn(
-            "⇄ Sostituisci", "Trova e sostituisci", f"Trova e sostituisci  {_sl('Ctrl+Alt+F')}"
+            "Sostituisci", "Trova e sostituisci", f"Trova e sostituisci  {_sl('Ctrl+Alt+F')}",
+            "replace",
         )
         self.btn_find_replace.clicked.connect(self.open_find_replace)
         tb.addWidget(self.btn_find_replace)
@@ -294,12 +298,16 @@ class SubtitleTimeline(QWidget):
         tb.addSeparator()
 
         # ── Inspector toggle ───────────────────────────────────────────────────
-        self.act_toggle_insp = QAction("◧ Ispettore", self)
+        self.act_toggle_insp = QAction("Ispettore", self)
+        icons.bind_icon(self.act_toggle_insp, "panel_right", "dim")
         self.act_toggle_insp.setCheckable(True)
         self.act_toggle_insp.setChecked(True)
         self.act_toggle_insp.setToolTip(f"Mostra/nascondi Ispettore  {_sl('Ctrl+I')}")
         # Il toggle_insp ora controlla l'inspector esterno — segnale gestito da workspace
         tb.addAction(self.act_toggle_insp)
+        insp_btn = tb.widgetForAction(self.act_toggle_insp)
+        if insp_btn is not None:   # icona + testo (undo/redo restano a sola icona)
+            insp_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
         # ── Spacer ────────────────────────────────────────────────────────────
         spacer = QWidget()
@@ -323,12 +331,14 @@ class SubtitleTimeline(QWidget):
         tb.addSeparator()
 
         # ── Esporta (btn + freccia dropdown) ──────────────────────────────────
-        self._export_btn = QPushButton("↑ Esporta SRT")
+        self._export_btn = QPushButton("Esporta SRT")
+        icons.bind_icon(self._export_btn, "export", "acc_ink")
         self._export_btn.setToolTip(f"Esporta SRT  {_sl('Ctrl+S')}")
         self._export_btn.setAccessibleName("Esporta SRT")
         tb.addWidget(self._export_btn)
 
-        self._export_arrow = QPushButton("▾")
+        self._export_arrow = QPushButton()
+        icons.bind_icon(self._export_arrow, "chevron_down", "acc_ink", 14)
         self._export_arrow.setToolTip("Scegli formato di esportazione")
         self._export_arrow.setAccessibleName("Altri formati di esportazione")
         self._export_arrow.setFixedWidth(22)
@@ -375,7 +385,7 @@ class SubtitleTimeline(QWidget):
         c = theme.c
         self._toolbar.setStyleSheet(
             "QToolBar {"
-            f"  background: {c('surface')};"
+            f"  background: {c('panel')};"
             f"  border-bottom: 1px solid {c('line')};"
             "  spacing: 2px;"
             "  padding: 3px 6px;"
@@ -390,30 +400,31 @@ class SubtitleTimeline(QWidget):
             "QPushButton {"
             "  background: transparent;"
             "  border: 1px solid transparent;"
-            "  border-radius: 7px;"
-            f"  color: {c('muted')};"
-            "  font-size: 12.5px;"
-            "  font-weight: 500;"
-            "  padding: 4px 10px;"
-            "  min-height: 20px;"
+            "  border-radius: 4px;"
+            f"  color: {c('text')};"
+            "  font-size: 13px;"
+            "  font-weight: 400;"
+            "  padding: 0 9px;"
+            "  min-height: 26px;"
             "}"
-            f"QPushButton:hover {{ background: {c('card_2')}; color: {c('text')}; }}"
-            f"QPushButton:pressed {{ background: {c('card')}; }}"
-            + theme.focus_rule("QPushButton", 7)
+            f"QPushButton:hover {{ background: {c('raise')}; color: {c('text')}; }}"
+            f"QPushButton:pressed {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton", 4)
         )
         for b in self._tb_buttons:
             b.setStyleSheet(btn_ss)
         self._search_box.setStyleSheet(
             "QLineEdit {"
-            f"  background: {c('card_2')}; border: 1px solid {c('line')}; border-radius: 7px;"
-            f"  color: {c('text')}; font-size: 12px; padding: 4px 8px;"
+            f"  background: {c('bg')}; border: 1px solid {c('line')}; border-radius: 4px;"
+            f"  color: {c('text')}; font-size: 13px; padding: 4px 8px;"
             "}"
             f"QLineEdit:focus {{ border-color: {c('focus')}; }}"
         )
         self._export_btn.setStyleSheet(
             "QPushButton {"
             f"  background: {c('acc_fill')}; color: {c('acc_ink')}; font-weight: 600;"
-            "  font-size: 12px; border: none; border-radius: 7px 0 0 7px; padding: 5px 12px;"
+            "  font-size: 13px; border: none; border-radius: 4px 0 0 4px; padding: 0 12px;"
+            "  min-height: 28px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
             f"QPushButton:pressed {{ background: {c('acc_fill_d')}; }}"
@@ -421,8 +432,8 @@ class SubtitleTimeline(QWidget):
         )
         self._export_arrow.setStyleSheet(
             "QPushButton {"
-            f"  background: {c('acc_fill_d')}; color: {c('acc_ink')}; font-size: 10px;"
-            "  border: none; border-radius: 0 7px 7px 0; padding: 5px 0;"
+            f"  background: {c('acc_fill_d')}; color: {c('acc_ink')};"
+            "  border: none; border-radius: 0 4px 4px 0; padding: 0; min-height: 28px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
             + theme.focus_rule("QPushButton")
@@ -435,9 +446,9 @@ class SubtitleTimeline(QWidget):
         c = theme.c
         menu = QMenu(self)
         menu.setStyleSheet(
-            f"QMenu {{ background: {c('card')}; border: 1px solid {c('line_2')}; border-radius: 8px; padding: 4px; }}"
-            f"QMenu::item {{ color: {c('text')}; padding: 7px 20px; font-size: 12px; border-radius: 5px; }}"
-            f"QMenu::item:selected {{ background: {c('acc_fill')}; color: {c('acc_ink')}; }}"
+            f"QMenu {{ background: {c('panel')}; border: 1px solid {c('line_2')}; border-radius: 4px; padding: 4px; }}"
+            f"QMenu::item {{ color: {c('text')}; padding: 6px 20px; font-size: 13px; border-radius: 3px; }}"
+            f"QMenu::item:selected {{ background: {c('raise')}; color: {c('text')}; }}"
             f"QMenu::separator {{ height: 1px; background: {c('line')}; margin: 3px 6px; }}"
         )
         menu.addAction(self.act_export)

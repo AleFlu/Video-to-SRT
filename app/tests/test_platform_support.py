@@ -134,12 +134,22 @@ def test_mac_fonts_use_installed_families(monkeypatch):
     monkeypatch.setattr(ps, "IS_MAC", True)
     monkeypatch.setattr(ps, "IS_WIN", False)
     ui = ps.font_stack_ui()
-    assert ui.startswith('".AppleSystemUIFont"')
+    assert ui.startswith('"IBM Plex Sans", ".AppleSystemUIFont"')
     assert "SF Pro" not in ui
-    assert ps.ui_font_family() == ".AppleSystemUIFont"
-    assert ps.font_stack_mono().startswith('"Menlo"')
+    assert ps.ui_font_family() == "IBM Plex Sans"
+    assert ps.font_stack_mono().startswith('"IBM Plex Mono", "Menlo"')
     assert "SF Mono" not in ps.font_stack_mono()
-    assert ps.mono_font_family() == "Menlo"
+    assert ps.mono_font_family() == "IBM Plex Mono"
+
+
+@pytest.mark.parametrize("mac,win", [(True, False), (False, True), (False, False)])
+def test_plex_first_in_every_stack(monkeypatch, mac, win):
+    monkeypatch.setattr(ps, "IS_MAC", mac)
+    monkeypatch.setattr(ps, "IS_WIN", win)
+    assert ps.font_stack_ui().startswith('"IBM Plex Sans", "')
+    assert ps.font_stack_mono().startswith('"IBM Plex Mono", "')
+    assert ps.ui_font_family() == "IBM Plex Sans"
+    assert ps.mono_font_family() == "IBM Plex Mono"
 
 
 def test_app_icon_path(tmp_path):
@@ -179,5 +189,5 @@ def test_font_stacks_have_no_generic_css_families(monkeypatch, mac, win):
 def test_mac_font_stacks_exact(monkeypatch):
     monkeypatch.setattr(ps, "IS_MAC", True)
     monkeypatch.setattr(ps, "IS_WIN", False)
-    assert ps.font_stack_ui() == '".AppleSystemUIFont", "Helvetica Neue"'
-    assert ps.font_stack_mono() == '"Menlo", "Monaco"'
+    assert ps.font_stack_ui() == '"IBM Plex Sans", ".AppleSystemUIFont", "Helvetica Neue"'
+    assert ps.font_stack_mono() == '"IBM Plex Mono", "Menlo", "Monaco"'

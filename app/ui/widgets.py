@@ -3,7 +3,8 @@ widgets.py — Piccoli widget riutilizzabili dell'interfaccia.
 
   - ElidedLabel : QLabel a riga singola che accorcia il testo con "…" invece di
                   imporre una larghezza minima (nomi file lunghi); testo intero nel tooltip.
-  - DepsBanner  : avviso in Home quando FFmpeg o il modello Whisper mancano.
+  - DepsBanner  : avviso a una riga in Home quando FFmpeg o il modello Whisper mancano.
+  - ToggleSwitch: interruttore rettangolare 38×20 con etichetta (acceso/spento/non disponibile).
   - fmt_size    : dimensione file leggibile ("12.3 MB").
 """
 
@@ -11,13 +12,13 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QSize
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QSize, Signal
 from PySide6.QtGui import QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
-from ui import theme
+from ui import icons, theme
 
 
 def fmt_size(path: str) -> str:
@@ -85,9 +86,9 @@ class ElidedLabel(QLabel):
 
 class DepsBanner(QFrame):
     """
-    Banner di avviso in Home quando FFmpeg o il modello Whisper non sono
-    disponibili. Si nasconde se tutto è ok. Colori dai token del tema
-    (avviso = warn, entrambe mancanti = err) e aggiornati al cambio tema.
+    Avviso a una riga sopra la schermata iniziale quando FFmpeg o il modello Whisper
+    non sono disponibili: bordo warn (err se mancano entrambi), icona di allerta, nessun
+    riempimento. Si nasconde se tutto è ok. Colori dai token, aggiornati al cambio tema.
     """
 
     def __init__(self, parent=None):
@@ -97,19 +98,26 @@ class DepsBanner(QFrame):
         self.setVisible(False)
         self._severe = False
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 14)
-        layout.setSpacing(6)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(10)
 
+        self._icon = QLabel()
+        self._icon.setFixedSize(16, 16)
+        row.addWidget(self._icon, 0, Qt.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(2)
         self._title = QLabel("")
         self._title.setWordWrap(True)
-        layout.addWidget(self._title)
+        col.addWidget(self._title)
 
         self._body = QLabel("")
         self._body.setWordWrap(True)
         self._body.setOpenExternalLinks(True)
         self._body.setTextFormat(Qt.RichText)
-        layout.addWidget(self._body)
+        col.addWidget(self._body)
+        row.addLayout(col, 1)
 
         self._apply_palette()
         theme.MANAGER.theme_changed.connect(self._apply_palette)
@@ -118,14 +126,17 @@ class DepsBanner(QFrame):
         c = theme.c
         tone = "err" if self._severe else "warn"
         self.setStyleSheet(
-            f"QFrame#depsBanner {{ background-color: {c(tone + '_soft')};"
-            f" border: 1px solid {c(tone)}; border-radius: 9px; }}"
+            f"QFrame#depsBanner {{ background-color: transparent;"
+            f" border: 1px solid {c(tone)}; border-radius: 4px; }}"
         )
+        self._icon.setPixmap(icons.pixmap("alert", theme.qcolor(tone), 16))
+        self._icon.setStyleSheet("background: transparent; border: none;")
         self._title.setStyleSheet(
-            f"color: {c(tone)}; font-weight: 600; font-size: 14px; background: transparent;"
+            f"color: {c(tone)}; font-weight: 500; font-size: 13px;"
+            " background: transparent; border: none;"
         )
         self._body.setStyleSheet(
-            f"color: {c('text')}; font-size: 12px; background: transparent;"
+            f"color: {c('dim')}; font-size: 12px; background: transparent; border: none;"
         )
 
     def set_status(self, ffmpeg_ok: bool, model_ok: bool):
@@ -229,3 +240,154 @@ def protect_extension_buttons(bar: QWidget) -> int:
             _ExtensionIconGuard(btn)
         count += 1
     return count
+
+
+# ── Interruttore ─────────────────────────────────────────────────────────────
+
+class SwitchPill(QWidget):
+    """Interruttore rettangolare 38×20 (raggio 3, pomello 16×16 raggio 2), solo disegno."""
+
+    W, H = 38, 20
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._on = False
+        self._available = True
+        self._focused = False
+        self.setFixedSize(self.W, self.H)
+
+    def set_on(self, val: bool):
+        self._on = bool(val)
+        self.update()
+
+    def set_available(self, val: bool):
+        self._available = bool(val)
+        self.update()
+
+    def set_focus_ring(self, val: bool):
+        self._focused = bool(val)
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802 (override Qt)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        if not self._available:
+            border, fill, knob = theme.qcolor("line"), None, theme.qcolor("line")
+        elif self._on:
+            border, fill, knob = theme.qcolor("acc"), theme.qcolor("acc"), theme.qcolor("knob")
+        else:
+            border, fill, knob = theme.qcolor("dim"), None, theme.qcolor("dim")
+        rect = QRectF(0.5, 0.5, self.W - 1, self.H - 1)
+        p.setBrush(fill if fill is not None else Qt.NoBrush)
+        p.setPen(QPen(border, 1))
+        p.drawRoundedRect(rect, 3, 3)
+        p.setPen(Qt.NoPen)
+        p.setBrush(knob)
+        x = self.W - 2 - 16 if self._on else 2
+        y = 2
+        p.drawRoundedRect(QRectF(x, y, 16, 16), 2, 2)
+        if self._focused:
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(theme.qcolor("focus"), 1))
+            p.drawRoundedRect(QRectF(0.5, 0.5, self.W - 1, self.H - 1), 3, 3)
+        p.end()
+
+
+class ToggleSwitch(QWidget):
+    """
+    Interruttore (pillola rettangolare + etichetta). Usabile da tastiera (Tab per il
+    focus, Spazio/Invio per cambiare) e con nome accessibile. Stati: acceso, spento,
+    non disponibile (``set_unavailable``).
+    """
+
+    toggled = Signal(bool)
+
+    def __init__(self, label_on: str = "Attivo", label_off: str = "Disattivo",
+                 name: str = "", parent=None):
+        super().__init__(parent)
+        self._checked = False
+        self._on = label_on
+        self._off = label_off
+        self._name = name
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setObjectName("toggleSwitch")
+        self.setMinimumHeight(max(28, self.fontMetrics().height() + 8))
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        self._pill = SwitchPill()
+        lay.addWidget(self._pill)
+
+        # larghezza minima dell'etichetta: evita resize del layout al cambio testo
+        self._lbl = QLabel(self._off)
+        fm = self._lbl.fontMetrics()
+        self._lbl.setMinimumWidth(max(fm.horizontalAdvance(label_on),
+                                      fm.horizontalAdvance(label_off)) + 8)
+        lay.addWidget(self._lbl)
+        lay.addStretch()
+
+        self._apply_palette()
+        self._update_accessible()
+        theme.MANAGER.theme_changed.connect(self._apply_palette)
+
+    def _apply_palette(self, _name=None):
+        c = theme.c
+        self.setStyleSheet("QWidget#toggleSwitch { background: transparent; border: none; }")
+        self._lbl.setStyleSheet(
+            f"font-size: 13px; color: {c('text') if self.isEnabled() else c('label')};"
+            " background: transparent; border: none;"
+        )
+        self._pill.update()
+
+    def _update_accessible(self):
+        state = self._on if self._checked else self._off
+        self.setAccessibleName(f"{self._name}: {state}" if self._name else state)
+
+    def isChecked(self) -> bool:  # noqa: N802
+        return self._checked
+
+    def setChecked(self, val: bool):  # noqa: N802
+        self._checked = bool(val)
+        self._pill.set_on(self._checked)
+        self._lbl.setText(self._on if self._checked else self._off)
+        self._update_accessible()
+
+    def set_unavailable(self, label: str, tooltip: str):
+        """Blocca l'interruttore su spento, con etichetta e spiegazione del motivo."""
+        self._off = label
+        self.setChecked(False)
+        self.setEnabled(False)
+        self._pill.set_available(False)
+        self.setCursor(Qt.ArrowCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip(tooltip)
+        self._apply_palette()
+
+    def _toggle(self):
+        if not self.isEnabled():
+            return
+        self.setChecked(not self._checked)
+        self.toggled.emit(self._checked)
+
+    def focusInEvent(self, e):  # noqa: N802
+        self._pill.set_focus_ring(True)
+        super().focusInEvent(e)
+
+    def focusOutEvent(self, e):  # noqa: N802
+        self._pill.set_focus_ring(False)
+        super().focusOutEvent(e)
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if e.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
+            self._toggle()
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._toggle()
+            return
+        super().keyPressEvent(e)

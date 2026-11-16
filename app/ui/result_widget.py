@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QTableView, QHeaderView, QAbstractItemView, QStackedWidget,
 )
 
-from ui import theme
+from ui import icons, theme
 from ui.widgets import ElidedLabel
 
 
@@ -51,7 +51,7 @@ class _StatCard(QFrame):
         self._val.setObjectName("statVal")
         lay.addWidget(self._val)
 
-        self._lbl = QLabel(label.upper())
+        self._lbl = QLabel(label)
         self._lbl.setObjectName("statLbl")
         lay.addWidget(self._lbl)
 
@@ -63,23 +63,23 @@ class _StatCard(QFrame):
         c = theme.c
         self.setStyleSheet(
             f"QFrame#statCard {{ background-color: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 11px; }}"
+            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
         )
         val_color = c("acc") if self._accent else c("text")
         self._val.setStyleSheet(
             f"QLabel#statVal {{ color: {val_color}; font-size: 26px; font-weight: 650;"
-            " letter-spacing: -0.5px; background: transparent; border: none; }"
+            " background: transparent; border: none; }"
         )
         self._lbl.setStyleSheet(
             f"QLabel#statLbl {{ color: {c('muted')}; font-size: 10.5px; font-weight: 600;"
-            " letter-spacing: 0.8px; background: transparent; border: none; }"
+            " background: transparent; border: none; }"
         )
 
     def set_value(self, v: str):
         self._val.setText(v)
 
     def set_label(self, l: str):
-        self._lbl.setText(l.upper())
+        self._lbl.setText(l)
 
 
 # ── Modello anteprima ─────────────────────────────────────────────────────────
@@ -174,8 +174,15 @@ class ResultWidget(QWidget):
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
 
-        self._eyebrow = QLabel("✓ COMPLETATA")
-        title_col.addWidget(self._eyebrow)
+        eyebrow_row = QHBoxLayout()
+        eyebrow_row.setSpacing(6)
+        self._eyebrow_icon = QLabel()
+        self._eyebrow_icon.setFixedSize(14, 14)
+        eyebrow_row.addWidget(self._eyebrow_icon)
+        self._eyebrow = QLabel("Completata")
+        eyebrow_row.addWidget(self._eyebrow)
+        eyebrow_row.addStretch(1)
+        title_col.addLayout(eyebrow_row)
 
         self.title_lbl = QLabel("Trascrizione completata")
         title_col.addWidget(self.title_lbl)
@@ -236,7 +243,7 @@ class ResultWidget(QWidget):
         root.addSpacing(24)
 
         # ── Header anteprima ──────────────────────────────────────────────────
-        self._prev_hdr = QLabel("ANTEPRIMA")
+        self._prev_hdr = QLabel("Anteprima")
         root.addWidget(self._prev_hdr)
         root.addSpacing(10)
 
@@ -310,19 +317,19 @@ class ResultWidget(QWidget):
     def _apply_palette(self):
         c = theme.c
         self._eyebrow.setStyleSheet(
-            f"font-size: 11px; font-weight: 600; color: {c('ok')};"
-            " letter-spacing: 1.6px; background: transparent;"
+            f"font-size: 12px; font-weight: 500; color: {c('ok')}; background: transparent;"
         )
+        self._eyebrow_icon.setPixmap(icons.pixmap("check", theme.qcolor("ok"), 14))
+        self._eyebrow_icon.setStyleSheet("background: transparent;")
         self.title_lbl.setStyleSheet(
-            f"font-size: 30px; font-weight: 600; color: {c('text')};"
-            " letter-spacing: -0.6px; background: transparent;"
+            f"font-size: 22px; font-weight: 500; color: {c('text')}; background: transparent;"
         )
         self.summary_lbl.setStyleSheet(
             f"color: {c('dim')}; font-size: 14.5px; background: transparent;"
         )
         self.badge_frame.setStyleSheet(
             f"QFrame {{ background-color: {c('warn_soft')};"
-            f" border: 1px solid {c('warn')}; border-radius: 9px; }}"
+            f" border: 1px solid {c('warn')}; border-radius: 4px; }}"
         )
         self.badge_lbl.setStyleSheet(
             f"color: {c('warn')}; font-size: 12.5px; font-weight: 500;"
@@ -330,11 +337,11 @@ class ResultWidget(QWidget):
         )
         self._prev_hdr.setStyleSheet(
             f"color: {c('muted')}; font-size: 10px; font-weight: 600;"
-            f" letter-spacing: 1px; background: transparent;"
+            f" background: transparent;"
         )
         self._preview_outer.setStyleSheet(
             f"QFrame#previewOuter {{ background: {c('card')};"
-            f" border: 1px solid {c('card_border')}; border-radius: 11px; }}"
+            f" border: 1px solid {c('card_border')}; border-radius: 4px; }}"
         )
         self._preview_view.setStyleSheet(
             f"QTableView#resultPreview {{ background: transparent; border: none;"

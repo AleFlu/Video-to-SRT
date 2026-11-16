@@ -21,13 +21,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QLabel, QScrollArea, QFrame,
 )
-from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
+from PySide6.QtGui import QFontMetrics, QKeySequence, QShortcut
 
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 
@@ -63,16 +63,16 @@ class _TabButton(QWidget):
         self._lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         layout.addWidget(self._lbl, 1)
 
-        self._badge = QLabel("●")
-        self._badge.setStyleSheet(
-            f"color: {theme.c('warn')}; font-size: 8px; background: transparent; padding: 0;"
-        )
+        self._badge = QLabel()
+        self._badge.setFixedSize(6, 6)
+        self._badge.setStyleSheet(self._badge_style())
         self._badge.setToolTip("Modifiche non salvate")
         self._badge.setVisible(False)
         layout.addWidget(self._badge)
 
         # × — sempre nel layout, visibilità gestita via enterEvent/leaveEvent
-        self._close = QPushButton("✕")
+        self._close = QPushButton()
+        self._close.setIconSize(QSize(12, 12))
         self._close.setObjectName("tabClose")
         self._close.setFixedSize(18, 18)
         self._close.setFlat(True)
@@ -107,6 +107,11 @@ class _TabButton(QWidget):
             parts.append("selezionato")
         self.setAccessibleName(", ".join(parts))
 
+    @staticmethod
+    def _badge_style() -> str:
+        """Punto da 6 px (avviso: modifiche non salvate)."""
+        return (f"background-color: {theme.c('warn')}; border: none; border-radius: 3px;")
+
     # ── Stile chiusura (theme-aware) ─────────────────────────────────────────────
     def _close_style(self, active: bool) -> str:
         c = theme.c
@@ -116,7 +121,6 @@ class _TabButton(QWidget):
             "  background: transparent;"
             f"  color: {col};"
             "  border: none;"
-            "  font-size: 11px;"
             "  padding: 0;"
             "  border-radius: 4px;"
             "}"
@@ -133,45 +137,45 @@ class _TabButton(QWidget):
             # Tab attiva: sfondo distinguibile, bordo accent in basso
             self.setStyleSheet(
                 "QWidget#projectTab {"
-                f"  background-color: {c('card_2')};"
+                "  background-color: transparent;"
                 f"  border-bottom: 2px solid {c('acc')};"
-                f"  border-top: 1px solid {c('line_2')};"
-                f"  border-left: 1px solid {c('line_2')};"
-                f"  border-right: 1px solid {c('line_2')};"
-                "  border-radius: 6px 6px 0 0;"
+                "  border-top: 1px solid transparent;"
+                "  border-left: 1px solid transparent;"
+                "  border-right: 1px solid transparent;"
+                "  border-radius: 0;"
                 "}"
-                f"QWidget#projectTab:focus {{ border: 2px solid {c('focus')}; }}"
+                f"QWidget#projectTab:focus {{ border: 1px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
                 f"color: {c('text')}; font-size: 12px; font-weight: 600; background: transparent;"
             )
             self._close.setStyleSheet(self._close_style(True))
+            self._close.setIcon(icons.icon("close", "dim", 12))
         else:
             self.setStyleSheet(
                 "QWidget#projectTab {"
                 "  background-color: transparent;"
                 "  border: 1px solid transparent;"
                 "  border-bottom: 2px solid transparent;"
-                "  border-radius: 6px 6px 0 0;"
+                "  border-radius: 0;"
                 "}"
                 "QWidget#projectTab:hover {"
-                f"  background-color: {c('card_2')};"
-                f"  border: 1px solid {c('line')};"
+                f"  background-color: {c('raise')};"
+                "  border: 1px solid transparent;"
                 "  border-bottom: 2px solid transparent;"
                 "}"
-                f"QWidget#projectTab:focus {{ border: 2px solid {c('focus')}; }}"
+                f"QWidget#projectTab:focus {{ border: 1px solid {c('focus')}; }}"
             )
             self._lbl.setStyleSheet(
                 f"color: {c('muted')}; font-size: 12px; font-weight: 400; background: transparent;"
             )
             self._close.setStyleSheet(self._close_style(False))
+            self._close.setIcon(icons.icon("close", "muted", 12))
         self._update_accessible()
 
     def apply_palette(self):
         """Ri-applica i colori del tema corrente (chiamato su theme_changed)."""
-        self._badge.setStyleSheet(
-            f"color: {theme.c('warn')}; font-size: 8px; background: transparent; padding: 0;"
-        )
+        self._badge.setStyleSheet(self._badge_style())
         self.set_active(self._active)
 
     def enterEvent(self, event):
@@ -249,17 +253,13 @@ class ProjectTabBar(QWidget):
         self._tabs_layout.addStretch(1)
 
         # Bottone + — vive DENTRO il layout delle tab, subito dopo l'ultima
-        self._btn_new = QPushButton("+")
+        self._btn_new = QPushButton()
+        icons.bind_icon(self._btn_new, "plus", "dim")
         self._btn_new.setFixedSize(26, 26)
         self._btn_new.setFlat(False)
         self._btn_new.setToolTip(f"Nuovo progetto  ({platform_support.shortcut_label('Ctrl+Shift+T')})")
         self._btn_new.setAccessibleName("Nuovo progetto")
         self._btn_new.setCursor(Qt.PointingHandCursor)
-        # Font esplicito via Python — immune al tema globale Qt che sovrascrive font-size nel CSS
-        _plus_font = QFont()
-        _plus_font.setPixelSize(18)
-        _plus_font.setWeight(QFont.Light)
-        self._btn_new.setFont(_plus_font)
         self._btn_new.clicked.connect(self._on_new_clicked)
         # Inserito in posizione 0 nel layout (prima dello stretch);
         # verrà riposizionato da _reinsert_plus_button() dopo ogni add/remove tab
@@ -293,25 +293,24 @@ class ProjectTabBar(QWidget):
     def _apply_palette(self):
         c = theme.c
         self.setStyleSheet(
-            f"background-color: {c('card')}; border-bottom: 1px solid {c('line')};"
+            f"background-color: {c('panel')}; border-bottom: 1px solid {c('line')};"
         )
-        self._scroll.setStyleSheet(f"background: {c('card')}; border: none;")
-        self._tabs_widget.setStyleSheet(f"background: {c('card')};")
+        self._scroll.setStyleSheet(f"background: {c('panel')}; border: none;")
+        self._tabs_widget.setStyleSheet(f"background: {c('panel')};")
         self._btn_new.setStyleSheet(
             "QPushButton {"
-            f"  background: {c('card_2')};"
+            "  background: transparent;"
             f"  color: {c('dim')};"
-            f"  border: 1px solid {c('line_2')};"
-            "  border-radius: 6px;"
+            "  border: 1px solid transparent;"
+            "  border-radius: 4px;"
             "  padding: 0;"
             "}"
             "QPushButton:hover {"
-            f"  background: {c('bg')};"
+            f"  background: {c('raise')};"
             f"  color: {c('text')};"
-            f"  border-color: {c('acc')};"
             "}"
-            f"QPushButton:pressed {{ background: {c('surface')}; }}"
-            + theme.focus_rule("QPushButton", 6)
+            f"QPushButton:pressed {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QPushButton", 4)
         )
         for tab in self._tabs:
             tab.apply_palette()

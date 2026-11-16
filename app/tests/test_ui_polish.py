@@ -202,8 +202,24 @@ def test_palettes_have_same_keys():
     from ui import theme
     assert set(theme.PALETTE_DARK) == set(theme.PALETTE_LIGHT)
     for key in ("row_error_bg", "row_warning_bg", "acc_fill", "focus", "knob",
-                "video_bg", "overlay_bg", "overlay_fg", "wave_outline"):
+                "video_bg", "overlay_bg", "overlay_fg", "wave_outline",
+                "panel", "raise", "label", "sel", "wave"):
         assert key in theme.PALETTE_DARK
+    # nessun residuo di aurora/viola
+    for key in ("purple", "desk_0", "desk_1", "desk_2"):
+        assert key not in theme.PALETTE_DARK
+
+
+def test_palette_is_monochrome_except_severity():
+    """Il colore compare solo per errori e avvisi (e relativi soft/tinte riga)."""
+    from ui import theme
+    colored = {"warn", "err", "warn_soft", "err_soft", "row_error_bg", "row_warning_bg"}
+    for name in ("dark", "light"):
+        for key, value in theme.tokens(name).items():
+            if key in colored or not value.startswith("#"):
+                continue
+            r, g, b = (int(value[i:i + 2], 16) for i in (1, 3, 5))
+            assert max(r, g, b) - min(r, g, b) <= 4, (name, key, value)
 
 
 def test_qcolor_parses_rgba():
@@ -228,10 +244,15 @@ def _contrast(a: str, b: str) -> float:
 def test_text_tokens_meet_wcag_aa(name):
     from ui import theme
     t = theme.tokens(name)
-    pairs = [(fg, bg) for fg in ("text", "dim", "muted")
-             for bg in ("bg", "surface", "card", "card_2")]
-    pairs += [(fg, bg) for fg in ("acc", "ok", "warn", "err") for bg in ("bg", "card", "card_2")]
-    pairs += [("acc_ink", "acc_fill"), ("acc_ink", "acc_fill_h"), ("acc_ink", "acc_fill_d")]
+    # Coppie realmente usate: testo/secondario su ogni superficie (anche rialzo e selezione),
+    # etichetta (muted/label) su fondo e pannello, severity su fondo/pannello/rialzo.
+    surfaces = ("bg", "panel", "surface", "card", "raise", "card_2", "sel")
+    pairs = [(fg, bg) for fg in ("text", "dim") for bg in surfaces]
+    pairs += [(fg, bg) for fg in ("muted", "label") for bg in ("bg", "panel", "surface", "card")]
+    pairs += [(fg, bg) for fg in ("acc", "ok", "warn", "err")
+              for bg in ("bg", "panel", "card", "raise")]
+    pairs += [("acc_ink", "acc_fill"), ("acc_ink", "acc_fill_h"), ("acc_ink", "acc_fill_d"),
+              ("acc_ink", "acc"), ("acc_ink", "acc_h"), ("acc_ink", "acc_d")]
     low = [(fg, bg, round(_contrast(t[fg], t[bg]), 2)) for fg, bg in pairs
            if _contrast(t[fg], t[bg]) < 4.5]
     assert low == []
