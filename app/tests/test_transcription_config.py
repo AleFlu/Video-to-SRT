@@ -33,7 +33,7 @@ from core.subtitle_model import Subtitle
 from core.transcription_config import (
     CONFIG_FORMAT, CONFIG_VERSION, DEFAULT_GLOSSARY, ITALIAN_PROMPT, MAX_FILE_BYTES,
     DecodingOptions, ReadabilityLimits, TranscriptionConfig, VadOptions, active_readability,
-    load_config, parse_glossary, save_config, set_active_readability,
+    glossary_sentence, load_config, parse_glossary, save_config, set_active_readability,
 )
 from core.transcription_worker import TranscriptionParams, TranscriptionWorker
 
@@ -103,7 +103,9 @@ def test_defaults_match_historic_values():
         constants.MAX_CHARS_PER_LINE, constants.MAX_CPS, constants.WARN_CPS,
         constants.MIN_SUBTITLE_DURATION, constants.MAX_SUBTITLE_DURATION)
     assert r.max_lines == 2 and r.keep_low_confidence_words is True
-    assert r.min_gap_s == engine.MIN_GAP_BETWEEN_SUBS
+    assert r.min_gap_s == constants.MIN_GAP_BETWEEN_SUBS
+    # durata e pausa minime: guida Netflix italiana (5/6 s, 2 fotogrammi)
+    assert (r.min_duration_s, r.min_gap_s) == (0.833, 0.083)
     # glossario predefinito = anglicismi e marchi già elencati nel prompt italiano
     assert d.glossary == DEFAULT_GLOSSARY
     assert all(term in ITALIAN_PROMPT for term in d.glossary)
@@ -147,7 +149,7 @@ def test_default_config_produces_historic_whisper_kwargs_plus_glossary(monkeypat
                                                                        prompt, vad):
     expected = dict(_HISTORIC_DECODE, language=engine.normalize_language(language),
                     initial_prompt=prompt, vad_filter=vad,
-                    hotwords=", ".join(DEFAULT_GLOSSARY))
+                    hotwords=glossary_sentence(DEFAULT_GLOSSARY))
     if vad:
         expected["vad_parameters"] = _HISTORIC_VAD
     without = _capture_transcribe(monkeypatch, language=language, vad_filter=vad)
@@ -161,7 +163,7 @@ def test_custom_config_reaches_faster_whisper(monkeypatch):
     cfg = _custom_config()
     kw = _capture_transcribe(monkeypatch, language="en", vad_filter=True, config=cfg)
     assert kw["initial_prompt"] == "Tech talk: Kubernetes, PyTorch."
-    assert kw["hotwords"] == "Kubernetes, PyTorch, Mario Rossi"
+    assert kw["hotwords"] == "Parliamo di Kubernetes, PyTorch e Mario Rossi. Sì, è così."
     assert kw["temperature"] == [0.0, 0.3]
     assert (kw["patience"], kw["no_speech_threshold"], kw["log_prob_threshold"],
             kw["compression_ratio_threshold"], kw["condition_on_previous_text"]) == (
@@ -232,7 +234,7 @@ def test_load_accepts_utf8_bom(tmp_path):
 
 
 def test_exported_config_reproduces_same_worker_and_engine_params(tmp_path, monkeypatch):
-    """Esporta → reimporta → stessi parametri passati al motore e al timing."""
+    """Esporta → reimporta → stessi parametri passati al motore."""
     cfg = _custom_config()
     path = str(tmp_path / "x.vsrtconfig")
     save_config(cfg, path)
@@ -245,11 +247,7 @@ def test_exported_config_reproduces_same_worker_and_engine_params(tmp_path, monk
             seen["transcribe"] = kw
             return [{"start": 0.0, "end": 1.0, "text": "x"}]
 
-        def fake_timing(segs, **kw):
-            seen["timing"] = kw
-            return segs
-
-        fake = types.SimpleNamespace(transcribe=fake_transcribe, post_process_timing=fake_timing,
+        fake = types.SimpleNamespace(transcribe=fake_transcribe,
                                      TranscriptionCancelled=RuntimeError)
         monkeypatch.setitem(sys.modules, "engine", fake)
         TranscriptionWorker(TranscriptionParams.from_config("in.mp4", config)).run()
@@ -262,7 +260,6 @@ def test_exported_config_reproduces_same_worker_and_engine_params(tmp_path, monk
     t = again["transcribe"]
     assert (t["model_size"], t["language"], t["beam_size"], t["vad_filter"], t["denoise"],
             t["high_accuracy"], t["config"]) == ("medium", "en", 3, False, False, True, cfg)
-    assert again["timing"] == {}           # chiamata storica, senza argomenti in più
 
 
 # ── Lettura tollerante ────────────────────────────────────────────────────────
@@ -480,23 +477,25 @@ def test_params_from_config():
     assert auto.language is None
 
 
-def test_worker_default_config_keeps_historic_timing_call(monkeypatch):
+def test_worker_does_not_retime_engine_output(monkeypatch):
     calls = []
 
-    def strict_timing(segs):                 # stessa firma della chiamata storica
+    def retime(segs):                         # non deve più essere chiamata
         calls.append(segs)
         return segs
 
     fake = types.SimpleNamespace(
         transcribe=lambda **kw: [{"start": 0.0, "end": 1.0, "text": "x"}],
-        post_process_timing=strict_timing, TranscriptionCancelled=RuntimeError,
+        post_process_timing=retime, TranscriptionCancelled=RuntimeError,
     )
     monkeypatch.setitem(sys.modules, "engine", fake)
     w = TranscriptionWorker({"input_path": "a.mp4"})
-    failed = []
+    failed, done = [], []
     w.failed.connect(failed.append)
+    w.finished.connect(done.append)
     w.run()
-    assert calls and not failed
+    assert not calls and not failed
+    assert done == [[{"start": 0.0, "end": 1.0, "text": "x"}]]
 
 
 # ── Editor ed esportazione: limiti attivi ─────────────────────────────────────
@@ -510,8 +509,8 @@ def test_table_model_follows_active_limits(qapp):
     from core.subtitle_table_model import (
         COL_CPS, ISSUE_TOO_FAST, ISSUE_TOO_SHORT, SubtitleTableModel,
     )
-    # 30 caratteri in 2 s = 15 CPS; 0.6 s di durata
-    m = SubtitleTableModel([Subtitle(0.0, 2.0, "x" * 30), Subtitle(3.0, 3.6, "ok")])
+    # 30 caratteri in 2 s = 15 CPS; 0.9 s di durata (≥ 0.833 s predefiniti)
+    m = SubtitleTableModel([Subtitle(0.0, 2.0, "x" * 30), Subtitle(3.0, 3.9, "ok")])
     assert m.row_issue_codes(0) == [] and m.row_issue_codes(1) == []
     assert m.data(m.index(0, COL_CPS), Qt.ForegroundRole) is None
 
@@ -523,7 +522,7 @@ def test_table_model_follows_active_limits(qapp):
     assert m.row_issue_codes(0) == [ISSUE_TOO_FAST]
     assert m.row_issue_codes(1) == [ISSUE_TOO_SHORT]
     assert m.row_issues(0) == ["Troppo veloce (15.0 CPS, max 14)"]
-    assert m.row_issues(1) == ["Durata troppo breve (0.60s < 1s)"]
+    assert m.row_issues(1) == ["Durata troppo breve (0.90s < 1s)"]
     assert m.data(m.index(0, COL_CPS), Qt.ForegroundRole) is not None
 
 
@@ -807,3 +806,12 @@ def test_saved_config_restored_at_startup(ui_env, qapp):
             pw.teardown()
             pw._export_panel.close()
         win.deleteLater()
+
+
+def test_glossary_hotwords_are_a_punctuated_sentence():
+    """Regressione: un elenco nudo negli hotwords toglieva la punteggiatura dopo i 30 s."""
+    assert glossary_sentence([]) is None
+    assert glossary_sentence(["git"]) == "Parliamo di git. Sì, è così."
+    hw = DecodingOptions().hotwords()
+    assert hw.startswith("Parliamo di ") and hw.endswith(". Sì, è così.")
+    assert all(t in hw for t in DEFAULT_GLOSSARY)

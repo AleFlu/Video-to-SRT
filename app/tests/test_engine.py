@@ -42,108 +42,280 @@ def _all_text(subs) -> str:
     return " ".join(s["text"] for s in subs)
 
 
-# ── Bug parole perse ──────────────────────────────────────────────────────────
+# ── Composizione dei sottotitoli (core.subtitle_layout) ───────────────────────
 
-def test_synthetic_segment_followed_by_real_words_keeps_all_words():
-    """Segmento senza parole affidabili seguito da parlato: nessuna parola sparisce."""
-    low = [_w(" ok", 0.0, 0.3, 0.1), _w(" va", 0.3, 0.6, 0.1), _w(" bene", 0.6, 1.0, 0.1)]
-    seg1 = _seg(low, text=" ok va bene", start=0.0, end=1.0)
-    real_words = ["allora", "oggi", "parliamo", "di", "sottotitoli"]
-    seg2 = _seg([_w(" " + t, 1.05 + i * 0.3, 1.3 + i * 0.3) for i, t in enumerate(real_words)])
+def _fw_model(segments, captured=None, detected="it", duration=None):
+    """Modello faster-whisper finto: restituisce sempre ``segments``."""
+    if duration is None:
+        duration = max((s.end for s in segments), default=1.0) + 1.0
 
-    words, boundaries = engine.collect_all_words([seg1, seg2])
-    subs = engine.segment_words_semantic(words, boundaries)
-    text = _all_text(subs)
-    for token in ["ok", "va", "bene"] + real_words:
-        assert token in text.split(), f"parola persa: {token!r} in {text!r}"
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            if captured is not None:
+                captured.append((audio, kwargs))
+            info = SimpleNamespace(duration=duration, language=detected,
+                                   language_probability=0.9)
+            return iter(list(segments)), info
 
-
-def test_collect_all_words_returns_module_level_fake_word():
-    seg = _seg([_w(" ehm", 0.0, 0.5, 0.05)], text=" ehm", start=0.0, end=0.5)
-    words, boundaries = engine.collect_all_words([seg])
-    assert len(words) == 1
-    assert isinstance(words[0], engine._FakeWord)
-    assert words[0].word == "ehm"
-    assert boundaries == set()
+    return FakeModel()
 
 
-def test_synthetic_word_is_isolated_in_its_own_block():
-    """Un word sintetico forza uno split prima e dopo di sé (prima del merge)."""
-    seg0 = _seg([_w(" Buongiorno", 0.0, 0.4), _w(" a", 0.42, 0.5), _w(" tutti", 0.52, 0.8)])
-    seg1 = _seg([_w(" xx", 0.85, 1.0, 0.1)], text=" mh mh", start=0.85, end=1.0)
-    seg2 = _seg([_w(" e", 1.05, 1.1), _w(" benvenuti", 1.12, 1.6)])
-    words, boundaries = engine.collect_all_words([seg0, seg1, seg2])
-    # Disattiva il merge per osservare i blocchi grezzi
-    old = engine.MERGE_MIN_CHARS
-    engine.MERGE_MIN_CHARS = 0
-    try:
-        subs = engine.segment_words_semantic(words, boundaries)
-    finally:
-        engine.MERGE_MIN_CHARS = old
-    assert [s["text"] for s in subs] == ["Buongiorno a tutti", "mh mh", "e benvenuti"]
+def _transcribe_with(monkeypatch, segments, **kwargs):
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_get_or_load_model", lambda *a, **k: _fw_model(segments))
+    kwargs.setdefault("vad_filter", False)
+    return engine.transcribe("x.wav", denoise=False, **kwargs)
 
 
-# ── Merge frammenti corti ─────────────────────────────────────────────────────
-
-def test_merge_respects_max_duration():
-    seg1 = _seg([_w(" Ciao.", 0.0, 0.5)])
-    tokens = ["uno", "due", "tre", "quattro"]
-    # Il secondo blocco dura 6.75 s: unito al primo supererebbe MAX_SUBTITLE_DURATION
-    seg2 = _seg([_w(" " + t, 0.6 + i * 1.7, 0.6 + i * 1.7 + 1.65) for i, t in enumerate(tokens)])
-    words, boundaries = engine.collect_all_words([seg1, seg2])
-    subs = engine.segment_words_semantic(words, boundaries)
-    assert subs[0]["text"] == "Ciao."
-    for s in subs:
-        assert s["end"] - s["start"] <= engine.MAX_SUBTITLE_DURATION
-    assert _all_text(subs).split() == ["Ciao."] + tokens
+def test_transcribe_keeps_low_confidence_words(monkeypatch):
+    """Bug storico: le parole con probabilità < 0,35 sparivano dai sottotitoli."""
+    words = [_w(" Oggi", 0.0, 0.4), _w(" parliamo", 0.45, 0.9), _w(" di", 0.95, 1.05),
+             _w(" Kubernetes", 1.1, 1.8, prob=0.2), _w(" insieme.", 1.85, 2.4)]
+    out = _transcribe_with(monkeypatch, [_seg(words)])
+    assert _all_text(out) == "Oggi parliamo di Kubernetes insieme."
+    assert out[0]["confidence"] == pytest.approx(0.2)
 
 
-def test_merge_respects_hard_limit():
-    seg1 = _seg([_w(" Ciao.", 0.0, 0.5)])
-    tokens = ["parola%02d" % i for i in range(9)]  # 9 * 8 + 8 spazi = 80 caratteri
-    seg2 = _seg([_w(" " + t, 0.6 + i * 0.3, 0.6 + i * 0.3 + 0.25) for i, t in enumerate(tokens)])
-    words, boundaries = engine.collect_all_words([seg1, seg2])
-    subs = engine.segment_words_semantic(words, boundaries)
-    for s in subs:
-        assert len(s["text"]) <= engine.HARD_LIMIT
-    assert _all_text(subs).split() == ["Ciao."] + tokens
+def test_transcribe_joins_apostrophes(monkeypatch):
+    """Bug storico: "l 'industria" / "dell' amore" restavano staccati."""
+    words = [_w(" Questa", 0.0, 0.3), _w(" è", 0.32, 0.4), _w(" l", 0.42, 0.5),
+             _w("'industria", 0.5, 1.0), _w(" dell'", 1.05, 1.2), _w(" amore.", 1.2, 1.7)]
+    out = _transcribe_with(monkeypatch, [_seg(words)])
+    assert _all_text(out) == "Questa è l'industria dell'amore."
 
 
-def test_merge_still_joins_short_fragments():
-    seg1 = _seg([_w(" Ciao.", 0.0, 0.5)])
-    seg2 = _seg([_w(" Come", 0.6, 0.9), _w(" stai?", 0.92, 1.3)])
-    words, boundaries = engine.collect_all_words([seg1, seg2])
-    subs = engine.segment_words_semantic(words, boundaries)
-    assert [s["text"] for s in subs] == ["Ciao. Come stai?"]
-
-
-# ── post_process_timing ───────────────────────────────────────────────────────
-
-def test_post_process_timing_overlapping_segments():
-    segs = [
-        {"start": 0.0, "end": 2.0, "text": "uno"},
-        {"start": 1.5, "end": 3.0, "text": "due"},
-        {"start": 2.9, "end": 4.0, "text": "tre"},
-        {"start": 1.0001, "end": 1.0002, "text": "quattro"},
-        {"start": 1.0802, "end": 1.5, "text": "cinque"},
-    ]
-    out = engine.post_process_timing(segs)
-    assert len(out) == 5
-    for s in out:
-        assert s["end"] > s["start"], s
+def test_transcribe_returns_final_timing_and_flat_text(monkeypatch):
+    """Il motore restituisce tempi definitivi (nessuno li ritocca dopo) e testo senza a capo."""
+    words = [_w(" " + t, 0.1 + i * 0.3, 0.35 + i * 0.3)
+             for i, t in enumerate("Questa frase è abbastanza lunga da andare su due righe "
+                                   "una volta esportata come file.".split())]
+    out = _transcribe_with(monkeypatch, [_seg(words)])
+    assert all("\n" not in s["text"] for s in out)
     for cur, nxt in zip(out, out[1:]):
-        limit = nxt["start"] - engine.MIN_GAP_BETWEEN_SUBS
-        if limit > cur["start"]:
-            assert cur["end"] <= limit + 1e-9, (cur, nxt)
+        assert cur["end"] <= nxt["start"] - 0.083 + 1e-9
+    assert all(s["end"] - s["start"] >= 0.833 - 1e-9 for s in out)
+    assert set(out[0]) >= {"start", "end", "text", "confidence"}
 
 
-def test_post_process_timing_rounding_never_collapses():
-    segs = [
-        {"start": 1.0001, "end": 1.0002, "text": "a"},
-        {"start": 1.0803, "end": 2.0, "text": "b"},
-    ]
-    out = engine.post_process_timing(segs)
-    assert all(s["end"] > s["start"] for s in out), out
+def test_transcribe_layout_follows_config_readability(monkeypatch):
+    from dataclasses import replace
+    from core.transcription_config import ReadabilityLimits, TranscriptionConfig
+    words = [_w(" parola%02d" % i, i * 0.3, i * 0.3 + 0.25) for i in range(8)]
+    cfg = replace(TranscriptionConfig(),
+                  readability=ReadabilityLimits(max_chars_per_line=20, max_lines=1))
+    out = _transcribe_with(monkeypatch, [_seg(words)], config=cfg)
+    assert all(len(s["text"]) <= 20 for s in out)
+    assert _all_text(out).split() == ["parola%02d" % i for i in range(8)]
+
+
+def test_layout_rules_from_readability():
+    from core.subtitle_layout import LayoutRules
+    from core.transcription_config import ReadabilityLimits
+    r = ReadabilityLimits(max_chars_per_line=37, max_lines=3, max_cps=25.0, warn_cps=15.0,
+                          min_duration_s=1.0, max_duration_s=6.0, min_gap_s=0.1,
+                          keep_low_confidence_words=False)
+    rules = r.layout_rules()
+    assert isinstance(rules, LayoutRules)
+    assert (rules.max_chars_per_line, rules.max_lines, rules.max_cps, rules.min_duration_s,
+            rules.max_duration_s, rules.min_gap_s, rules.keep_low_confidence_words) == (
+        37, 3, 15.0, 1.0, 6.0, 0.1, False)
+    # predefiniti = guida Netflix italiana
+    assert ReadabilityLimits().layout_rules() == LayoutRules()
+
+
+def test_old_pipeline_removed():
+    for name in ("collect_all_words", "segment_words_semantic", "post_process_timing",
+                 "_FakeWord", "_postprocess_typography", "_merge_short_fragments",
+                 "_find_best_split", "MIN_GAP_BETWEEN_SUBS", "MIN_WORD_PROB",
+                 "_WhisperXSegmentAdapter"):
+        assert not hasattr(engine, name), name
+
+
+# ── Recupero del parlato saltato dal VAD ──────────────────────────────────────
+
+class _SliceModel:
+    """Modello finto per la ritrascrizione: parole con tempi relativi all'inizio della
+    porzione di audio ricevuta (come faster-whisper con un array numpy)."""
+
+    def __init__(self, words_abs, fail=False):
+        self.words_abs = words_abs    # [(testo, inizio assoluto, fine assoluta)]
+        self.calls = []
+        self.fail = fail
+
+    def transcribe(self, audio, **kwargs):
+        self.calls.append((audio, kwargs))
+        if self.fail:
+            raise RuntimeError("decodifica fallita")
+        offset = audio.offset
+        ws = [_w(t, s - offset, e - offset) for t, s, e in self.words_abs
+              if offset <= s and e <= offset + len(audio) / 16000]
+        segs = [_seg(ws)] if ws else []
+        return iter(segs), SimpleNamespace(duration=len(audio) / 16000, language="it",
+                                           language_probability=0.9)
+
+
+class _Pcm:
+    """Audio finto: basta che si possa affettare e misurare (tiene traccia dell'offset)."""
+
+    def __init__(self, seconds, offset=0.0):
+        self.n = int(seconds * 16000)
+        self.offset = offset
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, sl):
+        start = sl.start or 0
+        stop = min(self.n, sl.stop if sl.stop is not None else self.n)
+        return _Pcm((stop - start) / 16000, self.offset + start / 16000)
+
+
+def _speech_seg(texts, t0, step=0.4):
+    return _seg([_w(" " + t, t0 + i * step, t0 + i * step + step - 0.05)
+                 for i, t in enumerate(texts)])
+
+
+def test_recover_skipped_speech_merges_hole_words_in_time_order(monkeypatch):
+    before = _speech_seg(["Prima", "parte", "del", "discorso."], 0.0)
+    after = _speech_seg(["Ultima", "parte."], 9.0)
+    # parole "vere" nel buco 3–8 s, più una fuori dal buco (deve essere scartata)
+    hole_words = [(" In", 3.2, 3.5), (" questo", 3.6, 4.0), (" caso,", 4.1, 4.6),
+                  (" per", 4.7, 5.0), (" esempio.", 5.1, 5.8), (" fuori", 8.1, 8.25)]
+    model = _SliceModel(hole_words)
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 8.0),
+                                                                         (9.0, 10.0)])
+    statuses = []
+    merged = engine._recover_skipped_speech(
+        model, _Pcm(12.0), [before, after], {"threshold": 0.5},
+        {"language": "it", "hotwords": "deploy", "beam_size": 5, "vad_filter": True,
+         "vad_parameters": {"threshold": 0.5}},
+        cancel_event=None, on_status=statuses.append)
+    assert len(model.calls) == 1
+    audio, kw = model.calls[0]
+    assert kw["vad_filter"] is False and "vad_parameters" not in kw
+    assert kw["language"] == "it" and kw["hotwords"] == "deploy" and kw["word_timestamps"]
+    assert audio.offset == pytest.approx(1.55 - 0.3, abs=1e-3)  # buco 1,55–8 s, margine 0,3
+    texts = [" ".join(w.word.strip() if hasattr(w, "word") else w["word"].strip()
+                      for w in (s.words if hasattr(s, "words") else s["words"]))
+             for s in merged]
+    assert texts == ["Prima parte del discorso.", "In questo caso, per esempio.",
+                     "Ultima parte."]
+    starts = [s.start if hasattr(s, "start") else s["start"] for s in merged]
+    assert starts == sorted(starts) and starts[1] == pytest.approx(3.2)
+    assert any("Recupero di 1 tratto di parlato saltato" in m for m in statuses)
+
+
+def _merged_words(merged):
+    words = []
+    for seg in merged:
+        for w in (seg.words if hasattr(seg, "words") else seg["words"]):
+            words.append(w.word.strip() if hasattr(w, "word") else w["word"].strip())
+    return words
+
+
+def test_recover_skipped_speech_boundary_words(monkeypatch):
+    """Caso reale ("nico", buco 24,73–34,75 s): una parola a cavallo della fine del buco
+    ("lusso") va tenuta anche se il punto medio cade fuori; una a cavallo dell'inizio ("In")
+    va tenuta se il punto medio cade dentro."""
+    before = _speech_seg(["Prima."], 0.0)
+    after = _seg([_w(" di", 6.75, 7.05), _w(" altissima", 7.05, 7.6),
+                  _w(" qualità.", 7.6, 8.1)])
+    hole_words = [(" In", 0.3, 0.6), (" del", 2.0, 2.3), (" denim", 2.3, 2.6),
+                  (" di", 6.4, 6.62), (" lusso", 6.62, 6.98)]
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 8.2)])
+    merged = engine._recover_skipped_speech(_SliceModel(hole_words), _Pcm(9.0),
+                                            [before, after], {}, {})
+    assert _merged_words(merged) == ["Prima.", "In", "del", "denim", "di", "lusso", "di",
+                                     "altissima", "qualità."]
+
+
+def test_recover_skipped_speech_drops_duplicate_of_neighbour(monkeypatch):
+    """Una parola ritrascritta che ripete quella già presente subito dopo il buco (stesso
+    testo, tempi sovrapposti) non viene duplicata ("denim di di altissima")."""
+    before = _speech_seg(["Prima."], 0.0)
+    after = _seg([_w(" di", 6.75, 7.05), _w(" altissima", 7.05, 7.6)])
+    hole_words = [(" del", 2.0, 2.3), (" denim", 2.3, 2.6), (" Di,", 6.5, 6.85)]
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 8.0)])
+    merged = engine._recover_skipped_speech(_SliceModel(hole_words), _Pcm(9.0),
+                                            [before, after], {}, {})
+    assert _merged_words(merged) == ["Prima.", "del", "denim", "di", "altissima"]
+
+
+def test_recover_skipped_speech_no_holes_returns_input(monkeypatch):
+    seg = _speech_seg(["Tutto", "coperto."], 0.0)
+    model = _SliceModel([])
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 0.8)])
+    assert engine._recover_skipped_speech(model, _Pcm(2.0), [seg], {}, {}) == [seg]
+    assert model.calls == []
+
+
+def test_recover_skipped_speech_failure_never_breaks(monkeypatch):
+    seg = _speech_seg(["Ciao."], 0.0)
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 6.0)])
+    model = _SliceModel([], fail=True)
+    assert engine._recover_skipped_speech(model, _Pcm(7.0), [seg], {}, {}) == [seg]
+
+    def broken_vad(pcm, opts):
+        raise RuntimeError("onnx mancante")
+    monkeypatch.setattr(engine, "_vad_speech_spans", broken_vad)
+    assert engine._recover_skipped_speech(model, _Pcm(7.0), [seg], {}, {}) == [seg]
+
+
+def test_recover_skipped_speech_respects_cancel(monkeypatch):
+    seg = _speech_seg(["Ciao."], 0.0)
+    monkeypatch.setattr(engine, "_vad_speech_spans",
+                        lambda pcm, opts: [(0.0, 0.4), (2.0, 5.0), (7.0, 10.0)])
+    ev = threading.Event()
+    ev.set()
+    model = _SliceModel([])
+    with pytest.raises(engine.TranscriptionCancelled):
+        engine._recover_skipped_speech(model, _Pcm(11.0), [seg], {}, {}, cancel_event=ev)
+    assert model.calls == []
+
+
+def test_transcribe_end_to_end_with_recovered_hole(monkeypatch):
+    """Pipeline completa con VAD: apostrofi uniti, parola poco probabile tenuta, buco
+    del VAD ritrascritto e inserito al suo posto."""
+    first = _seg([_w(" Questa", 0.0, 0.3), _w(" è", 0.32, 0.4), _w(" l", 0.42, 0.5),
+                  _w("'idea", 0.5, 0.9), _w(" di", 0.95, 1.05),
+                  _w(" Matteo.", 1.1, 1.6, prob=0.1)])
+    last = _speech_seg(["Grazie", "a", "tutti."], 12.0)
+    hole = [(" In", 4.0, 4.3), (" questo", 4.4, 4.8), (" specifico", 4.9, 5.5),
+            (" caso,", 5.6, 6.0), (" per", 6.1, 6.3), (" esempio.", 6.4, 7.0)]
+    captured = []
+
+    class Model:
+        def transcribe(self, audio, **kwargs):
+            captured.append(kwargs)
+            if isinstance(audio, _Pcm):
+                return _SliceModel(hole).transcribe(audio, **kwargs)
+            return iter([first, last]), SimpleNamespace(duration=14.0, language="it",
+                                                        language_probability=0.9)
+
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_get_or_load_model", lambda *a, **k: Model())
+    monkeypatch.setattr(engine, "_decode_pcm", lambda path: _Pcm(14.0))
+    monkeypatch.setattr(engine, "_vad_speech_spans",
+                        lambda pcm, opts: [(0.0, 1.7), (3.8, 7.2), (12.0, 13.2)])
+    statuses = []
+    out = engine.transcribe("x.wav", denoise=False, vad_filter=True,
+                            on_status=statuses.append)
+    texts = [s["text"] for s in out]
+    assert texts == ["Questa è l'idea di Matteo.", "In questo specifico caso, per esempio.",
+                     "Grazie a tutti."]
+    assert out[0]["confidence"] == pytest.approx(0.1)
+    assert out[1]["start"] == pytest.approx(4.0)
+    assert out[-1]["end"] <= 14.0
+    assert captured[1]["vad_filter"] is False and captured[1]["language"] == "it"
+    assert any("Recupero di 1 tratto" in m for m in statuses)
+
+
+def test_transcribe_without_vad_skips_recovery(monkeypatch):
+    called = []
+    monkeypatch.setattr(engine, "_recover_skipped_speech",
+                        lambda *a, **k: called.append(1) or a[2])
+    _transcribe_with(monkeypatch, [_speech_seg(["Ciao."], 0.0)], vad_filter=False)
+    assert not called
 
 
 # ── Cache modello thread-safe ─────────────────────────────────────────────────
@@ -222,7 +394,6 @@ def test_check_cancel():
 
 def test_renamed_postprocessors():
     assert engine._postprocess_codeswitching("il macchina lerning") == "il machine learning"
-    assert engine._postprocess_typography("ciao , un po bene") == "ciao, un po' bene"
     assert not hasattr(engine, "_postprocess_italian")
     assert not hasattr(engine, "_postprocess_italian_subs")
 
@@ -466,3 +637,53 @@ def test_high_accuracy_reason_when_package_missing(monkeypatch):
     assert engine.high_accuracy_available() is True
     monkeypatch.setattr(engine, "_is_frozen", lambda: True)
     assert engine.high_accuracy_available() is False
+
+
+# ── Correzioni di code-switching: mai toccare l'italiano normale ─────────────
+
+_EVERYDAY_ITALIAN = [
+    "Le api fanno il miele.",
+    "Ho visto delle api sul balcone.",
+    "Ho scritto una bella storia.",
+    "Le storie dei nonni sono le più belle.",
+    "Il codice è pronto.",
+    "Ci vediamo dopo con i codici.",
+    "Che stress, questa settimana.",
+    "Il server ha risposto.",
+    "Lo stream è iniziato.",
+    "Ho guardato i Reels di ieri sera.",
+    "La UIF ha ricevuto la segnalazione.",
+    "Dobbiamo debuggare il codice prima di stasera.",
+    "Abbiamo rifattorizzato il modulo.",
+    "Il Web è cambiato molto.",
+    "La data sette marzo va bene.",
+    "Il marketing è importante.",
+    "Ci vendiamo la macchina.",
+]
+
+
+@pytest.mark.parametrize("sentence", _EVERYDAY_ITALIAN)
+def test_codeswitching_leaves_everyday_italian_unchanged(sentence):
+    assert engine._postprocess_codeswitching(sentence) == sentence
+
+
+@pytest.mark.parametrize("raw, fixed", [
+    ("il macchina lerning", "il machine learning"),
+    ("usiamo il dip lerning", "usiamo il deep learning"),
+    ("un buon fremework", "un buon framework"),
+    ("il beck end e il front end", "il backend e il frontend"),
+    ("facciamo il deploi", "facciamo il deploy"),
+    ("il docher e cubernetis", "il Docker e Kubernetes"),
+    ("le API REST", "le API REST"),
+    ("chiamo le api rest", "chiamo le API rest"),
+    ("serve una api key", "serve una API key"),
+    ("ho aperto una pull raquest", "ho aperto una pull request"),
+    ("lo trovi su git hab", "lo trovi su GitHub"),
+    ("un buon uik end", "un buon weekend"),
+    ("una nuova featura", "una nuova feature"),
+    ("la nostra codic base", "la nostra codebase"),
+    ("abbiamo un sdk", "abbiamo un SDK"),
+    ("Macchina lerning", "Machine learning"),
+])
+def test_codeswitching_intended_fixes_still_work(raw, fixed):
+    assert engine._postprocess_codeswitching(raw) == fixed

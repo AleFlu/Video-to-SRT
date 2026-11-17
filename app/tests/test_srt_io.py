@@ -245,12 +245,25 @@ def test_wrap_preserves_existing_newlines():
     assert wrap_subtitle_text(t) == t
 
 
-def test_wrap_balanced_two_lines_max():
+def test_wrap_two_lines_max_with_layout_rules():
+    """L'esportazione va a capo come il motore (core.subtitle_layout.wrap_lines): righe
+    entro il limite, mai una preposizione/articolo in fondo alla riga superiore."""
+    from core.subtitle_layout import wrap_lines
     t = "uno due tre quattro cinque sei sette otto nove dieci undici dodici"
     result = wrap_subtitle_text(t)
     assert len(result.split("\n")) == 2
-    a, b = result.split("\n")
-    assert abs(len(a) - len(b)) <= 8
+    assert all(len(line) <= 42 for line in result.split("\n"))
+    assert result == wrap_lines(t)
+    t = "Abbiamo lavorato per tanti mesi alla nuova collezione della nostra azienda"
+    top, bottom = wrap_subtitle_text(t).split("\n")
+    assert top.split()[-1] not in {"alla", "della", "per", "nuova"}
+    assert len(top) <= 42 and len(bottom) <= 42
+
+
+def test_wrap_respects_configured_max_lines():
+    t = "uno due tre quattro cinque sei sette otto nove dieci undici dodici"
+    assert wrap_subtitle_text(t, max_lines=1) == t
+    assert len(wrap_subtitle_text(t, max_chars=22, max_lines=3).split("\n")) == 3
 
 
 def test_wrap_custom_max_chars():

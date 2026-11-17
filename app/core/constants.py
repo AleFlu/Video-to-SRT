@@ -56,9 +56,11 @@ FILE_FILTER_IMPORT_SUBTITLES = (
 
 # ── Limiti sottotitoli ────────────────────────────────────────────────────────
 
+# Durata minima e pausa minima: guida Netflix italiana (5/6 s e 2 fotogrammi a 24 fps)
 MAX_CHARS_PER_LINE: int = 42       # caratteri per riga SRT (wrap automatico)
 MAX_SUBTITLE_DURATION: float = 7.0  # secondi
-MIN_SUBTITLE_DURATION: float = 0.5  # secondi
+MIN_SUBTITLE_DURATION: float = 0.833  # secondi
+MIN_GAP_BETWEEN_SUBS: float = 0.083   # secondi tra un sottotitolo e il successivo
 MAX_CPS: float = 20.0               # caratteri al secondo (soglia errore di leggibilità)
 WARN_CPS: float = 17.0              # caratteri al secondo (soglia di attenzione)
 

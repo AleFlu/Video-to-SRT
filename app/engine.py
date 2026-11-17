@@ -19,10 +19,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.constants import MAX_CHARS_PER_LINE  # noqa: F401 — riesportata per compatibilità
-from core.constants import MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, normalize_language
+from core.constants import normalize_language
+from core.subtitle_layout import LayoutRules, find_uncovered_speech, layout, words_from_segments
 from core.transcription_config import ITALIAN_PROMPT  # noqa: F401 — riesportata per compatibilità
 from core.transcription_config import TranscriptionConfig, VadOptions
 from platform_support import cpu_threads, ffmpeg_executable_name, subprocess_kwargs
@@ -95,7 +96,9 @@ VAD_PARAMS = VadOptions().as_dict()
 # Post-processing: correzione italianizzazioni Whisper
 # ============================================================
 # Lista di (pattern_regex, replacement) ordinata dalla più specifica alla più generica.
-# Il pattern deve fare match su quello che Whisper produce con language=it.
+# Il pattern deve fare match su quello che Whisper produce con language=it e MAI su una
+# parola italiana comune ("Le api fanno il miele", "debuggare", "la UIF"): nel dubbio la
+# regola non c'è (vedi test_codeswitching_leaves_everyday_italian_unchanged).
 _CODESWITCHING_CORRECTIONS: List = [
     # --- ML / AI ---
     (r"\bmacchin(?:a)?\s*l[ae]rning\b",             "machine learning"),
@@ -110,7 +113,7 @@ _CODESWITCHING_CORRECTIONS: List = [
     (r"\bbench\s*mark[s]?\b",                         "benchmark"),
 
     # --- Infrastruttura / DevOps ---
-    (r"\bdeploi(?:are|ato|ata|ati|ate|ment|mento)?\b","deploy"),
+    (r"\bdeploi\b",                                  "deploy"),
     (r"\bfr[ae]mework[s]?\b",                         "framework"),
     (r"\bb[ae]ck\s*end\b",                            "backend"),
     (r"\bfront\s*end\b",                              "frontend"),
@@ -123,10 +126,10 @@ _CODESWITCHING_CORRECTIONS: List = [
     (r"\bsir\s*ver[s]?\b",                            "server"),
 
     # --- Sviluppo software ---
-    (r"\bd[ae]bug(?:ging|gare|gato)?\b",              "debug"),
-    (r"\brifact(?:oring|orare|orato)?\b",             "refactoring"),
+    (r"\bdabug\b",                                    "debug"),
+    (r"\brifactoring\b",                              "refactoring"),
     (r"\bpull\s*r[ae]qu[ae]st[s]?\b",                "pull request"),
-    (r"\bcodi[ck](?:\s*base)?\b",                     "codebase"),
+    (r"\bcodi[ck]\s*base\b",                          "codebase"),
     (r"\bgit\s*hab\b",                                "GitHub"),
     (r"\bgit\s*lab\b",                                "GitLab"),
 
@@ -136,7 +139,6 @@ _CODESWITCHING_CORRECTIONS: List = [
     (r"\binfl[iu][ae]nc[ae]r[s]?\b",                  "influencer"),
     (r"\bstr[ae]aming\b",                              "streaming"),
     (r"\bstr[ae]am[s]?\b",                             "stream"),
-    (r"\breel[s]?\b",                                  "reel"),
     (r"\bstor(?:ies|i)\b",                             "stories"),
 
     # --- Anglicismi tech generici ---
@@ -144,9 +146,9 @@ _CODESWITCHING_CORRECTIONS: List = [
     (r"\bscr[ae]enshot[s]?\b",                        "screenshot"),
     (r"\bh[ae]rduer[ae]\b",                            "hardware"),
     (r"\bs[ao]ftuer[ae]\b",                            "software"),
-    (r"\bu[ai]f\b",                                    "UI"),
     (r"\bu[ae]ks\b",                                   "UX"),
-    (r"\bapi[s]?\b",                                   "API"),
+    # "api" sono anche le api del miele: solo davanti a un termine tecnico
+    (r"\bapi(?=\s+(?:rest|restful|key|keys|endpoint|endpoints|gateway)\b)", "API"),
     (r"\bsdk[s]?\b",                                   "SDK"),
 
     # --- Business / Startup ---
@@ -161,7 +163,6 @@ _CODESWITCHING_CORRECTIONS: List = [
     (r"\bwi[ck]\s*end\b",                              "weekend"),
     (r"\bci[ck]\s*end\b",                              "weekend"),
     (r"\bci\s*end\b",                                  "weekend"),
-    (r"\bweb[s]?\b",                                   "web"),
 ]
 
 
@@ -196,9 +197,6 @@ MODELS = {
     "large-v3-turbo": {"label": "large-v3-turbo — Ottima + veloce","ram": "~4 GB",  "quality": "★★★★½"},
 }
 DEFAULT_MODEL = "large-v3"
-
-# Timing sottotitoli (MAX_SUBTITLE_DURATION / MIN_SUBTITLE_DURATION da core.constants)
-MIN_GAP_BETWEEN_SUBS = 0.08
 
 
 # ============================================================
@@ -483,376 +481,194 @@ def preload_model(model_size: str = DEFAULT_MODEL,
 
 
 # ============================================================
-# Segmentazione sottotitoli — architettura globale
+# Composizione dei sottotitoli
 # ============================================================
-SENTENCE_ENDINGS = {".", "!", "?", "…"}
-CLAUSE_BREAKS    = {",", ";", ":", "–", "—"}
-MIN_WORD_PROB    = 0.35
+def _build_subtitles(raw_segments: Sequence[Any], rules: LayoutRules,
+                     audio_end: Optional[float], italian: bool) -> List[Dict]:
+    """Segmenti Whisper → sottotitoli definitivi ``{"start", "end", "text", "confidence"}``.
 
-# Soglie acustiche
-GAP_FORCE   = 0.40   # gap >= questo → split sempre (silenzio reale)
-GAP_CLAUSE  = 0.25   # gap dopo ,;: con blocco >= 20 char
-GAP_SOFT    = 0.10   # gap minimo al soft limit
-
-# Limiti caratteri (due righe × 42 = 84 max assoluto)
-SOFT_LIMIT  = 42     # preferisci splittare al prossimo gap disponibile
-HARD_LIMIT  = 84     # split forzato — mai blocchi più lunghi di così
-
-# Merge: frammenti sotto questa soglia vengono assorbiti dal successivo
-MERGE_MIN_CHARS = 25
-
-_IT_FIXES = [
-    (re.compile(r'\s+([.,;:!?])'),                       r'\1'),
-    (re.compile(r'  +'),                                  ' '),
-    (re.compile(r"([a-zA-ZÀ-ù]') ([a-zA-ZÀ-ù])"),       r"\1\2"),
-    (re.compile(r'\bun po\b(?=\s|$)'),                   "un po'"),
-    (re.compile(
-        r'\bce\b(?=\s+(?:un|una|il|lo|la|stato|stata|bisogno|qualcosa|'
-        r'niente|ancora|già|sempre|molto|troppo|poco|bene|male|più|meno)\b)',
-        re.IGNORECASE
-    ), "c'è"),
-]
-
-
-def _postprocess_typography(text: str) -> str:
-    """Correzioni tipografiche per sottotitoli (spazi prima di punteggiatura, apostrofi, ecc.)."""
-    for pattern, replacement in _IT_FIXES:
-        text = pattern.sub(replacement, text)
-    return text.strip()
-
-
-class _FakeWord:
-    """Parola sintetica che rappresenta l'intero testo di un segmento senza
-    parole affidabili (nessun timestamp per parola utilizzabile)."""
-
-    __slots__ = ("word", "start", "end", "probability", "_is_synthetic")
-
-    def __init__(self, word: str, start: float, end: float):
-        self.word = word
-        self.start = start
-        self.end = end
-        self.probability = 1.0
-        self._is_synthetic = True
-
-
-def _is_synthetic(word) -> bool:
-    return getattr(word, "_is_synthetic", False)
-
-
-def collect_all_words(segments_iter, min_word_prob: float = MIN_WORD_PROB) -> Tuple[List, Set[int]]:
-    """Raccoglie tutte le parole da tutti i segmenti in una lista flat globale.
-
-    Ignora segmenti con no_speech_prob alto o avg_logprob troppo basso.
-    Restituisce ``(parole, boundary)``: le parole hanno .start .end .word .probability;
-    ``boundary`` contiene gli indici in cui inizia un nuovo segmento Whisper
-    (hard break impliciti). Un segmento senza parole affidabili diventa un
-    unico ``_FakeWord`` con il testo del segmento.
+    ``core.subtitle_layout.layout`` decide divisione, testo e tempi (regole Netflix
+    italiane); qui si aggiunge solo la correzione del code-switching se la lingua
+    effettiva è l'italiano. Il testo non va a capo (lo fa l'esportazione) e i tempi sono
+    già quelli finali: nessuno li deve ritoccare dopo.
     """
-    all_words: List = []
-    seg_boundaries: Set[int] = set()
-
-    for seg in segments_iter:
-        no_speech  = getattr(seg, "no_speech_prob", 0.0)
-        avg_logprob = getattr(seg, "avg_logprob", 0.0)
-        if no_speech > 0.9 or avg_logprob < -1.8:
-            continue
-
-        words = getattr(seg, "words", None) or []
-        valid = [w for w in words
-                 if w.word.strip() and getattr(w, "probability", 1.0) >= min_word_prob]
-
-        if not valid:
-            # Nessuna parola affidabile: usa il testo grezzo del segmento come blocco unico
-            text = (getattr(seg, "text", "") or "").strip()
-            if text:
-                if all_words:
-                    seg_boundaries.add(len(all_words))
-                all_words.append(_FakeWord(text, seg.start, seg.end))
-            continue
-
-        if all_words:
-            seg_boundaries.add(len(all_words))
-        all_words.extend(valid)
-
-    return all_words, seg_boundaries
+    subs = layout(raw_segments, rules, audio_end=audio_end)
+    if italian:
+        for sub in subs:
+            sub["text"] = _postprocess_codeswitching(sub["text"])
+    return subs
 
 
-def _find_best_split(words: List) -> int:
-    """Trova l'indice migliore dove splittare una lista di parole già accumulata.
+# ============================================================
+# Recupero del parlato saltato con il filtro VAD
+# ============================================================
+# Con vad_filter=True Whisper a volte non trascrive un tratto che il VAD ha marcato come
+# parlato (caso reale: ~10 s in mezzo a un discorso). Questi tratti vengono ritrascritti
+# da soli, senza VAD, con gli stessi parametri di decodifica.
+_SAMPLE_RATE = 16000
+_RECOVERY_MIN_HOLE_S = 1.5
+_RECOVERY_MARGIN_S = 0.3
 
-    Strategia: cerca il gap acustico più grande tra le parole, con preferenza
-    per i confini dopo punteggiatura debole. Restituisce l'indice DOPO cui
-    splittare (0 = non splittare, len-1 = dopo l'ultima — non usare).
-    Considera solo posizioni che lasciano almeno 15 char per parte.
+
+def _decode_pcm(audio_path: str):
+    """Audio a 16 kHz mono (float32) decodificato come lo decodifica faster-whisper."""
+    from faster_whisper.audio import decode_audio
+    return decode_audio(audio_path, sampling_rate=_SAMPLE_RATE)
+
+
+def _vad_speech_spans(audio_pcm, vad_options: Dict) -> List[Tuple[float, float]]:
+    """Tratti di parlato (secondi) secondo il VAD Silero, con le stesse opzioni usate dal
+    filtro VAD di faster-whisper."""
+    from faster_whisper.vad import VadOptions as FwVadOptions
+    from faster_whisper.vad import get_speech_timestamps
+    chunks = get_speech_timestamps(audio_pcm, FwVadOptions(**vad_options),
+                                   sampling_rate=_SAMPLE_RATE)
+    return [(c["start"] / _SAMPLE_RATE, c["end"] / _SAMPLE_RATE) for c in chunks]
+
+
+def _field(obj: Any, name: str, default: Any = None) -> Any:
+    """Attributo di un oggetto di faster-whisper o chiave di un dict."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _norm_word(text: str) -> str:
+    """Parola in minuscolo senza punteggiatura attorno (per confrontare due trascrizioni)."""
+    return text.strip().strip(".,;:!?…\"'’«»()[]").lower()
+
+
+def _transcribe_hole(model, audio_pcm, hole: Tuple[float, float], decode_kwargs: Dict,
+                     cancel_event: Optional[threading.Event],
+                     existing: Sequence[Any] = ()) -> List[Dict]:
+    """Ritrascrive solo ``hole`` (con un margine) e restituisce segmenti-dict con tempi
+    assoluti.
+
+    Si tengono le parole con il punto medio dopo l'inizio del tratto e l'inizio prima della
+    sua fine: il tratto finisce dove comincia la parola già trascritta dopo, e una parola a
+    cavallo della fine ("lusso" in "denim di lusso di altissima…") andrebbe persa con il
+    solo criterio del punto medio. Si scarta invece una parola che ripete una di
+    ``existing`` (parole già trascritte, con ``text/start/end``) con lo stesso testo e
+    tempi sovrapposti.
     """
-    if len(words) < 2:
-        return 0
+    hole_start, hole_end = hole
+    total_s = len(audio_pcm) / _SAMPLE_RATE
+    offset = max(0.0, hole_start - _RECOVERY_MARGIN_S)
+    stop = min(total_s, hole_end + _RECOVERY_MARGIN_S)
+    chunk = audio_pcm[int(offset * _SAMPLE_RATE):int(stop * _SAMPLE_RATE)]
 
-    best_idx  = 0
-    best_score = -1.0
-
-    for j in range(len(words) - 1):
-        left_text  = " ".join(w.word.strip() for w in words[:j + 1])
-        right_text = " ".join(w.word.strip() for w in words[j + 1:])
-        # Entrambe le parti devono avere un minimo di contenuto
-        if len(left_text) < 15 or len(right_text) < 10:
-            continue
-
-        gap = words[j + 1].start - words[j].end
-        w_text = words[j].word.strip()
-        ends_clause = any(w_text.endswith(p) for p in CLAUSE_BREAKS)
-
-        # Score: gap acustico + bonus punteggiatura + bonus bilanciamento lunghezze
-        balance = 1.0 - abs(len(left_text) - len(right_text)) / max(len(left_text) + len(right_text), 1)
-        score = gap + (0.15 if ends_clause else 0.0) + balance * 0.05
-
-        if score > best_score:
-            best_score = score
-            best_idx   = j + 1  # split DOPO words[j]
-
-    return best_idx
-
-
-def _merge_short_fragments(subtitles: List[Dict]) -> List[Dict]:
-    """Unisce i frammenti corti al sottotitolo SUCCESSIVO, solo se il risultato
-    resta entro HARD_LIMIT caratteri e MAX_SUBTITLE_DURATION secondi."""
-    if len(subtitles) < 2:
-        return subtitles
-    merged: List[Dict] = []
-    i = 0
-    while i < len(subtitles):
-        sub = subtitles[i]
-        if (len(sub["text"]) < MERGE_MIN_CHARS
-                and i + 1 < len(subtitles)
-                and (subtitles[i + 1]["start"] - sub["end"]) < 0.5):
-            nxt = subtitles[i + 1]
-            text = sub["text"] + " " + nxt["text"]
-            if len(text) <= HARD_LIMIT and (nxt["end"] - sub["start"]) <= MAX_SUBTITLE_DURATION:
-                merged.append({"start": sub["start"], "end": nxt["end"], "text": text})
-                i += 2
-                continue
-        merged.append(sub)
-        i += 1
-    return merged
-
-
-def segment_words_semantic(all_words: List, seg_boundaries: Set[int]) -> List[Dict]:
-    """Segmentazione semantica globale su stream di parole.
-
-    Priorità di split forward (per ogni parola appena accumulata):
-      P1  boundary di segmento Whisper (VAD hard break)
-      P2  gap acustico >= GAP_FORCE (silenzio reale)
-      P3  punteggiatura forte (.!?…) — SEMPRE, senza condizione sul gap
-      P4  punteggiatura debole (,;:–—) + gap >= GAP_CLAUSE + blocco >= 20 char
-      P5  blocco >= SOFT_LIMIT + gap >= GAP_SOFT (split opportunistico)
-      P6  blocco >= HARD_LIMIT → best-gap-split retroattivo sul blocco accumulato
-    Una parola sintetica (segmento senza parole affidabili) forma sempre un
-    blocco a sé: split prima e dopo di essa.
-    """
-    if not all_words:
-        return []
-
-    subtitles: List[Dict] = []
-    current: List        = []
-
-    def _flush_words(words: List):
-        if not words:
-            return
-        text = _postprocess_typography(" ".join(w.word.strip() for w in words))
-        if text:
-            subtitles.append({
-                "start": words[0].start,
-                "end":   words[-1].end,
-                "text":  text,
-            })
-
-    n = len(all_words)
-    for i, word in enumerate(all_words):
-        synthetic = _is_synthetic(word)
-        if synthetic and current:
-            # Split PRIMA della parola sintetica
-            _flush_words(current)
-            current = []
-
-        current.append(word)
-        is_last = (i == n - 1)
-
-        if is_last:
-            break
-
-        if synthetic:
-            # Split DOPO la parola sintetica
-            _flush_words(current)
-            current = []
-            continue
-
-        word_text   = word.word.strip()
-        next_word   = all_words[i + 1]
-        gap         = next_word.start - word.end
-        block_len   = len(" ".join(w.word.strip() for w in current))
-        ends_sent   = any(word_text.endswith(p) for p in SENTENCE_ENDINGS)
-        ends_clause = any(word_text.endswith(p) for p in CLAUSE_BREAKS)
-        is_boundary = (i + 1) in seg_boundaries
-
-        should_split = False
-
-        # P1 — boundary Whisper: split solo se c'è già contenuto significativo
-        # (evita di spezzare frasi lunghe in mini-blocchi per ogni segmento Whisper)
-        if is_boundary and (block_len >= MERGE_MIN_CHARS or ends_sent or gap >= GAP_CLAUSE):
-            should_split = True
-
-        # P2 — silenzio acustico reale
-        elif gap >= GAP_FORCE:
-            should_split = True
-
-        # P3 — punteggiatura forte: split SEMPRE
-        elif ends_sent:
-            # Se il blocco è già lungo, prima di splittare qui cerca se c'è
-            # un punto migliore interno (best-gap retroattivo)
-            if block_len > SOFT_LIMIT and len(current) > 2:
-                split_at = _find_best_split(current)
-                if 0 < split_at < len(current):
-                    _flush_words(current[:split_at])
-                    current = current[split_at:]
-                    # il residuo (con la parola col punto) viene flushato sotto
-            should_split = True
-
-        # P4 — punteggiatura debole con pausa
-        elif ends_clause and gap >= GAP_CLAUSE and block_len >= 20:
-            should_split = True
-
-        # P5 — soft limit raggiunto: aspetta il primo gap disponibile
-        elif block_len >= SOFT_LIMIT and gap >= GAP_SOFT:
-            should_split = True
-
-        # P6 — hard limit: best-gap-split retroattivo, poi flush
-        elif block_len >= HARD_LIMIT:
-            split_at = _find_best_split(current)
-            if 0 < split_at < len(current):
-                _flush_words(current[:split_at])
-                current = current[split_at:]
+    kwargs = dict(decode_kwargs)
+    kwargs.pop("vad_parameters", None)
+    kwargs.update(vad_filter=False, word_timestamps=True)
+    segments_iter, _info = model.transcribe(chunk, **kwargs)
+    out: List[Dict] = []
+    try:
+        for seg in segments_iter:
+            _check_cancel(cancel_event)
+            words = []
+            for w in _field(seg, "words", None) or []:
+                start = float(_field(w, "start", 0.0)) + offset
+                end = float(_field(w, "end", 0.0)) + offset
+                text = str(_field(w, "word", "") or "")
+                if not ((start + end) / 2 >= hole_start and start < hole_end) or not text.strip():
+                    continue
+                if any(_norm_word(text) == _norm_word(x.text) and start < x.end and x.start < end
+                       for x in existing):
+                    continue
+                words.append({"word": text, "start": start, "end": end,
+                              "probability": _field(w, "probability", 1.0)})
+            text = "".join(w["word"] for w in words)
+            seg_start = float(_field(seg, "start", 0.0)) + offset
+            seg_end = float(_field(seg, "end", 0.0)) + offset
+            if not words:
+                # segmento senza parole con tempi: si tiene solo se è dentro il tratto
+                text = str(_field(seg, "text", "") or "")
+                if not text.strip() or not hole_start <= (seg_start + seg_end) / 2 <= hole_end:
+                    continue
             else:
-                # Nessun punto decente trovato: flush tutto e ricomincia
-                _flush_words(current)
-                current = []
-            continue  # non fare should_split, current è già aggiornato
-
-        if should_split:
-            _flush_words(current)
-            current = []
-
-    _flush_words(current)
-
-    return _merge_short_fragments(subtitles)
+                seg_start, seg_end = words[0]["start"], words[-1]["end"]
+            out.append({
+                "start": seg_start, "end": seg_end, "text": text, "words": words,
+                "no_speech_prob": _field(seg, "no_speech_prob", 0.0),
+                "avg_logprob": _field(seg, "avg_logprob", 0.0),
+            })
+    finally:
+        _close_iter(segments_iter)
+    return out
 
 
-# ============================================================
-# Post-processing timing
-# ============================================================
-def post_process_timing(segments: List[Dict]) -> List[Dict]:
-    """Aggiusta i tempi rispettando le pause reali del parlato.
+def _recover_skipped_speech(
+    model,
+    audio_pcm,
+    raw_segments: Sequence[Any],
+    vad_options: Dict,
+    decode_kwargs: Dict,
+    cancel_event: Optional[threading.Event] = None,
+    on_status: Optional[Callable] = None,
+) -> List[Any]:
+    """Ritrascrive i tratti di parlato (VAD) rimasti senza parole e li unisce ai segmenti.
 
-    Filosofia speech-synchronized:
-    - Pausa reale (gap > 0.3s): subtitle finisce entro 200ms dall'ultima parola.
-      Lo schermo resta NERO durante la pausa — non si estende il subtitle.
-    - Parlato continuo (gap <= 0.3s): piccolo pad di 150ms per confort visivo.
-    - Mai estendere nella pausa per ragioni di "tempo di lettura".
-    Garanzie finali: ``end <= next.start - MIN_GAP_BETWEEN_SUBS`` quando possibile
-    ed ``end > start`` sempre.
+    I tratti sono quelli di ``find_uncovered_speech`` (≥ 1,5 s di parlato senza parole);
+    ognuno è ritrascritto da solo (margine di 0,3 s, ``vad_filter=False``, stessi
+    ``decode_kwargs`` di decodifica; parole tenute: vedi ``_transcribe_hole``). Restituisce i segmenti originali più quelli
+    recuperati, in ordine di tempo. Un errore qui non interrompe mai la trascrizione
+    (si registra e si prosegue); l'annullamento sì.
     """
-    if not segments:
+    segments = list(raw_segments)
+    try:
+        spans = _vad_speech_spans(audio_pcm, vad_options)
+        words, _bounds = words_from_segments(segments, LayoutRules())
+        holes = find_uncovered_speech(spans, words, min_len_s=_RECOVERY_MIN_HOLE_S)
+    except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
+        logger.warning("Ricerca del parlato saltato non riuscita: %s", e)
+        return segments
+    if not holes:
         return segments
 
-    HOLD_AFTER_SPEECH = 0.20   # max estensione dopo ultima parola in caso di pausa reale
-    PAD_CONTINUOUS    = 0.15   # estensione in parlato continuo
-    PAUSE_THRESHOLD   = 0.30   # gap > questo = silenzio reale
+    n = len(holes)
+    msg = (f"Recupero di {n} tratti di parlato saltati…" if n > 1
+           else "Recupero di 1 tratto di parlato saltato…")
+    logger.info("%s %s", msg, ", ".join(f"{s:.2f}–{e:.2f} s" for s, e in holes))
+    if on_status:
+        on_status(msg)
 
-    processed = []
-    n = len(segments)
-
-    for i, seg in enumerate(segments):
-        start = seg["start"]
-        end   = seg["end"]
-        text  = seg["text"].strip()
-        if not text:
+    recovered: List[Dict] = []
+    for hole in holes:
+        _check_cancel(cancel_event)
+        try:
+            near = [w for w in words if w.end >= hole[0] - 1.0 and w.start <= hole[1] + 1.0]
+            found = _transcribe_hole(model, audio_pcm, hole, decode_kwargs, cancel_event, near)
+        except TranscriptionCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 — si passa al tratto successivo
+            logger.warning("Ritrascrizione del tratto %.2f–%.2f s non riuscita: %s",
+                           hole[0], hole[1], e)
             continue
-
-        next_start = segments[i + 1]["start"] if i < n - 1 else None
-        gap_to_next = (next_start - end) if next_start is not None else float("inf")
-        followed_by_silence = gap_to_next > PAUSE_THRESHOLD
-
-        if followed_by_silence:
-            new_end = end + HOLD_AFTER_SPEECH
+        text = " ".join(" ".join(str(seg["text"]).split()) for seg in found)
+        if text:
+            logger.info("Recuperato %.2f–%.2f s: %s", hole[0], hole[1], text)
         else:
-            new_end = end + PAD_CONTINUOUS
+            logger.info("Nessuna parola recuperata in %.2f–%.2f s", hole[0], hole[1])
+        recovered.extend(found)
 
-        # Mai superare MAX_SUBTITLE_DURATION
-        if (new_end - start) > MAX_SUBTITLE_DURATION:
-            new_end = start + MAX_SUBTITLE_DURATION
-
-        # Mai sconfinare nel subtitle successivo
-        if next_start is not None:
-            max_allowed = next_start - MIN_GAP_BETWEEN_SUBS
-            if new_end > max_allowed:
-                new_end = max_allowed
-
-        # Floor: almeno MIN_SUBTITLE_DURATION visibile
-        if (new_end - start) < MIN_SUBTITLE_DURATION:
-            candidate = start + MIN_SUBTITLE_DURATION
-            if next_start is not None:
-                candidate = min(candidate, next_start - MIN_GAP_BETWEEN_SUBS)
-            new_end = max(new_end, candidate)
-
-        if new_end <= start:
-            new_end = start + 0.1
-
-        processed.append({"start": round(start, 3), "end": round(new_end, 3), "text": text})
-
-    # Pass finale sui valori arrotondati: niente sovrapposizioni quando possibile,
-    # mai durata nulla o negativa.
-    for i, cur in enumerate(processed):
-        nxt = processed[i + 1] if i + 1 < len(processed) else None
-        if nxt is not None:
-            limit = round(nxt["start"] - MIN_GAP_BETWEEN_SUBS, 3)
-            if cur["end"] > limit > cur["start"]:
-                cur["end"] = limit
-        if cur["end"] <= cur["start"]:
-            fallback = cur["start"] + 0.1
-            if nxt is not None and nxt["start"] > cur["start"]:
-                fallback = min(fallback, nxt["start"])
-            cur["end"] = round(fallback, 3)
-            if cur["end"] <= cur["start"]:
-                cur["end"] = cur["start"] + 0.001
-    return processed
+    if not recovered:
+        return segments
+    # ordinamento stabile: a parità di inizio restano prima i segmenti originali
+    return sorted(segments + recovered, key=lambda seg: float(_field(seg, "start", 0.0)))
 
 
 # ============================================================
 # Trascrizione WhisperX
 # ============================================================
-class _WhisperXWordAdapter:
-    __slots__ = ("word", "start", "end", "probability")
-
-    def __init__(self, d: Dict):
-        self.word = d.get("word", "")
-        self.start = d.get("start", 0.0)
-        self.end = d.get("end", 0.0)
-        self.probability = d.get("score", 1.0)
-
-
-class _WhisperXSegmentAdapter:
-    __slots__ = ("start", "end", "text", "words", "no_speech_prob", "avg_logprob")
-
-    def __init__(self, d: Dict):
-        self.start = d.get("start", 0.0)
-        self.end = d.get("end", 0.0)
-        self.text = d.get("text", "")
-        self.no_speech_prob = 0.0
-        self.avg_logprob = 0.0
-        raw_words = d.get("words") or []
-        self.words = [
-            _WhisperXWordAdapter(w) for w in raw_words
-            if w.get("start") is not None and w.get("end") is not None
-        ]
+def _wav_duration(path: str) -> Optional[float]:
+    """Durata di un file WAV (l'audio pre-elaborato) in secondi; None se non è un WAV."""
+    import wave
+    try:
+        with wave.open(path, "rb") as f:
+            rate = f.getframerate()
+            return f.getnframes() / float(rate) if rate else None
+    except (OSError, EOFError, wave.Error):
+        return None
 
 
 def _transcribe_whisperx(
@@ -940,16 +756,11 @@ def _transcribe_whisperx(
     progress(0.75)
     _check_cancel(cancel_event)
 
-    # Stessa pipeline globale di faster-whisper
+    # Stessa composizione di faster-whisper (le parole di WhisperX sono dict con "score")
     status("WhisperX · Segmentazione sottotitoli...")
-    adapted = [_WhisperXSegmentAdapter(seg) for seg in segments
-               if (seg.get("text") or "").strip()]
-    all_words, seg_boundaries = collect_all_words(adapted)
-    collected = segment_words_semantic(all_words, seg_boundaries)
-
-    if language == "it" or (language is None and detected_lang == "it"):
-        for seg in collected:
-            seg["text"] = _postprocess_codeswitching(seg["text"])
+    italian = language == "it" or (language is None and detected_lang == "it")
+    collected = _build_subtitles(segments, config.readability.layout_rules(),
+                                 _wav_duration(audio_path), italian)
 
     status(f"Trascrizione completata: {len(collected)} sottotitoli (WhisperX)")
     progress(1.0)
@@ -1130,7 +941,7 @@ def transcribe(
         vad_label = " · VAD attivo" if vad_active else (" · VAD off" if vad_filter else "")
         status(f"Lingua: {info.language} ({info.language_probability:.0%}){vad_label}")
 
-        # Raccoglie tutti i segmenti grezzi per la pipeline globale
+        # Raccoglie tutti i segmenti grezzi
         raw_segments = []
 
         def collect_segment(seg):
@@ -1145,15 +956,32 @@ def transcribe(
         for seg in segments_iter:
             collect_segment(seg)
 
-        # Pipeline globale: raccoglie tutte le parole e segmenta semanticamente
-        status("Segmentazione sottotitoli...")
-        all_words, seg_boundaries = collect_all_words(raw_segments)
-        collected = segment_words_semantic(all_words, seg_boundaries)
+        _close_iter(segments_iter)
+        segments_iter = None
 
-        # Post-processing code-switching: corregge italianizzazioni Whisper
-        if language == "it" or (language is None and info.language == "it"):
-            for seg in collected:
-                seg["text"] = _postprocess_codeswitching(seg["text"])
+        # Tratti di parlato che il filtro VAD ha fatto saltare a Whisper: ritrascritti
+        if vad_active:
+            _check_cancel(cancel_event)
+            try:
+                audio_pcm = _decode_pcm(audio_path)
+            except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
+                logger.warning("Audio per il recupero del parlato saltato non disponibile: %s",
+                               e)
+                audio_pcm = None
+            if audio_pcm is not None:
+                decode_kwargs = dict(transcribe_params, language=language or info.language)
+                raw_segments = _recover_skipped_speech(
+                    model, audio_pcm, raw_segments, config.vad.as_dict(), decode_kwargs,
+                    cancel_event=cancel_event, on_status=on_status,
+                )
+                del audio_pcm
+
+        # Composizione dei sottotitoli: divisione, testo e tempi definitivi
+        _check_cancel(cancel_event)
+        status("Segmentazione sottotitoli...")
+        italian = language == "it" or (language is None and info.language == "it")
+        collected = _build_subtitles(raw_segments, config.readability.layout_rules(),
+                                     info.duration or None, italian)
 
         status(f"Trascrizione completata: {len(collected)} sottotitoli")
         progress(1.0)
@@ -1188,7 +1016,8 @@ def run_pipeline(
 ) -> str:
     """Trascrive e scrive direttamente un file SRT. Ritorna il percorso scritto.
 
-    ``config``: parametri avanzati e caratteri per riga dell'SRT (None = predefiniti).
+    ``config``: parametri avanzati e limiti di leggibilità, anche per l'a capo dell'SRT
+    (None = predefiniti).
     """
     from core.srt_io import unique_output_path, write_srt
     from core.subtitle_model import Subtitle
@@ -1212,12 +1041,11 @@ def run_pipeline(
     if not segments:
         raise RuntimeError("Nessun segmento trovato nella trascrizione.")
 
-    status("Ottimizzazione timing sottotitoli...")
-    segments = post_process_timing(segments)
-
+    # I tempi sono già definitivi (core.subtitle_layout): si scrive e basta
     status("Generazione file SRT...")
-    subtitles = [Subtitle(start=s["start"], end=s["end"], text=s["text"]) for s in segments]
-    max_chars = config.readability.max_chars_per_line if config is not None else None
-    write_srt(subtitles, output_path, max_chars=max_chars)
+    subtitles = [Subtitle.from_dict(s) for s in segments]
+    r = config.readability if config is not None else None
+    write_srt(subtitles, output_path, max_chars=r.max_chars_per_line if r else None,
+              max_lines=r.max_lines if r else None)
     status(f"Salvato: {Path(output_path).name} ({len(subtitles)} sottotitoli)")
     return output_path

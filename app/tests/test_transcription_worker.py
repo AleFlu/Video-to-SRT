@@ -55,7 +55,6 @@ def test_worker_run_passes_params(monkeypatch):
 
     fake = types.SimpleNamespace(
         transcribe=fake_transcribe,
-        post_process_timing=lambda segs: segs,
         TranscriptionCancelled=Cancelled,
     )
     monkeypatch.setitem(sys.modules, "engine", fake)
@@ -75,8 +74,7 @@ def test_worker_failure_emits_failed(monkeypatch):
     def boom(**kw):
         raise RuntimeError("rotto")
 
-    fake = types.SimpleNamespace(transcribe=boom, post_process_timing=lambda s: s,
-                                 TranscriptionCancelled=Cancelled)
+    fake = types.SimpleNamespace(transcribe=boom, TranscriptionCancelled=Cancelled)
     monkeypatch.setitem(sys.modules, "engine", fake)
     w = TranscriptionWorker({"input_path": "a.mp4"})
     errs = []
@@ -108,10 +106,37 @@ def test_worker_auto_language_passes_none_to_engine(monkeypatch):
 
     fake = types.SimpleNamespace(
         transcribe=fake_transcribe,
-        post_process_timing=lambda segs: segs,
         TranscriptionCancelled=Cancelled,
     )
     monkeypatch.setitem(sys.modules, "engine", fake)
     w = TranscriptionWorker({"input_path": "a.mp4", "language": "auto"})
     w.run()
     assert "language" in seen and seen["language"] is None
+
+
+def test_worker_emits_engine_segments_without_retiming(monkeypatch):
+    """I tempi del motore sono definitivi: il worker non chiama più post_process_timing
+    (che allungava/spostava i sottotitoli già impaginati) e non perde ``confidence``."""
+    class Cancelled(Exception):
+        pass
+
+    segs = [{"start": 0.0, "end": 0.9, "text": "Uno.", "confidence": 0.3},
+            {"start": 0.983, "end": 2.0, "text": "Due.", "confidence": 1.0}]
+    fake = types.SimpleNamespace(transcribe=lambda **kw: [dict(s) for s in segs],
+                                 TranscriptionCancelled=Cancelled)
+    monkeypatch.setitem(sys.modules, "engine", fake)
+    w = TranscriptionWorker({"input_path": "a.mp4"})
+    done, failed = [], []
+    w.finished.connect(done.append)
+    w.failed.connect(failed.append)
+    w.run()
+    assert not failed
+    assert done == [segs]
+
+
+def test_engine_confidence_reaches_subtitle_model():
+    from core.subtitle_model import SubtitleProject
+    project = SubtitleProject()
+    project.load_from_segments([{"start": 0.0, "end": 1.0, "text": "x", "confidence": 0.25},
+                                {"start": 1.1, "end": 2.0, "text": "y"}], "a.mp4")
+    assert [s.confidence for s in project.subtitles] == [0.25, 1.0]

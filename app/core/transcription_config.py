@@ -9,9 +9,10 @@ trascrizione:
   - i parametri del VAD Silero;
   - i limiti di leggibilità dei sottotitoli (caratteri per riga, CPS, durate).
 
-I valori predefiniti sono quelli storici dell'app: una configurazione predefinita produce
-esattamente gli stessi parametri di prima. ``engine`` riprende da qui ``ITALIAN_PROMPT`` e
-``VAD_PARAMS``; i limiti di leggibilità predefiniti restano in ``core.constants``.
+I valori predefiniti di decodifica e VAD sono quelli storici dell'app: una configurazione
+predefinita produce esattamente gli stessi parametri di prima. ``engine`` riprende da qui
+``ITALIAN_PROMPT`` e ``VAD_PARAMS``; i limiti di leggibilità predefiniti (guida Netflix
+italiana) restano in ``core.constants``.
 
 Formato del file (JSON UTF-8):
 
@@ -26,8 +27,8 @@ Formato del file (JSON UTF-8):
                    "compression_ratio_threshold": 2.4, "condition_on_previous_text": false},
       "vad": {"threshold": 0.5, "min_silence_duration_ms": 150, "speech_pad_ms": 100},
       "readability": {"max_chars_per_line": 42, "max_lines": 2, "max_cps": 20.0,
-                      "warn_cps": 17.0, "min_duration_s": 0.5, "max_duration_s": 7.0,
-                      "min_gap_s": 0.08, "keep_low_confidence_words": true}
+                      "warn_cps": 17.0, "min_duration_s": 0.833, "max_duration_s": 7.0,
+                      "min_gap_s": 0.083, "keep_low_confidence_words": true}
     }
 
 Lettura tollerante: campi sconosciuti ignorati, campi mancanti = valori predefiniti.
@@ -47,9 +48,10 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from core.constants import (
-    MAX_CHARS_PER_LINE, MAX_CPS, MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, WARN_CPS,
-    normalize_language,
+    MAX_CHARS_PER_LINE, MAX_CPS, MAX_SUBTITLE_DURATION, MIN_GAP_BETWEEN_SUBS,
+    MIN_SUBTITLE_DURATION, WARN_CPS, normalize_language,
 )
+from core.subtitle_layout import LayoutRules
 
 log = logging.getLogger(__name__)
 
@@ -86,8 +88,8 @@ DEFAULT_GLOSSARY = (
     "social media", "iPhone", "Google", "npm", "git",
 )
 
-# Distanza minima tra due sottotitoli (secondi): stesso valore di engine.MIN_GAP_BETWEEN_SUBS
-DEFAULT_MIN_GAP_S = 0.08
+# Distanza minima tra due sottotitoli (secondi)
+DEFAULT_MIN_GAP_S = MIN_GAP_BETWEEN_SUBS
 
 _LANGUAGE_RE = re.compile(r"^[a-z]{2,3}$")
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -166,6 +168,15 @@ def _check_prompts(path: str, value: Any) -> Tuple[Tuple[str, str], ...]:
                            text)
         prompts[code] = text
     return tuple(sorted(prompts.items()))
+
+
+def glossary_sentence(terms) -> Optional[str]:
+    """Frase con punteggiatura che contiene i termini del glossario (None se vuoto)."""
+    terms = [t for t in terms if t]
+    if not terms:
+        return None
+    body = terms[0] if len(terms) == 1 else ", ".join(terms[:-1]) + " e " + terms[-1]
+    return f"Parliamo di {body}. Sì, è così."
 
 
 def parse_glossary(text: str) -> Tuple[str, ...]:
@@ -254,8 +265,14 @@ class DecodingOptions:
         return dict(self.initial_prompts).get(language) or None
 
     def hotwords(self) -> Optional[str]:
-        """Glossario nel formato di ``hotwords`` di faster-whisper (None se vuoto)."""
-        return ", ".join(self.glossary) or None
+        """Glossario nel formato di ``hotwords`` di faster-whisper (None se vuoto).
+
+        Gli hotwords vengono ripassati al modello a ogni finestra di 30 s e Whisper ne
+        imita lo stile: un semplice elenco separato da virgole gli fa perdere la
+        punteggiatura nelle finestre successive alla prima (verificato su audio reale).
+        Per questo il glossario diventa una frase italiana con punteggiatura.
+        """
+        return glossary_sentence(self.glossary)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -302,10 +319,10 @@ class VadOptions:
 class ReadabilityLimits:
     """Limiti di leggibilità e opzioni di segmentazione dei sottotitoli.
 
-    Oggi li usano i controlli dell'editor (``max_cps``, ``warn_cps``, ``min_duration_s``)
-    e l'a capo in esportazione (``max_chars_per_line``). ``max_lines``,
-    ``max_duration_s``, ``min_gap_s`` e ``keep_low_confidence_words`` fanno già parte
-    del formato ma la segmentazione del motore non li legge ancora.
+    Li usano la composizione dei sottotitoli nel motore (``layout_rules``), i controlli
+    dell'editor (``max_cps``, ``warn_cps``, ``min_duration_s``) e l'a capo in
+    esportazione (``max_chars_per_line``, ``max_lines``). ``max_cps`` è la soglia di errore
+    dell'editor; ``warn_cps`` è l'obiettivo di lettura che il motore cerca di rispettare.
     """
 
     max_chars_per_line: int = MAX_CHARS_PER_LINE
@@ -342,6 +359,16 @@ class ReadabilityLimits:
 
     def to_dict(self) -> Dict[str, Any]:
         return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    def layout_rules(self) -> LayoutRules:
+        """Regole per ``core.subtitle_layout``: i tempi puntano a ``warn_cps`` (obiettivo
+        di lettura), non a ``max_cps`` (soglia d'errore dell'editor)."""
+        return LayoutRules(
+            max_chars_per_line=self.max_chars_per_line, max_lines=self.max_lines,
+            max_cps=self.warn_cps, min_duration_s=self.min_duration_s,
+            max_duration_s=self.max_duration_s, min_gap_s=self.min_gap_s,
+            keep_low_confidence_words=self.keep_low_confidence_words,
+        )
 
 
 _SECTIONS = {

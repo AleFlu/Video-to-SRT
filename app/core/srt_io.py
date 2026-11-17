@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from core.subtitle_layout import LayoutRules, wrap_lines
 from core.subtitle_model import Subtitle
 from core.transcription_config import active_readability
 
@@ -80,32 +81,29 @@ def format_timestamp_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def wrap_subtitle_text(text: str, max_chars: Optional[int] = None) -> str:
+def wrap_subtitle_text(text: str, max_chars: Optional[int] = None,
+                       max_lines: Optional[int] = None) -> str:
     """
-    Spezza il testo su massimo 2 righe.
+    Va a capo con le stesse regole del motore (``core.subtitle_layout.wrap_lines``).
 
-    Il testo già su più righe viene rispettato. Altrimenti, se supera `max_chars`
-    (None = caratteri per riga della configurazione corrente, predefinito
-    MAX_CHARS_PER_LINE), si spezza allo spazio che rende le due righe più bilanciate.
+    Il testo che contiene già degli a capo (scelti dall'utente) viene rispettato.
+    Altrimenti, se supera `max_chars`, va a capo nel punto linguisticamente migliore
+    (mai dopo articoli/preposizioni, righe bilanciate, quella in basso più lunga) su al
+    massimo `max_lines` righe. None = valori della configurazione corrente (predefiniti
+    MAX_CHARS_PER_LINE e 2 righe).
     """
+    limits = active_readability()
     if max_chars is None:
-        max_chars = active_readability().max_chars_per_line
+        max_chars = limits.max_chars_per_line
+    if max_lines is None:
+        max_lines = limits.max_lines
     if "\n" in text or len(text) <= max_chars:
         return text
-    best = -1
-    best_diff = len(text)
-    for pos, ch in enumerate(text):
-        if ch != " " or pos == 0 or pos == len(text) - 1:
-            continue
-        diff = abs(pos - (len(text) - pos - 1))
-        if diff < best_diff:
-            best, best_diff = pos, diff
-    if best < 0:
-        return text
-    return text[:best] + "\n" + text[best + 1:]
+    return wrap_lines(text, LayoutRules(max_chars_per_line=max_chars, max_lines=max_lines))
 
 
-def subtitles_to_srt(subtitles: List[Subtitle], max_chars: Optional[int] = None) -> str:
+def subtitles_to_srt(subtitles: List[Subtitle], max_chars: Optional[int] = None,
+                     max_lines: Optional[int] = None) -> str:
     lines = []
     idx = 1
     for sub in subtitles:
@@ -114,13 +112,15 @@ def subtitles_to_srt(subtitles: List[Subtitle], max_chars: Optional[int] = None)
             continue
         start = format_timestamp_srt(sub.start)
         end = format_timestamp_srt(sub.end)
-        lines.append(f"{idx}\n{start} --> {end}\n{wrap_subtitle_text(text, max_chars)}\n")
+        wrapped = wrap_subtitle_text(text, max_chars, max_lines)
+        lines.append(f"{idx}\n{start} --> {end}\n{wrapped}\n")
         idx += 1
     return "\n".join(lines)
 
 
-def write_srt(subtitles: List[Subtitle], output_path: str, max_chars: Optional[int] = None):
-    _write_text(output_path, subtitles_to_srt(subtitles, max_chars))
+def write_srt(subtitles: List[Subtitle], output_path: str, max_chars: Optional[int] = None,
+              max_lines: Optional[int] = None):
+    _write_text(output_path, subtitles_to_srt(subtitles, max_chars, max_lines))
 
 
 # ── Formati aggiuntivi (C3) ──────────────────────────────────────────────────

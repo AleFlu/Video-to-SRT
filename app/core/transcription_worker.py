@@ -2,9 +2,9 @@
 transcription_worker.py — Worker QThread per eseguire la trascrizione
 senza bloccare la UI.
 
-Usa il motore esistente (engine.transcribe + post_process_timing),
-ma restituisce i segmenti alla UI invece di scrivere direttamente il SRT:
-l'utente li modifica nell'editor e poi esporta.
+Usa engine.transcribe, che restituisce sottotitoli con tempi già definitivi
+(core.subtitle_layout): il worker non li ritocca. I segmenti tornano alla UI invece
+di essere scritti in un SRT: l'utente li modifica nell'editor e poi esporta.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ class TranscriptionWorker(QObject):
     Segnali:
       - status(str)      : messaggio da mostrare in UI
       - progress(float)  : 0.0 .. 1.0
-      - finished(list)   : lista di dict {start,end,text}
+      - finished(list)   : lista di dict {start,end,text,confidence}
       - failed(str)      : errore
       - cancelled()      : annullato dall'utente
     """
@@ -96,7 +96,7 @@ class TranscriptionWorker(QObject):
     def run(self):
         try:
             # Import lazy (così QThread può partire subito)
-            from engine import transcribe, post_process_timing, TranscriptionCancelled
+            from engine import transcribe, TranscriptionCancelled
         except Exception as e:
             log.exception("Impossibile caricare il motore di trascrizione")
             self.failed.emit(str(e) or type(e).__name__)
@@ -122,8 +122,6 @@ class TranscriptionWorker(QObject):
                 self.cancelled.emit()
                 return
 
-            self.status.emit("Ottimizzazione timing sottotitoli...")
-            segments = post_process_timing(segments)
             self.progress.emit(1.0)
             self.status.emit(f"Completato · {len(segments)} sottotitoli")
             self.finished.emit(segments)
