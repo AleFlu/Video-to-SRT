@@ -326,12 +326,7 @@ class ProgressWidget(QWidget):
         self._stop_kbd.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         btn_lay.addWidget(self._stop_kbd)
         btn_row.addWidget(self.stop_btn)
-        self._stop_note = QLabel(
-            "Interrompendo torni alla schermata iniziale; i sottotitoli già presenti "
-            "nell'editor non vengono toccati."
-        )
-        self._stop_note.setWordWrap(True)
-        btn_row.addWidget(self._stop_note, 1)
+        btn_row.addStretch(1)
         root.addLayout(btn_row)
 
         # ── Colonna destra: Log (520 px) ──────────────────────────────────────
@@ -488,7 +483,6 @@ class ProgressWidget(QWidget):
         self._set_pct(0)
         self._reset_phases()
         self.status_lbl.setText("")
-        self._stop_note.setVisible(True)
         self._stop_kbd.setVisible(True)
         self.stop_btn.setEnabled(True)
         self.stop_btn.setText("Interrompi")
@@ -592,7 +586,6 @@ class ProgressWidget(QWidget):
         self.title_lbl.setText("Errore trascrizione")
         self.status_lbl.setText(f"Errore: {err}")
         self._append_log(f"ERRORE: {err}")
-        self._stop_note.setVisible(False)
         self._stop_kbd.setVisible(False)
         self.stop_btn.setText("Torna alla Home")
         self._stop_icon.set_icon(None)
@@ -673,9 +666,6 @@ class ProgressWidget(QWidget):
         )
         for row in self._phase_rows:
             row.apply_palette()
-        self._stop_note.setStyleSheet(
-            f"font-size: 12px; color: {c('dim')}; background: transparent;"
-        )
         self._stop_kbd.setStyleSheet(
             f"font-size: 11px; color: {c('err')}; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
