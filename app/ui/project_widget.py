@@ -42,7 +42,7 @@ from ui.tab_bar import TabBar
 from ui.editor_tab import EditorTab
 from ui.export_panel import ExportPanel
 from ui.export_tab import ExportTab
-from ui.prefs import add_recent
+from ui.prefs import add_recent, write_config
 
 logger = logging.getLogger(__name__)
 
@@ -286,10 +286,13 @@ class ProjectWidget(QWidget):
     # ── Flusso trascrizione ────────────────────────────────────────────────────
 
     def _on_start_requested(self, source_path: str, settings: dict):
+        # Configurazione completa (parametri avanzati inclusi), ricordata come ultima usata
+        config = self.home.current_config()
+        write_config(QSettings("VideoSRT", "v2"), config, self.home.config_name())
         self._go_progress()
         self._set_title(Path(source_path).stem)
         self.status_text.emit("Trascrizione in corso…")
-        self.progress.start(source_path, settings)
+        self.progress.start(source_path, settings, config=config)
 
     def _on_transcription_done(self, segments: list, source_path: str):
         self._segments_raw = segments

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -38,10 +39,14 @@ from PySide6.QtWidgets import (
 import platform_support
 
 from core.constants import SUPPORTED_ALL_EXTS, FILE_FILTER_OPEN_ANY
+from core.transcription_config import (
+    EXTENSION as CONFIG_EXT, FILE_FILTER as CONFIG_FILE_FILTER, TranscriptionConfig,
+    load_config, save_config, set_active_readability,
+)
 from ui.project_widget import ProjectWidget, autosave_in_use
 from ui.project_tab_bar import ProjectTabBar
 from ui import icons, theme
-from ui.prefs import read_list, RECENT_KEY
+from ui.prefs import CONFIG_DIR_KEY, read_config, read_list, write_config, RECENT_KEY
 from ui.widgets import protect_extension_buttons
 
 _SETTINGS_RECENT = RECENT_KEY
@@ -136,7 +141,10 @@ class MainWindow(QMainWindow):
         self.proj_tab_bar.new_tab_requested.connect(self._new_project)
 
         # ── Primo progetto ────────────────────────────────────────────────────
-        self._new_project()   # crea Progetto 1
+        self._new_project()   # crea Progetto 1 (con l'ultima configurazione usata)
+        # Limiti di leggibilità dell'editor: quelli della configurazione appena applicata
+        if self._projects:
+            set_active_readability(self._projects[0].home.current_config().readability)
 
         # ── Geometria ─────────────────────────────────────────────────────────
         self._restore_geometry()
@@ -249,6 +257,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(pw)
         self._attach_project_nav(pw)
         self._undo_group.addStack(pw.timeline.undo_stack)
+        self._apply_saved_config(pw)
 
         pw.title_changed.connect(self._on_project_title_changed)
         pw.modified_changed.connect(self._on_project_modified_changed)
@@ -442,6 +451,19 @@ class MainWindow(QMainWindow):
 
         m_file.addSeparator()
 
+        # Configurazione dei parametri di trascrizione (file .vsrtconfig)
+        self.act_import_config = self._add_action(
+            m_file, "Importa configurazione…", self._import_config)
+        self.act_export_config = self._add_action(
+            m_file, "Esporta configurazione…", self._export_config)
+        self.act_reset_config = self._add_action(
+            m_file, "Ripristina predefiniti", self._reset_config)
+        for act in (self.act_import_config, self.act_export_config, self.act_reset_config):
+            # macOS non deve spostarle nel menu dell'app (euristica sul testo)
+            act.setMenuRole(QAction.NoRole)
+
+        m_file.addSeparator()
+
         self._add_action(m_file, "Esci", self.close, QKeySequence.Quit)
 
         # ── Modifica (inoltra al progetto attivo) ─────────────────────────────
@@ -577,6 +599,121 @@ class MainWindow(QMainWindow):
         )
         if path:
             self._open_path(path)
+
+    # ── Configurazione dei parametri di trascrizione ───────────────────────────
+
+    def _apply_saved_config(self, pw: ProjectWidget):
+        """Mostra nella Home di ``pw`` l'ultima configurazione usata."""
+        config, name = read_config(QSettings("VideoSRT", "v2"))
+        try:
+            pw.home.apply_config(config, name)
+        except ValueError as e:
+            logger.warning("Configurazione salvata non applicabile, uso i predefiniti: %s", e)
+
+    def _apply_config_everywhere(self, config: TranscriptionConfig, name: str) -> None:
+        """Applica la configurazione a tutte le Home, la ricorda e aggiorna i controlli
+        dell'editor. ValueError (nessuna modifica) se un progetto non può usarla."""
+        for pw in self._projects:
+            pw.home.check_config(config)
+        for pw in self._projects:
+            pw.home.apply_config(config, name)
+        write_config(QSettings("VideoSRT", "v2"), config, name)
+        set_active_readability(config.readability)
+        for pw in self._projects:
+            pw.timeline.model.refresh_checks()
+
+    def _config_dir(self) -> str:
+        d = QSettings("VideoSRT", "v2").value(CONFIG_DIR_KEY, "")
+        return d if isinstance(d, str) and os.path.isdir(d) else ""
+
+    def _remember_config_dir(self, path: str) -> None:
+        QSettings("VideoSRT", "v2").setValue(CONFIG_DIR_KEY, str(Path(path).parent))
+
+    def _import_config(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Importa configurazione", self._config_dir(), CONFIG_FILE_FILTER
+        )
+        if path:
+            self.import_config_file(path)
+
+    def import_config_file(self, path: str) -> bool:
+        """Carica una configurazione da file e la mostra nella schermata iniziale."""
+        name = Path(path).stem
+        try:
+            self._apply_config_everywhere(load_config(path), name)
+        except ValueError as e:
+            QMessageBox.warning(
+                self, "Configurazione non importata",
+                f"Impossibile importare \"{Path(path).name}\".\n\n{e}",
+            )
+            return False
+        self._remember_config_dir(path)
+        self.status_main.setText(f"Configurazione importata: {name}")
+        return True
+
+    def _export_config(self):
+        from PySide6.QtWidgets import QFileDialog
+        pw = self._active()
+        name = (pw.home.config_name() if pw else "") or "configurazione"
+        start = os.path.join(self._config_dir(), name + CONFIG_EXT)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Esporta configurazione", start, CONFIG_FILE_FILTER
+        )
+        if path:
+            self.export_config_file(path)
+
+    def export_config_file(self, path: str) -> Optional[str]:
+        """Salva la configurazione del progetto attivo. Ritorna il percorso scritto."""
+        if not Path(path).suffix:
+            path += CONFIG_EXT
+        pw = self._active()
+        try:
+            config = (pw.home.current_config() if pw
+                      else read_config(QSettings("VideoSRT", "v2"))[0])
+        except ValueError as e:      # glossario scritto non valido
+            QMessageBox.warning(self, "Configurazione non esportata", str(e))
+            return None
+        try:
+            save_config(config, path)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "Configurazione non esportata",
+                f"Impossibile salvare \"{Path(path).name}\".\n\n{e.strerror or e}",
+            )
+            return None
+        self._remember_config_dir(path)
+        self.status_main.setText(f"Configurazione esportata: {Path(path).name}")
+        return path
+
+    def _reset_config(self):
+        pw = self._active()
+        default = TranscriptionConfig()
+        try:
+            current = pw.home.current_config() if pw is not None else default
+        except ValueError:           # glossario non valido: è comunque una modifica
+            current = None
+        changed = current != default or (pw is not None and bool(pw.home.config_name()))
+        if changed and not self._confirm_reset_config():
+            return
+        self._apply_config_everywhere(default, "")
+        self.status_main.setText("Parametri di trascrizione predefiniti ripristinati")
+
+    def _confirm_reset_config(self) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Ripristina predefiniti")
+        box.setText("Ripristinare i parametri di trascrizione predefiniti?")
+        box.setInformativeText(
+            "La configurazione attuale verrà sostituita in tutti i progetti. Per "
+            "conservarla, esportala prima con File → Esporta configurazione…."
+        )
+        reset = box.addButton("Ripristina", QMessageBox.AcceptRole)
+        cancel = box.addButton("Annulla", QMessageBox.RejectRole)
+        box.setDefaultButton(reset)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is reset
 
     # ── Nuova trascrizione nel progetto attivo ─────────────────────────────────
 

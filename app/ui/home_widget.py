@@ -10,6 +10,12 @@ Layout (mockup Home.dc.html): banco di lavoro a tutta larghezza, due colonne.
   │                                │   riepilogo · Stima · Avvia            │
   └────────────────────────────────┴────────────────────────────────────────┘
 
+Configurazione: i controlli mostrano le scelte di base di una TranscriptionConfig
+(core.transcription_config) e il glossario; gli altri parametri avanzati (decodifica,
+VAD Silero, leggibilità) non hanno controlli e vengono da File → Importa
+configurazione…. L'intestazione del pannello indica da dove vengono (predefiniti o
+nome del file importato).
+
 Tema chiaro/scuro: i colori vengono letti da theme.c() e ri-applicati su
 theme_changed via _apply_palette().
 
@@ -20,19 +26,21 @@ Segnali:
 
 from __future__ import annotations
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QComboBox, QSpinBox, QSizePolicy,
+    QPushButton, QComboBox, QLineEdit, QSpinBox, QSizePolicy,
     QFileDialog, QScrollArea, QStackedLayout,
 )
 
 from core.constants import (
     SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS,
 )
+from core.transcription_config import AUTO_LANGUAGE, TranscriptionConfig, parse_glossary
 from ui.prefs import RECENT_KEY, add_recent, read_list
 from ui.widgets import DepsBanner, ElidedLabel, SwitchPill, ToggleSwitch, fmt_size
 from ui import icons, theme
@@ -97,6 +105,17 @@ def _combo_ss() -> str:
     )
 
 
+def _line_edit_ss() -> str:
+    c = theme.c
+    return (
+        f"QLineEdit {{ background: {c('bg')}; border: 1px solid {c('line')}; border-radius: 4px;"
+        f" color: {c('text')}; padding: 0 10px; font-size: 13px; min-height: 30px;"
+        f" selection-background-color: {c('acc_fill')}; selection-color: {c('acc_ink')}; }}"
+        f"QLineEdit:hover {{ border-color: {c('line_2')}; }}"
+        f"QLineEdit:focus {{ border: 1px solid {c('focus')}; }}"
+    )
+
+
 class HomeWidget(QWidget):
     """Schermata iniziale: sorgente + recenti a sinistra, impostazioni e avvio a destra."""
 
@@ -108,6 +127,9 @@ class HomeWidget(QWidget):
         self.setObjectName("contentPanel")
         self._source_path: str | None = None
         self._hint_default = "Scegli un file per iniziare"
+        # Configurazione di partenza (parametri avanzati + valori iniziali dei controlli)
+        self._config = TranscriptionConfig()
+        self._config_name = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -173,8 +195,8 @@ class HomeWidget(QWidget):
         cols.addWidget(self._settings_card)
 
         # Ordine di tab: file → impostazioni → avvio
-        chain = [self.drop, self.model_combo, self.lang_combo, self.vad_toggle,
-                 self.accuracy_toggle, self.start_btn]
+        chain = [self.drop, self.model_combo, self.lang_combo, self.glossary_edit,
+                 self.vad_toggle, self.accuracy_toggle, self.start_btn]
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
 
@@ -206,6 +228,7 @@ class HomeWidget(QWidget):
         ss = _combo_ss()
         self.model_combo.setStyleSheet(ss)
         self.lang_combo.setStyleSheet(ss)
+        self.glossary_edit.setStyleSheet(_line_edit_ss())
         self.vad_toggle._apply_palette()
         self.accuracy_toggle._apply_palette()
         self._apply_accuracy_palette()
@@ -230,6 +253,9 @@ class HomeWidget(QWidget):
         )
         self._head_lbl.setStyleSheet(
             f"font-size: 12px; font-weight: 600; color: {c('text')}; background: transparent;"
+        )
+        self._config_lbl.setStyleSheet(
+            f"font-size: 12px; color: {c('dim')}; background: transparent;"
         )
         for lbl in self._field_labels:
             lbl.setStyleSheet(
@@ -313,8 +339,15 @@ class HomeWidget(QWidget):
         lay.setContentsMargins(28, 28, 28, 24)
         lay.setSpacing(0)
 
+        head = QHBoxLayout()
+        head.setSpacing(12)
         self._head_lbl = QLabel("Impostazioni di trascrizione")
-        lay.addWidget(self._head_lbl)
+        head.addWidget(self._head_lbl)
+        # Origine dei parametri: "Parametri predefiniti" o il nome del file importato
+        self._config_lbl = ElidedLabel("", Qt.ElideMiddle)
+        self._config_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        head.addWidget(self._config_lbl, 1)
+        lay.addLayout(head)
         lay.addSpacing(4)
 
         # Modello Whisper + RAM / qualità
@@ -351,6 +384,22 @@ class HomeWidget(QWidget):
         self.lang_combo.currentIndexChanged.connect(self._update_preset_label)
         ll.addWidget(self.lang_combo)
         lay.addWidget(row_l)
+
+        # Glossario: termini inglesi, marchi, nomi propri (hotwords di faster-whisper)
+        row_g, gl = self._set_row()
+        gl.addWidget(self._field("Glossario (termini separati da virgola)"))
+        gl.addSpacing(6)
+        self.glossary_edit = QLineEdit()
+        self.glossary_edit.setAccessibleName("Glossario")
+        self.glossary_edit.setPlaceholderText("es. machine learning, Kubernetes, Rossi")
+        self.glossary_edit.setToolTip(
+            "Termini inglesi, marchi e nomi propri da riconoscere, separati da virgola:\n"
+            "Whisper li tiene presenti per tutta la trascrizione."
+        )
+        self.glossary_edit.setStyleSheet(_line_edit_ss())
+        self.glossary_edit.setText(", ".join(self._config.decoding.glossary))
+        gl.addWidget(self.glossary_edit)
+        lay.addWidget(row_g)
 
         # Filtro VAD
         self._vad_title = QLabel("Filtro VAD")
@@ -425,6 +474,7 @@ class HomeWidget(QWidget):
 
         self._update_preset_label()
         self._update_model_hint()
+        self._update_config_label()
         return card
 
     def _field(self, text: str) -> QLabel:
@@ -542,6 +592,11 @@ class HomeWidget(QWidget):
     def _on_start(self):
         if not self._source_path:
             return
+        try:
+            self.current_config()
+        except ValueError as e:
+            self._hint_lbl.setText(f"Glossario non valido. {e}")
+            return
         self.start_requested.emit(self._source_path, self._get_settings())
 
     def _get_settings(self) -> dict:
@@ -549,10 +604,89 @@ class HomeWidget(QWidget):
             "model_size":    self.model_combo.currentData(),
             "language":      self.lang_combo.currentData(),
             "vad_filter":    self.vad_toggle.isChecked(),
-            "denoise":       True,
+            "denoise":       self._config.denoise,
             "high_accuracy": self.accuracy_toggle.isEnabled() and self.accuracy_toggle.isChecked(),
             "beam_size":     self.beam_spin.value(),
         }
+
+    # ── Configurazione ────────────────────────────────────────────────────────
+
+    def check_config(self, config: TranscriptionConfig) -> None:
+        """ValueError (in italiano) se la configurazione chiede un modello che l'app non ha."""
+        if self.model_combo.findData(config.model_size) < 0:
+            raise ValueError(
+                f"Il modello Whisper \"{config.model_size}\" non è disponibile in questa "
+                f"versione dell'app (disponibili: {', '.join(self._model_keys)})"
+            )
+
+    def apply_config(self, config: TranscriptionConfig, name: str = "") -> None:
+        """Mostra la configurazione nei controlli e la usa per le prossime trascrizioni.
+
+        ``name`` è l'origine mostrata nell'intestazione ("" = predefinita o ultima usata).
+        Solleva ValueError, senza cambiare nulla, se il modello non è disponibile.
+        """
+        self.check_config(config)
+        lang_idx = self.lang_combo.findData(config.language)
+        if lang_idx < 0:
+            # Lingua valida per Whisper ma non nell'elenco: la si aggiunge col suo codice
+            self.lang_combo.addItem(f"Lingua \"{config.language}\"", config.language)
+            lang_idx = self.lang_combo.count() - 1
+        self._config = config
+        self._config_name = name
+        self.model_combo.setCurrentIndex(self.model_combo.findData(config.model_size))
+        self.lang_combo.setCurrentIndex(lang_idx)
+        self.vad_toggle.setChecked(config.vad_filter)
+        if self.accuracy_toggle.isEnabled():
+            self.accuracy_toggle.setChecked(config.high_accuracy)
+        self.beam_spin.setValue(config.beam_size)
+        self.glossary_edit.setText(", ".join(config.decoding.glossary))
+        self._update_preset_label()
+        self._update_config_label()
+
+    def current_config(self) -> TranscriptionConfig:
+        """Configurazione completa con le scelte attuali dei controlli.
+
+        Se "Alta precisione" non è disponibile su questo computer si conserva il valore
+        della configurazione (la trascrizione userà comunque la modalità standard).
+        ValueError (in italiano) se il glossario scritto non è valido.
+        """
+        acc = self.accuracy_toggle
+        glossary = parse_glossary(self.glossary_edit.text())
+        return replace(
+            self._config,
+            model_size=self.model_combo.currentData(),
+            language=self.lang_combo.currentData() or AUTO_LANGUAGE,
+            vad_filter=self.vad_toggle.isChecked(),
+            high_accuracy=acc.isChecked() if acc.isEnabled() else self._config.high_accuracy,
+            beam_size=self.beam_spin.value(),
+            decoding=replace(self._config.decoding, glossary=glossary),
+        )
+
+    def config_name(self) -> str:
+        return self._config_name
+
+    def _update_config_label(self):
+        lbl = self._config_lbl
+        if self._config_name:
+            lbl.setText(f"Configurazione: {self._config_name}")
+            origin = f"dalla configurazione \"{self._config_name}\""
+        elif self._advanced_is_default():
+            lbl.setText("Parametri predefiniti")
+            origin = "predefiniti"
+        else:
+            lbl.setText("Parametri personalizzati")
+            origin = "personalizzati"
+        lbl.set_full_tooltip(
+            f"Parametri avanzati (decodifica, VAD, leggibilità) {origin}.\n"
+            "File → Importa configurazione… per caricarne altri, "
+            "Esporta configurazione… per salvarli."
+        )
+
+    def _advanced_is_default(self) -> bool:
+        base = TranscriptionConfig()
+        cfg = self._config
+        return (cfg.decoding, cfg.vad, cfg.readability, cfg.denoise) == (
+            base.decoding, base.vad, base.readability, base.denoise)
 
     def _update_estimate(self):
         if not self._source_path:

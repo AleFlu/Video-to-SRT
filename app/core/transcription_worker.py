@@ -10,19 +10,25 @@ l'utente li modifica nell'editor e poi esporta.
 from __future__ import annotations
 import logging
 import threading
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, Optional, Union
 
 from PySide6.QtCore import QObject, Signal
 
 from core.constants import normalize_language
+from core.transcription_config import TranscriptionConfig
 
 log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class TranscriptionParams:
-    """Parametri di una trascrizione (immutabili)."""
+    """Parametri di una trascrizione (immutabili).
+
+    I campi espliciti (modello, beam, VAD, riduzione rumore, alta precisione, lingua)
+    sono quelli scelti nella schermata iniziale; ``config`` fornisce i parametri avanzati
+    (decodifica, VAD Silero, limiti di leggibilità), predefiniti se non indicata.
+    """
     input_path: str
     model_size: str = "large-v3"
     beam_size: int = 5
@@ -30,10 +36,17 @@ class TranscriptionParams:
     denoise: bool = True
     high_accuracy: bool = False
     language: Optional[str] = "it"   # None = rilevamento automatico
+    config: TranscriptionConfig = field(default_factory=TranscriptionConfig)
 
     def __post_init__(self) -> None:
         # "auto" / "" / None -> None: faster-whisper non accetta "auto" come codice lingua
         object.__setattr__(self, "language", normalize_language(self.language))
+        if self.config is None:
+            object.__setattr__(self, "config", TranscriptionConfig())
+        elif isinstance(self.config, dict):
+            object.__setattr__(self, "config", TranscriptionConfig.from_dict(self.config))
+        elif not isinstance(self.config, TranscriptionConfig):
+            raise ValueError("Parametro 'config' non valido: atteso TranscriptionConfig")
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TranscriptionParams":
@@ -42,6 +55,15 @@ class TranscriptionParams:
             raise ValueError("Parametro obbligatorio mancante: 'input_path'")
         names = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in names})
+
+    @classmethod
+    def from_config(cls, input_path: str, config: TranscriptionConfig) -> "TranscriptionParams":
+        """Parametri completi da una configurazione (es. un file .vsrtconfig importato)."""
+        return cls(
+            input_path=input_path, model_size=config.model_size, beam_size=config.beam_size,
+            vad_filter=config.vad_filter, denoise=config.denoise,
+            high_accuracy=config.high_accuracy, language=config.language, config=config,
+        )
 
 
 class TranscriptionWorker(QObject):
@@ -90,6 +112,7 @@ class TranscriptionWorker(QObject):
                 denoise=p.denoise,
                 high_accuracy=p.high_accuracy,
                 language=p.language,
+                config=p.config,
                 cancel_event=self._cancel_event,
                 on_status=lambda m: self.status.emit(m),
                 on_progress=lambda v: self.progress.emit(float(v)),

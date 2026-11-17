@@ -12,8 +12,11 @@ Colonne:
 Segnala come "problematici" (tint rosso/giallo) i sottotitoli che:
   - overlap col successivo
   - end <= start
-  - CPS > MAX_CPS (troppo veloci da leggere)
-  - durata < 0.5s
+  - CPS > max_cps (troppo veloci da leggere)
+  - durata < min_duration_s
+Le soglie sono quelle della configurazione corrente (core.transcription_config,
+predefinite MAX_CPS / WARN_CPS / MIN_SUBTITLE_DURATION): dopo un cambio di
+configurazione `refresh_checks()` aggiorna colori e avvisi.
 """
 
 from __future__ import annotations
@@ -26,8 +29,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QBrush
 
-from core.constants import MAX_CPS, WARN_CPS, MIN_SUBTITLE_DURATION
+from core.constants import MAX_CPS, WARN_CPS, MIN_SUBTITLE_DURATION  # noqa: F401 — riesportate
 from core.subtitle_model import Subtitle
+from core.transcription_config import active_readability
 
 # Alias storico (usato da codice esistente)
 MIN_DURATION = MIN_SUBTITLE_DURATION
@@ -186,6 +190,14 @@ class SubtitleTableModel(QAbstractTableModel):
         self._emit_adjacent(row)
         self.dataModified.emit()
 
+    def refresh_checks(self):
+        """Ricalcola colori e avvisi di tutte le righe (es. dopo un cambio dei limiti)."""
+        if self._subs:
+            top = self.index(0, 0)
+            bot = self.index(len(self._subs) - 1, self.columnCount() - 1)
+            self.dataChanged.emit(top, bot, [Qt.BackgroundRole, Qt.ForegroundRole,
+                                             Qt.ToolTipRole])
+
     def _emit_adjacent(self, row: int):
         """Forza il refresh delle righe adiacenti (per overlap warnings)."""
         for r in (row - 1, row + 1):
@@ -201,14 +213,15 @@ class SubtitleTableModel(QAbstractTableModel):
             return []
         codes: list[str] = []
         sub = self._subs[row]
+        limits = active_readability()
 
         if sub.end <= sub.start:
             codes.append(ISSUE_END_BEFORE_START)
-        if sub.duration < MIN_SUBTITLE_DURATION and sub.end > sub.start:
+        if sub.duration < limits.min_duration_s and sub.end > sub.start:
             codes.append(ISSUE_TOO_SHORT)
 
         text_len = len(sub.text.strip())
-        if sub.duration > 0 and text_len > 0 and text_len / sub.duration > MAX_CPS:
+        if sub.duration > 0 and text_len > 0 and text_len / sub.duration > limits.max_cps:
             codes.append(ISSUE_TOO_FAST)
 
         # Overlap col successivo
@@ -225,10 +238,10 @@ class SubtitleTableModel(QAbstractTableModel):
             return "La fine precede o coincide con l'inizio"
         if code == ISSUE_TOO_SHORT:
             return (f"Durata troppo breve ({sub.duration:.2f}s < "
-                    f"{MIN_SUBTITLE_DURATION}s)")
+                    f"{active_readability().min_duration_s:g}s)")
         if code == ISSUE_TOO_FAST:
             cps = len(sub.text.strip()) / sub.duration
-            return f"Troppo veloce ({cps:.1f} CPS, max {MAX_CPS:.0f})"
+            return f"Troppo veloce ({cps:.1f} CPS, max {active_readability().max_cps:g})"
         if code == ISSUE_OVERLAP:
             return "Overlap con il sottotitolo successivo"
         return "Testo vuoto"
@@ -327,9 +340,10 @@ class SubtitleTableModel(QAbstractTableModel):
                 t = sub.text.strip()
                 if sub.duration > 0 and t:
                     cps = len(t) / sub.duration
-                    if cps > MAX_CPS:
+                    limits = active_readability()
+                    if cps > limits.max_cps:
                         return self._brush("cps_error_fg")
-                    if cps > WARN_CPS:
+                    if cps > limits.warn_cps:
                         return self._brush("cps_warning_fg")
 
         if role == Qt.BackgroundRole:

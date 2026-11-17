@@ -12,10 +12,10 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from core.subtitle_model import Subtitle
-from core.constants import MAX_CHARS_PER_LINE
+from core.transcription_config import active_readability
 
 log = logging.getLogger(__name__)
 
@@ -80,13 +80,16 @@ def format_timestamp_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def wrap_subtitle_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> str:
+def wrap_subtitle_text(text: str, max_chars: Optional[int] = None) -> str:
     """
     Spezza il testo su massimo 2 righe.
 
-    Il testo già su più righe viene rispettato. Altrimenti, se supera `max_chars`,
-    si spezza allo spazio che rende le due righe più bilanciate.
+    Il testo già su più righe viene rispettato. Altrimenti, se supera `max_chars`
+    (None = caratteri per riga della configurazione corrente, predefinito
+    MAX_CHARS_PER_LINE), si spezza allo spazio che rende le due righe più bilanciate.
     """
+    if max_chars is None:
+        max_chars = active_readability().max_chars_per_line
     if "\n" in text or len(text) <= max_chars:
         return text
     best = -1
@@ -102,7 +105,7 @@ def wrap_subtitle_text(text: str, max_chars: int = MAX_CHARS_PER_LINE) -> str:
     return text[:best] + "\n" + text[best + 1:]
 
 
-def subtitles_to_srt(subtitles: List[Subtitle]) -> str:
+def subtitles_to_srt(subtitles: List[Subtitle], max_chars: Optional[int] = None) -> str:
     lines = []
     idx = 1
     for sub in subtitles:
@@ -111,13 +114,13 @@ def subtitles_to_srt(subtitles: List[Subtitle]) -> str:
             continue
         start = format_timestamp_srt(sub.start)
         end = format_timestamp_srt(sub.end)
-        lines.append(f"{idx}\n{start} --> {end}\n{wrap_subtitle_text(text)}\n")
+        lines.append(f"{idx}\n{start} --> {end}\n{wrap_subtitle_text(text, max_chars)}\n")
         idx += 1
     return "\n".join(lines)
 
 
-def write_srt(subtitles: List[Subtitle], output_path: str):
-    _write_text(output_path, subtitles_to_srt(subtitles))
+def write_srt(subtitles: List[Subtitle], output_path: str, max_chars: Optional[int] = None):
+    _write_text(output_path, subtitles_to_srt(subtitles, max_chars))
 
 
 # ── Formati aggiuntivi (C3) ──────────────────────────────────────────────────

@@ -453,8 +453,11 @@ class ProgressWidget(QWidget):
 
     # ---- API pubblica ----
 
-    def start(self, source_path: str, settings: dict):
-        """Avvia trascrizione. Chiamato da MainWindow dopo HomeWidget.start_requested."""
+    def start(self, source_path: str, settings: dict, config=None):
+        """Avvia trascrizione. Chiamato da MainWindow dopo HomeWidget.start_requested.
+
+        ``config`` (TranscriptionConfig) porta i parametri avanzati; None = predefiniti.
+        """
         if self._thread is not None:
             return   # già in corso — non avviare due volte
 
@@ -499,6 +502,8 @@ class ProgressWidget(QWidget):
 
         # Avvia worker
         params = {"input_path": source_path, **settings}
+        if config is not None:
+            params["config"] = config
         self._thread = QThread(self)
         self._worker = TranscriptionWorker(params)
         self._worker.moveToThread(self._thread)

@@ -33,11 +33,11 @@ from PySide6.QtWidgets import (
 )
 
 from core.subtitle_model import Subtitle
-from core.constants import WARN_CPS
 from core.subtitle_table_model import (
     SubtitleTableModel, COL_INDEX, COL_START, COL_END, COL_DUR, COL_CPS, COL_TEXT,
     ISSUE_EMPTY, ISSUE_END_BEFORE_START, ISSUE_OVERLAP, ISSUE_TOO_FAST, ISSUE_TOO_SHORT,
 )
+from core.transcription_config import active_readability
 from core.undo_commands import (
     EditFieldCommand, DeleteSubtitleCommand,
     SplitSubtitleCommand, MergeWithNextCommand, ReplaceAllCommand
@@ -106,7 +106,7 @@ def issue_word(codes, cps: Optional[float] = None) -> Optional[tuple]:
     for code in _ISSUE_PRIORITY:
         if code in codes:
             return _ISSUE_WORDS[code]
-    if cps is not None and cps > WARN_CPS:
+    if cps is not None and cps > active_readability().warn_cps:
         return ("veloce", "warn")
     return None
 

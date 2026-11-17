@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QFrame, QPushButton, QScrollArea
 )
 
-from core.subtitle_table_model import SubtitleTableModel, MAX_CPS, WARN_CPS
+from core.subtitle_table_model import SubtitleTableModel
+from core.transcription_config import active_readability
 from ui import icons, theme
 import platform_support
 
@@ -335,9 +336,10 @@ class InspectorWidget(QWidget):
         if duration > 0 and n > 0:
             cps = n / duration
             self.cps_label.setText(f"{cps:.1f} CPS")
-            if cps > MAX_CPS:
+            limits = active_readability()
+            if cps > limits.max_cps:
                 color = theme.c("err")
-            elif cps > WARN_CPS:
+            elif cps > limits.warn_cps:
                 color = theme.c("warn")
         else:
             self.cps_label.setText("— CPS")

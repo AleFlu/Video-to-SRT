@@ -23,6 +23,8 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from core.constants import MAX_CHARS_PER_LINE  # noqa: F401 — riesportata per compatibilità
 from core.constants import MAX_SUBTITLE_DURATION, MIN_SUBTITLE_DURATION, normalize_language
+from core.transcription_config import ITALIAN_PROMPT  # noqa: F401 — riesportata per compatibilità
+from core.transcription_config import TranscriptionConfig, VadOptions
 from platform_support import cpu_threads, ffmpeg_executable_name, subprocess_kwargs
 
 logger = logging.getLogger(__name__)
@@ -84,18 +86,10 @@ def high_accuracy_available() -> bool:
 # ============================================================
 # Configurazione
 # ============================================================
-ITALIAN_PROMPT = (
-    "Trascrizione fedele in italiano. Mantieni invariate le parole straniere "
-    "pronunciate dallo speaker: termini tecnici inglesi, brand, comandi, anglicismi. "
-    "Esempi: machine learning, deploy, framework, backend, feature, ok, trend, "
-    "social media, iPhone, Google, npm, git. "
-    "Punteggiatura italiana: punto, virgola, punto interrogativo, punto esclamativo, due punti. "
-    "Apostrofi: c'è, dell', un'altra, l'uomo. Accenti: è, à, ì, ò, ù. "
-    "Sì (affermazione). Nomi propri con maiuscola."
-)
-
-# Parametri VAD Silero (tuning invariato)
-VAD_PARAMS = dict(min_silence_duration_ms=150, speech_pad_ms=100, threshold=0.50)
+# I valori predefiniti di prompt iniziale, glossario, decodifica e VAD vivono in
+# core.transcription_config e si possono cambiare con un file .vsrtconfig; qui restano
+# i nomi storici (ITALIAN_PROMPT è importato da lì).
+VAD_PARAMS = VadOptions().as_dict()
 
 # ============================================================
 # Post-processing: correzione italianizzazioni Whisper
@@ -867,6 +861,7 @@ def _transcribe_whisperx(
     model_size: str = DEFAULT_MODEL,
     beam_size: int = 5,
     language: Optional[str] = "it",
+    config: Optional[TranscriptionConfig] = None,
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
@@ -874,6 +869,7 @@ def _transcribe_whisperx(
     import whisperx
 
     language = normalize_language(language)
+    config = config or TranscriptionConfig()
 
     def status(msg):
         if on_status:
@@ -891,8 +887,9 @@ def _transcribe_whisperx(
     _check_cancel(cancel_event)
 
     asr_options = {"beam_size": beam_size, "word_timestamps": True}
-    if language == "it":
-        asr_options["initial_prompt"] = ITALIAN_PROMPT
+    prompt = config.decoding.prompt_for(language)
+    if prompt:
+        asr_options["initial_prompt"] = prompt
 
     wx_model = whisperx.load_model(
         model_size, device=device, compute_type=compute_type,
@@ -971,6 +968,18 @@ def _is_vad_unavailable_error(err: BaseException) -> bool:
     return "onnx" in msg
 
 
+def _accepts_kwarg(fn, name: str) -> bool:
+    """True se ``fn`` accetta l'argomento ``name`` (es. ``hotwords``, assente nelle
+    versioni più vecchie di faster-whisper)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD
+                                 for p in params.values())
+
+
 def _close_iter(it) -> None:
     """Chiude un generatore di segmenti, se possibile."""
     close = getattr(it, "close", None)
@@ -990,6 +999,7 @@ def transcribe(
     denoise: bool = True,
     high_accuracy: bool = False,
     language: Optional[str] = "it",
+    config: Optional[TranscriptionConfig] = None,
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
@@ -997,8 +1007,13 @@ def transcribe(
     """Trascrive ``input_path`` e restituisce i sottotitoli come dict start/end/text.
 
     ``language`` None (o "auto") = rilevamento automatico della lingua.
+    ``config`` fornisce i parametri avanzati: decodifica (prompt, glossario come
+    ``hotwords``, temperature, soglie) e VAD Silero (None = predefiniti). Modello,
+    lingua, beam, filtro VAD, riduzione rumore e alta precisione restano gli argomenti
+    espliciti.
     """
     language = normalize_language(language)
+    config = config or TranscriptionConfig()
 
     def status(msg):
         if on_status:
@@ -1037,7 +1052,7 @@ def transcribe(
                 logger.info("Uso il backend WhisperX (allineamento wav2vec2)")
                 return _transcribe_whisperx(
                     audio_path, model_size=model_size, beam_size=beam_size,
-                    language=language, cancel_event=cancel_event,
+                    language=language, config=config, cancel_event=cancel_event,
                     on_status=on_status, on_progress=on_progress,
                 )
             except TranscriptionCancelled:
@@ -1050,20 +1065,30 @@ def transcribe(
         model = _get_or_load_model(model_size, on_status=on_status)
         progress(0.15)
 
-        # Parametri di decodifica (tuning invariato)
+        # Parametri di decodifica (predefiniti in core.transcription_config)
+        dec = config.decoding
         transcribe_params = dict(
             language=language,
             task="transcribe",
             beam_size=beam_size,
-            patience=1.0,
-            initial_prompt=ITALIAN_PROMPT if language == "it" else None,
+            patience=dec.patience,
+            initial_prompt=dec.prompt_for(language),
             word_timestamps=True,
-            condition_on_previous_text=False,
-            no_speech_threshold=0.5,
-            log_prob_threshold=-1.2,
-            compression_ratio_threshold=2.4,
-            temperature=[0.0, 0.2, 0.4, 0.6],
+            condition_on_previous_text=dec.condition_on_previous_text,
+            no_speech_threshold=dec.no_speech_threshold,
+            log_prob_threshold=dec.log_prob_threshold,
+            compression_ratio_threshold=dec.compression_ratio_threshold,
+            temperature=list(dec.temperature),
         )
+        # Glossario: a differenza di initial_prompt (solo la prima finestra di 30 s con
+        # condition_on_previous_text=False), hotwords vale per ogni finestra.
+        hotwords = dec.hotwords()
+        if hotwords:
+            if _accepts_kwarg(model.transcribe, "hotwords"):
+                transcribe_params["hotwords"] = hotwords
+            else:
+                logger.warning("Glossario ignorato: questa versione di faster-whisper "
+                               "non supporta hotwords")
 
         vad_active = False
         first_seg = None
@@ -1076,7 +1101,7 @@ def transcribe(
                 segments_iter, info = model.transcribe(
                     audio_path, **transcribe_params,
                     vad_filter=True,
-                    vad_parameters=dict(VAD_PARAMS),
+                    vad_parameters=config.vad.as_dict(),
                 )
                 _check_cancel(cancel_event)
                 first_seg = next(segments_iter, None)
@@ -1159,8 +1184,12 @@ def run_pipeline(
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
     language: Optional[str] = "it",
+    config: Optional[TranscriptionConfig] = None,
 ) -> str:
-    """Trascrive e scrive direttamente un file SRT. Ritorna il percorso scritto."""
+    """Trascrive e scrive direttamente un file SRT. Ritorna il percorso scritto.
+
+    ``config``: parametri avanzati e caratteri per riga dell'SRT (None = predefiniti).
+    """
     from core.srt_io import unique_output_path, write_srt
     from core.subtitle_model import Subtitle
 
@@ -1176,7 +1205,7 @@ def run_pipeline(
     segments = transcribe(
         input_path, model_size=model_size, beam_size=beam_size,
         vad_filter=vad_filter, denoise=denoise, high_accuracy=high_accuracy,
-        language=language, cancel_event=cancel_event,
+        language=language, config=config, cancel_event=cancel_event,
         on_status=on_status, on_progress=on_progress,
     )
 
@@ -1188,6 +1217,7 @@ def run_pipeline(
 
     status("Generazione file SRT...")
     subtitles = [Subtitle(start=s["start"], end=s["end"], text=s["text"]) for s in segments]
-    write_srt(subtitles, output_path)
+    max_chars = config.readability.max_chars_per_line if config is not None else None
+    write_srt(subtitles, output_path, max_chars=max_chars)
     status(f"Salvato: {Path(output_path).name} ({len(subtitles)} sottotitoli)")
     return output_path

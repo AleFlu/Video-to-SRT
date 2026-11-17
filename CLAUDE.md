@@ -25,6 +25,7 @@ app/                          # tutta l'applicazione
 │   ├── undo_commands.py      # QUndoCommand per ogni modifica
 │   ├── srt_io.py, v2srt_io.py   # lettura/scrittura SRT/VTT/TXT/ASS e progetto .v2srt
 │   ├── transcription_worker.py  # QThread che chiama engine
+│   ├── transcription_config.py  # configurazione .vsrtconfig (decodifica, glossario, VAD, leggibilità)
 │   ├── audio_player.py       # player/anteprima audio
 │   └── constants.py
 ├── ui/                       # interfaccia
