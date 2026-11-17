@@ -530,6 +530,18 @@ def build_stylesheet(theme: str | None = None) -> str:
         background-color: {ERR_SOFT};
     }}
 
+    /* Interrompi / Torna alla Home (36 px): icona + testo a sinistra, l'indicazione Esc a destra */
+    QPushButton#danger[stopButton="true"], QPushButton#primary[stopButton="true"] {{
+        text-align: left;
+        padding: 0 14px;
+        min-height: 34px;
+    }}
+    /* Pulsante secondario compatto da 28 px (es. "Copia log") */
+    QPushButton#secondary[compact="true"] {{
+        min-height: 26px;
+        padding: 0 10px;
+    }}
+
     /* Toolbar / ghost: nessun bordo, hover = rialzo */
     QPushButton#ghost, QPushButton#toolbar {{
         background-color: transparent;

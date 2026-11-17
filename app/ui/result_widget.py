@@ -49,6 +49,25 @@ def _seg_fields(seg) -> tuple:
         str(getattr(seg, "text", "") or "")
 
 
+def _stats_text(segments: list) -> str:
+    """Riga di statistiche: durata media, CPS medio e copertura del parlato."""
+    durations, cpss, covered, total_audio = [], [], 0.0, 0.0
+    for seg in segments:
+        start, end, text = _seg_fields(seg)
+        dur = max(0.0, end - start)
+        durations.append(dur)
+        covered += dur
+        if dur > 0:
+            cpss.append(len(text.strip()) / dur)
+        if end > total_audio:
+            total_audio = end
+    avg_dur = sum(durations) / len(durations) if durations else 0.0
+    avg_cps = sum(cpss) / len(cpss) if cpss else 0.0
+    cov_pct = (covered / total_audio * 100) if total_audio > 0 else 0.0
+    return (f"durata media {avg_dur:.1f} s · CPS medio {avg_cps:.1f}"
+            f" · copertura {cov_pct:.0f}%")
+
+
 class _PreviewModel(QAbstractTableModel):
     """Modello a sola lettura: # | inizio | fine | testo (una riga per segmento)."""
 
@@ -150,6 +169,10 @@ class ResultWidget(QWidget):
         title_col.addWidget(self.title_lbl)
         self.summary_lbl = ElidedLabel("")
         title_col.addWidget(self.summary_lbl)
+        # Statistiche della trascrizione (durata media, CPS medio, copertura)
+        self.stats_lbl = QLabel("")
+        self.stats_lbl.setObjectName("resultStats")
+        title_col.addWidget(self.stats_lbl)
         hdr.addLayout(title_col, 1)
 
         # Azioni
@@ -299,6 +322,10 @@ class ResultWidget(QWidget):
             f"color: {c('dim')}; font-size: 12px; background: transparent;"
             f" font-family: {theme.FONT_MONO};"
         )
+        self.stats_lbl.setStyleSheet(
+            f"color: {c('dim')}; font-size: 12px; background: transparent;"
+            f" font-family: {theme.FONT_MONO};"
+        )
         self.badge_frame.setStyleSheet(
             f"QFrame#resultNotice {{ background-color: transparent;"
             f" border: 1px solid {c('warn')}; border-radius: 4px; }}"
@@ -350,6 +377,7 @@ class ResultWidget(QWidget):
         self.summary_lbl.set_full_tooltip(source_path)
         self.editor_btn.setEnabled(n > 0)
         self.export_btn.setEnabled(n > 0)
+        self.stats_lbl.setText(_stats_text(segments) if n else "")
 
         self._preview_model.set_segments(segments)
         self._preview_stack.setCurrentIndex(0 if n else 1)

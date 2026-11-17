@@ -91,6 +91,7 @@ class InspectorWidget(QWidget):
         self.start_spin.setRange(0.0, 360000.0)
         self.start_spin.setDecimals(3)
         self.start_spin.setSuffix(" s")
+        self.start_spin.setFixedHeight(28)
         self.start_spin.setSingleStep(0.1)
         self.start_spin.editingFinished.connect(self._on_start_changed)
         grid.addWidget(self.start_spin, 0, 1)
@@ -104,6 +105,7 @@ class InspectorWidget(QWidget):
         self.end_spin.setRange(0.0, 360000.0)
         self.end_spin.setDecimals(3)
         self.end_spin.setSuffix(" s")
+        self.end_spin.setFixedHeight(28)
         self.end_spin.setSingleStep(0.1)
         self.end_spin.editingFinished.connect(self._on_end_changed)
         grid.addWidget(self.end_spin, 1, 1)
@@ -159,7 +161,7 @@ class InspectorWidget(QWidget):
 
         self.text_edit = QPlainTextEdit()
         self.text_edit.setObjectName("inspectorText")
-        self.text_edit.setMinimumHeight(max(92, fm.lineSpacing() * 4 + 24))
+        self.text_edit.setFixedHeight(max(92, fm.lineSpacing() * 4 + 24))   # ~92 px: Diagnostica resta in vista
         self.text_edit.setPlaceholderText("Testo del sottotitolo…")
         self.text_edit.setAccessibleName("Testo del sottotitolo")
         self.text_edit.setTabChangesFocus(True)   # Tab passa al controllo successivo
@@ -231,7 +233,10 @@ class InspectorWidget(QWidget):
             f"QLabel#inspectorValue {{ color: {c('text')}; font-family: {mono}; font-size: 13px; }}"
             f"QLabel#inspectorCounter {{ color: {c('dim')}; font-family: {mono}; font-size: 13px; }}"
             f"QLabel#inspectorStat {{ color: {c('dim')}; font-family: {mono}; font-size: 12px; }}"
-            f"QDoubleSpinBox {{ font-family: {mono}; font-size: 13px; }}"
+            f"QDoubleSpinBox {{ font-family: {mono}; font-size: 13px; min-height: 26px;"
+            f" padding: 0 8px; background: {c('bg')}; border: 1px solid {c('line')};"
+            " border-radius: 4px; }"
+            f"QDoubleSpinBox:focus {{ border-color: {c('focus')}; }}"
             f"QPushButton#inspectorShift {{ font-family: {mono}; font-size: 12px; padding: 0 4px;"
             f" color: {c('text')}; }}"
             f"QPlainTextEdit#inspectorText {{ font-size: 14px; padding: 8px 10px; }}"

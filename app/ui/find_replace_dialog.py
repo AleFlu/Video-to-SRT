@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.subtitle_table_model import SubtitleTableModel
-from ui import theme
+from ui import icons, theme
 import platform_support
 
 _LABEL_COL = 84   # larghezza della colonna delle etichette (mockup)
@@ -216,8 +216,10 @@ class FindReplaceDialog(QDialog):
         self.replace_all_btn.clicked.connect(self._replace_all)
         btn_row.addWidget(self.replace_all_btn)
 
-        self.find_next_btn = QPushButton("Trova successivo  ↵")
+        self.find_next_btn = QPushButton("Trova successivo")
         self.find_next_btn.setObjectName("primary")
+        icons.bind_icon(self.find_next_btn, "enter", "acc_ink", 14)
+        self.find_next_btn.setLayoutDirection(Qt.RightToLeft)   # icona dopo il testo
         self.find_next_btn.clicked.connect(self._find_next)
         btn_row.addWidget(self.find_next_btn)
         root.addWidget(self._footer)

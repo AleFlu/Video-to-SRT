@@ -253,10 +253,7 @@ class HomeWidget(QWidget):
         self._hint_lbl.setStyleSheet(
             f"font-size: 12px; color: {c('dim')}; background: transparent;"
         )
-        self._start_kbd.setStyleSheet(
-            f"font-size: 11px; color: {c('label')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
-        )
+        self._set_start_kbd("label")
         for title, desc in ((self._vad_title, self._vad_desc),
                             (self._acc_title, self._acc_desc)):
             desc.setStyleSheet(
@@ -414,7 +411,8 @@ class HomeWidget(QWidget):
         bl_btn = QHBoxLayout(self.start_btn)
         bl_btn.setContentsMargins(0, 0, 14, 0)
         bl_btn.addStretch(1)
-        self._start_kbd = QLabel("↵")
+        self._start_kbd = QLabel()
+        self._start_kbd.setFixedSize(14, 14)
         self._start_kbd.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         bl_btn.addWidget(self._start_kbd)
         bl.addWidget(self.start_btn)
@@ -509,10 +507,7 @@ class HomeWidget(QWidget):
                 f"QPushButton:pressed {{ background-color: {c('acc_fill_d')}; }}"
                 + theme.focus_rule("QPushButton", 4)
             )
-            self._start_kbd.setStyleSheet(
-                f"font-size: 11px; color: {c('acc_ink')}; background: transparent;"
-                f" font-family: {theme.FONT_MONO};"
-            )
+            self._set_start_kbd("acc_ink")
         else:
             self.start_btn.setEnabled(False)
             self.start_btn.setText("Avvia trascrizione")
@@ -529,10 +524,12 @@ class HomeWidget(QWidget):
                 "  min-height: 40px;"
                 "}"
             )
-            self._start_kbd.setStyleSheet(
-                f"font-size: 11px; color: {c('label')}; background: transparent;"
-                f" font-family: {theme.FONT_MONO};"
-            )
+            self._set_start_kbd("label")
+
+    def _set_start_kbd(self, token: str):
+        """Suggerimento Invio: icona disegnata (non un glifo di testo) nel colore del token."""
+        self._start_kbd.setStyleSheet("background: transparent; border: none;")
+        self._start_kbd.setPixmap(icons.pixmap("enter", theme.qcolor(token), 14))
 
     def _on_file_error(self, ext: str):
         self.drop.show_error(ext)

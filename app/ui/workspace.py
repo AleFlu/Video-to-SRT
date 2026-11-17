@@ -241,10 +241,11 @@ class WorkspaceWidget(QWidget):
         s = QSettings("VideoSRT", "v2")
         h = read_list(s, _SETTINGS_HSPLIT)
         v = read_list(s, _SETTINGS_VSPLIT)
-        try:
-            if h:
-                self._hsplit.setSizes([int(x) for x in h])
-            if v:
-                self._vsplit.setSizes([int(x) for x in v])
-        except Exception:
-            pass
+        for split, saved in ((self._hsplit, h), (self._vsplit, v)):
+            try:
+                sizes = [int(x) for x in saved]
+            except (TypeError, ValueError):
+                continue
+            # valori incompleti o nulli (es. chiavi di una versione precedente): si ignorano
+            if len(sizes) == split.count() and all(x > 0 for x in sizes):
+                split.setSizes(sizes)

@@ -22,7 +22,9 @@ Agisce come proxy per menu e status bar verso il progetto attivo.
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +48,41 @@ _SETTINGS_RECENT = RECENT_KEY
 _SETTINGS_GEOM   = "mainwindow/geometry"
 
 logger = logging.getLogger(__name__)
+
+
+
+class _StatusLabel(QLabel):
+    """
+    Etichetta della status bar: `text()` resta il testo semplice (chi legge lo stato non
+    cambia), ma il disegno colora i conteggi di errori e avvisi (token `err` / `warn`).
+    """
+
+    _COUNT_RE = re.compile(r"^\s*(\d+)\s+(error|avvis)", re.IGNORECASE)
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self.setTextFormat(Qt.RichText)
+        self._plain = ""
+        self.setText(text)
+        theme.MANAGER.theme_changed.connect(self._render)
+
+    def text(self) -> str:  # noqa: A003 (override Qt)
+        return self._plain
+
+    def setText(self, text: str) -> None:  # noqa: N802 (override Qt)
+        self._plain = text or ""
+        self._render()
+
+    def _render(self, _name: str = "") -> None:
+        parts = []
+        for seg in self._plain.split("·"):
+            m = self._COUNT_RE.match(seg)
+            token = None
+            if m and int(m.group(1)) > 0:
+                token = "err" if m.group(2).lower().startswith("error") else "warn"
+            esc = html.escape(seg.strip()).replace(" ", "&nbsp;")
+            parts.append(f'<span style="color:{theme.c(token)};">{esc}</span>' if token else esc)
+        QLabel.setText(self, "&nbsp;&nbsp;·&nbsp;&nbsp;".join(parts))
 
 
 class MainWindow(QMainWindow):
@@ -163,7 +200,17 @@ class MainWindow(QMainWindow):
             + theme.focus_rule("QPushButton", 4)
         )
 
+    def _apply_status_style(self):
+        """Barra di stato: 26 px, `panel`, linea di 1 px sopra, mono 11 px in `dim`."""
+        c = theme.c
+        self._status_bar.setStyleSheet(
+            f"QStatusBar {{ background: {c('panel')}; border-top: 1px solid {c('line')}; }}"
+            f"QStatusBar QLabel {{ background: transparent; color: {c('dim')};"
+            f" font-family: {theme.FONT_MONO}; font-size: 11px; }}"
+        )
+
     def _on_theme_changed(self, _name: str = ""):
+        self._apply_status_style()
         self._apply_header_palette()
         self._refresh_theme_btn()
 
@@ -487,13 +534,17 @@ class MainWindow(QMainWindow):
 
     def _build_status_bar(self):
         sb = QStatusBar()
-        self.status_main = QLabel("Pronto")
+        sb.setFixedHeight(26)
+        sb.setSizeGripEnabled(False)
+        self.status_main = _StatusLabel("Pronto")
         self.status_main.setContentsMargins(10, 0, 0, 0)
         sb.addWidget(self.status_main)
-        sb.addPermanentWidget(QLabel("  "))
         self.status_proj = QLabel("")
+        self.status_proj.setContentsMargins(0, 0, 10, 0)
         sb.addPermanentWidget(self.status_proj)
+        self._status_bar = sb
         self.setStatusBar(sb)
+        self._apply_status_style()
 
     # ── Apertura file ──────────────────────────────────────────────────────────
 

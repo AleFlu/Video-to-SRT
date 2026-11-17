@@ -106,12 +106,12 @@ class _ExportButton(QPushButton):
         acc = self._accent
         self.setStyleSheet(
             "QPushButton#exportRow {"
-            f" background: {c('panel') if acc else 'transparent'}; border: none;"
+            f" background: {c('panel') if acc else 'transparent'}; border: none; border-radius: 0;"
             f" border-bottom: 1px solid {c('line')}; text-align: left; padding: 0;"
             # il QSS globale dei QPushButton impone min-height: 28 px; qui 55 + 1 di bordo
             f" min-height: {_ROW_HEIGHT - 1}px; }}"
             f"QPushButton#exportRow:hover {{ background: {c('raise')}; }}"
-            + theme.focus_rule("QPushButton#exportRow")
+            + theme.focus_rule("QPushButton#exportRow", 0)
             + "QLabel { background: transparent; border: none; }"
             f"QLabel#exportTitle {{ color: {c('text')}; font-size: 13px; font-weight: 600; }}"
             f"QLabel#exportDesc {{ color: {c('dim')}; font-size: 12px; }}"
@@ -318,7 +318,16 @@ class _ExportPanel(QWidget):
         self._lbl_origin.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         info_lay.addWidget(self._lbl_origin, 0, Qt.AlignVCenter)
 
-        self._badge_modified = QLabel("●  modificato nell'editor")
+        # Badge: punto disegnato (6 px, colore avviso) + testo; il contenitore si mostra/nasconde
+        self._badge_modified = QWidget()
+        badge_lay = QHBoxLayout(self._badge_modified)
+        badge_lay.setContentsMargins(0, 0, 0, 0)
+        badge_lay.setSpacing(8)
+        self._badge_dot = QLabel()
+        self._badge_dot.setFixedSize(6, 6)
+        badge_lay.addWidget(self._badge_dot, 0, Qt.AlignVCenter)
+        self._badge_text = QLabel("modificato nell'editor")
+        badge_lay.addWidget(self._badge_text)
         self._badge_modified.setVisible(False)
         info_lay.addWidget(self._badge_modified)
         info_lay.addStretch(1)
@@ -473,7 +482,10 @@ class _ExportPanel(QWidget):
             f"color: {c('text')}; font-size: 12px; border: 1px solid {c('line')};"
             " border-radius: 3px; padding: 2px 8px;"
         )
-        self._badge_modified.setStyleSheet(f"color: {c('warn')}; font-size: 12px;")
+        self._badge_dot.setStyleSheet(
+            f"background: {c('warn')}; border: none; border-radius: 3px;")
+        self._badge_text.setStyleSheet(
+            f"color: {c('warn')}; font-size: 12px; background: transparent;")
         self._lbl_empty_warn.setStyleSheet(f"color: {c('err')}; font-size: 12px;")
         self._warn_icon.setPixmap(icons.pixmap("alert", theme.qcolor("err"), 14))
         self._preview.setStyleSheet(

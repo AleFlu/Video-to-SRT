@@ -53,6 +53,7 @@ ICON_PATHS: dict[str, str] = {
     "alert": "M12 4l9 16H3zM12 10v4M12 17v.5",
     "volume": "M4 10v4h4l5 4V6l-5 4zM17 9a4 4 0 0 1 0 6",
     "check": "M5 12l5 5 9-10",
+    "enter": "M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4",
     "copy": "M9 9h10v11H9zM5 15V4h10",
     "download": "M12 3v12M7 10l5 5 5-5M5 21h14",
     "arrow_right": "M5 12h14M13 6l6 6-6 6",

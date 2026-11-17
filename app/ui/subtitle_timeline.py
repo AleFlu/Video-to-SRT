@@ -1191,7 +1191,7 @@ class SubtitleTimeline(QWidget):
             if not parts:
                 parts.append("nessun problema")
             issues_txt = "  ·  ".join(parts)
-        mod_txt = "  ●  Modificato" if self.is_modified() else ""
+        mod_txt = "  ·  Modificato" if self.is_modified() else ""
         status = count_txt
         if issues_txt:
             status += f"  ·  {issues_txt}"

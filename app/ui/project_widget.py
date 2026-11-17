@@ -641,7 +641,7 @@ class ProjectWidget(QWidget):
         self.project.modified  = self.workspace.is_modified()
         n = len(subs)
         mod = self.workspace.is_modified()
-        self.status_text.emit(f"{n} sottotitoli{'  ●  Modificato' if mod else ''}")
+        self.status_text.emit(f"{n} sottotitoli{'  ·  Modificato' if mod else ''}")
         self.modified_changed.emit(mod)
         self._refresh_editor_badge()
         self._refresh_modified_badge()
