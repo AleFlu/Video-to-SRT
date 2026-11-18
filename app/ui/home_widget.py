@@ -7,14 +7,16 @@ Layout (mockup Home.dc.html): banco di lavoro a tutta larghezza, due colonne.
   │  zona di rilascio 330 px       │   Modello Whisper  + RAM/qualità       │
   │  (o riga "file caricato")      │   Lingua                               │
   │ Recenti (Nome|Cartella|Dim.)   │   Filtro VAD · Alta precisione         │
+  │                                │   Una riga per sottotitolo             │
   │                                │   riepilogo · Stima · Avvia            │
   └────────────────────────────────┴────────────────────────────────────────┘
 
 Configurazione: i controlli mostrano le scelte di base di una TranscriptionConfig
-(core.transcription_config) e il glossario; gli altri parametri avanzati (decodifica,
-VAD Silero, leggibilità) non hanno controlli e vengono da File → Importa
-configurazione…. L'intestazione del pannello indica da dove vengono (predefiniti o
-nome del file importato).
+(core.transcription_config), il glossario e "Una riga per sottotitolo"
+(readability.max_lines = 1); gli altri parametri avanzati (decodifica, VAD Silero,
+leggibilità) non hanno controlli e vengono da File → Importa configurazione….
+L'intestazione del pannello indica da dove vengono (predefiniti o nome del file
+importato).
 
 Tema chiaro/scuro: i colori vengono letti da theme.c() e ri-applicati su
 theme_changed via _apply_palette().
@@ -40,7 +42,9 @@ from PySide6.QtWidgets import (
 from core.constants import (
     SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS,
 )
-from core.transcription_config import AUTO_LANGUAGE, TranscriptionConfig, parse_glossary
+from core.transcription_config import (
+    AUTO_LANGUAGE, ReadabilityLimits, TranscriptionConfig, parse_glossary,
+)
 from ui.prefs import RECENT_KEY, add_recent, read_list
 from ui.widgets import DepsBanner, ElidedLabel, SwitchPill, ToggleSwitch, fmt_size
 from ui import icons, theme
@@ -197,7 +201,8 @@ class HomeWidget(QWidget):
 
         # Ordine di tab: file → impostazioni → avvio
         chain = [self.drop, self.model_combo, self.lang_combo, self.glossary_edit,
-                 self.vad_toggle, self.accuracy_toggle, self.start_btn]
+                 self.vad_toggle, self.accuracy_toggle, self.one_line_toggle,
+                 self.start_btn]
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
 
@@ -232,6 +237,7 @@ class HomeWidget(QWidget):
         self.glossary_edit.setStyleSheet(_line_edit_ss())
         self.vad_toggle._apply_palette()
         self.accuracy_toggle._apply_palette()
+        self.one_line_toggle._apply_palette()
         self._apply_accuracy_palette()
         self._set_start_btn_state(self._source_path is not None)
         self.update()
@@ -281,14 +287,15 @@ class HomeWidget(QWidget):
             f"font-size: 12px; color: {c('dim')}; background: transparent;"
         )
         self._set_start_kbd("label")
-        for title, desc in ((self._vad_title, self._vad_desc),
-                            (self._acc_title, self._acc_desc)):
+        for desc in (self._vad_desc, self._acc_desc, self._one_line_desc):
             desc.setStyleSheet(
                 f"font-size: 12px; color: {c('dim')}; background: transparent;"
             )
-        self._vad_title.setStyleSheet(
-            f"font-size: 13px; font-weight: 500; color: {c('text')}; background: transparent;"
-        )
+        for title in (self._vad_title, self._one_line_title):
+            title.setStyleSheet(
+                f"font-size: 13px; font-weight: 500; color: {c('text')};"
+                " background: transparent;"
+            )
         self._apply_accuracy_palette()
 
     def _apply_accuracy_palette(self):
@@ -350,6 +357,25 @@ class HomeWidget(QWidget):
         head.addWidget(self._config_lbl, 1)
         lay.addLayout(head)
         lay.addSpacing(4)
+
+        # Righe delle impostazioni: scorrono se la finestra è bassa (invece di
+        # schiacciarsi una sull'altra); riepilogo, stima e Avvia restano fissi in fondo.
+        card_lay = lay
+        self._settings_scroll = QScrollArea()
+        self._settings_scroll.setWidgetResizable(True)
+        self._settings_scroll.setFrameShape(QFrame.NoFrame)
+        self._settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._settings_scroll.setFocusPolicy(Qt.NoFocus)   # Tab va ai controlli, non qui
+        self._settings_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }")
+        rows = QWidget()
+        rows.setObjectName("settingsRows")
+        rows.setStyleSheet("QWidget#settingsRows { background: transparent; }")
+        self._settings_scroll.setWidget(rows)
+        self._settings_scroll.viewport().setAutoFillBackground(False)
+        lay = QVBoxLayout(rows)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
         # Modello Whisper + RAM / qualità
         row_m, ml = self._set_row()
@@ -426,6 +452,19 @@ class HomeWidget(QWidget):
         # descrizione visibile solo quando l'opzione non è disponibile (dice perché)
         self._acc_desc.setVisible(self._acc_desc.property("unavailable") is True)
 
+        # Una riga per sottotitolo (readability.max_lines = 1): sottotitoli più brevi
+        self._one_line_title = QLabel("Una riga per sottotitolo")
+        self._one_line_desc = QLabel("Sottotitoli più brevi, adatti a reel e video verticali")
+        self.one_line_toggle = _ToggleSwitch("Attiva", "Disattiva",
+                                             name="Una riga per sottotitolo")
+        self.one_line_toggle.setToolTip(
+            "Ogni sottotitolo sta su una sola riga: più sottotitoli, più brevi.\n"
+            "Spenta: fino a due righe (standard per i video orizzontali)."
+        )
+        self.one_line_toggle.setChecked(self._config.readability.max_lines == 1)
+        lay.addWidget(self._toggle_row(self._one_line_title, self._one_line_desc,
+                                       self.one_line_toggle))
+
         # beam_spin non visibile: valore di default letto da _get_settings()
         self.beam_spin = QSpinBox()
         self.beam_spin.setRange(1, 15)
@@ -433,6 +472,8 @@ class HomeWidget(QWidget):
         self.beam_spin.hide()
 
         lay.addStretch(1)
+        lay = card_lay
+        lay.addWidget(self._settings_scroll, 1)
 
         # Parte bassa: riepilogo, stima, avvio, suggerimento
         bottom = QFrame()
@@ -650,6 +691,7 @@ class HomeWidget(QWidget):
             self.accuracy_toggle.setChecked(config.high_accuracy)
         self.beam_spin.setValue(config.beam_size)
         self.glossary_edit.setText(", ".join(config.decoding.glossary))
+        self.one_line_toggle.setChecked(config.readability.max_lines == 1)
         self._update_preset_label()
         self._update_config_label()
 
@@ -658,10 +700,16 @@ class HomeWidget(QWidget):
 
         Se "Alta precisione" non è disponibile su questo computer si conserva il valore
         della configurazione (la trascrizione userà comunque la modalità standard).
-        ValueError (in italiano) se il glossario scritto non è valido.
+        "Una riga per sottotitolo" spenta conserva le righe della configurazione (2, o 3
+        da un file importato). ValueError (in italiano) se il glossario non è valido.
         """
         acc = self.accuracy_toggle
         glossary = parse_glossary(self.glossary_edit.text())
+        lines = self._config.readability.max_lines
+        if self.one_line_toggle.isChecked():
+            lines = 1
+        elif lines == 1:
+            lines = ReadabilityLimits().max_lines
         return replace(
             self._config,
             model_size=self.model_combo.currentData(),
@@ -670,6 +718,7 @@ class HomeWidget(QWidget):
             high_accuracy=acc.isChecked() if acc.isEnabled() else self._config.high_accuracy,
             beam_size=self.beam_spin.value(),
             decoding=replace(self._config.decoding, glossary=glossary),
+            readability=replace(self._config.readability, max_lines=lines),
         )
 
     def config_name(self) -> str:
@@ -693,9 +742,14 @@ class HomeWidget(QWidget):
         )
 
     def _advanced_is_default(self) -> bool:
+        """True se i parametri senza controlli sono i predefiniti (una riga per
+        sottotitolo ha il suo interruttore e non conta)."""
         base = TranscriptionConfig()
         cfg = self._config
-        return (cfg.decoding, cfg.vad, cfg.readability, cfg.denoise) == (
+        readability = cfg.readability
+        if readability.max_lines == 1:
+            readability = replace(readability, max_lines=base.readability.max_lines)
+        return (cfg.decoding, cfg.vad, readability, cfg.denoise) == (
             base.decoding, base.vad, base.readability, base.denoise)
 
     def _update_estimate(self):

@@ -692,6 +692,132 @@ def test_home_config_label_uses_theme_tokens(ui_env):
         theme.MANAGER.theme_changed.emit(original)
 
 
+# ── Una riga per sottotitolo ──────────────────────────────────────────────────
+
+def test_home_one_line_toggle_sets_max_lines(ui_env):
+    from PySide6.QtTest import QTest
+    from ui.home_widget import HomeWidget
+    home = HomeWidget()
+    assert not home.one_line_toggle.isChecked()
+    assert home.current_config().readability.max_lines == 2
+    QTest.mouseClick(home.one_line_toggle, Qt.LeftButton)
+    assert home.current_config().readability.max_lines == 1
+    # è un controllo della Home, non un parametro avanzato: l'intestazione non cambia
+    assert home._config_lbl.full_text() == "Parametri predefiniti"
+    assert set(home._get_settings()) == {"model_size", "language", "vad_filter", "denoise",
+                                         "high_accuracy", "beam_size"}
+    QTest.mouseClick(home.one_line_toggle, Qt.LeftButton)
+    assert home.current_config() == TranscriptionConfig()
+
+
+def test_home_one_line_follows_config_and_keeps_other_line_counts(ui_env):
+    from ui.home_widget import HomeWidget
+    home = HomeWidget()
+    one = replace(TranscriptionConfig(), readability=ReadabilityLimits(max_lines=1))
+    home.apply_config(one)
+    assert home.one_line_toggle.isChecked()
+    assert home.current_config() == one
+    assert home._config_lbl.full_text() == "Parametri predefiniti"
+    home.one_line_toggle.setChecked(False)
+    assert home.current_config() == TranscriptionConfig()
+    # 3 righe da file: l'interruttore spento le conserva, acceso passa a una riga
+    three = replace(TranscriptionConfig(), readability=ReadabilityLimits(max_lines=3))
+    home.apply_config(three)
+    assert not home.one_line_toggle.isChecked()
+    assert home.current_config() == three
+    assert home._config_lbl.full_text() == "Parametri personalizzati"
+    home.one_line_toggle.setChecked(True)
+    assert home.current_config().readability.max_lines == 1
+    home.one_line_toggle.setChecked(False)
+    assert home.current_config() == three
+
+
+def test_home_one_line_row_uses_theme_tokens(ui_env):
+    from ui import theme
+    from ui.home_widget import HomeWidget
+    home = HomeWidget()
+    assert home.one_line_toggle.accessibleName() == "Una riga per sottotitolo: Disattiva"
+    original = theme.get_theme()
+    try:
+        for name in ("light", "dark"):
+            theme.set_theme(name)
+            theme.MANAGER.theme_changed.emit(name)
+            assert theme.c("text") in home._one_line_title.styleSheet()
+            assert theme.c("dim") in home._one_line_desc.styleSheet()
+    finally:
+        theme.set_theme(original)
+        theme.MANAGER.theme_changed.emit(original)
+
+
+def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, qapp):
+    """Regressione: a 900×600 le righe del pannello impostazioni si sovrapponevano
+    (suggerimento RAM sopra il menu del modello, interruttori sotto il pulsante)."""
+    home = window._active().home
+    window.resize(900, 600)
+    window.show()
+    qapp.processEvents()
+
+    def rect(w):
+        return w.rect().translated(w.mapTo(home, w.rect().topLeft()))
+
+    assert not rect(home._model_hint).intersects(rect(home.model_combo))
+    assert home.one_line_toggle.parentWidget().height() >= \
+        home.one_line_toggle.parentWidget().sizeHint().height()
+    # il pulsante resta sempre visibile, sotto l'area che scorre
+    viewport = home._settings_scroll.viewport()
+    assert rect(viewport).bottom() < rect(home.start_btn).top()
+    assert home._settings_scroll.verticalScrollBar().maximum() > 0
+
+
+def test_one_line_layout_keeps_every_subtitle_on_one_line():
+    """Stesse parole: con una riga i sottotitoli sono di più e nessuno va a capo."""
+    from core.subtitle_layout import layout, wrap_lines
+    text = ("ma anche lo Stato, se io devo pagare una multa, beh, lo posso fare online, "
+            "comodamente, no, tra un po' potremmo pagare le multe battendo l'occhio,")
+    words, t = [], 0.0
+    for tok in text.split():
+        words.append({"word": " " + tok, "start": t, "end": t + 0.25, "probability": 0.9})
+        t += 0.3
+    seg = {"start": 0.0, "end": t, "text": text, "words": words}
+    two_rules = ReadabilityLimits().layout_rules()
+    one_rules = ReadabilityLimits(max_lines=1).layout_rules()
+    two = layout([seg], two_rules)
+    one = layout([seg], one_rules)
+    assert any("\n" in wrap_lines(s["text"], two_rules) for s in two)
+    assert len(one) > len(two)
+    assert all(len(s["text"]) <= 42 and "\n" not in wrap_lines(s["text"], one_rules)
+               for s in one)
+    assert " ".join(s["text"] for s in one).split() == text.split()
+
+
+def test_export_wraps_on_two_lines_even_in_one_line_mode():
+    """Un testo allungato a mano nell'editor non diventa una riga sola fuori schermo."""
+    from core.srt_io import subtitles_to_srt, wrap_subtitle_text
+    set_active_readability(ReadabilityLimits(max_lines=1))
+    text = "devi avere, addirittura per raccogliere le firme per strada devi avere ormai,"
+    wrapped = wrap_subtitle_text(text)
+    assert wrapped.count("\n") == 1
+    assert all(len(line) <= 42 for line in wrapped.split("\n"))
+    assert wrapped in subtitles_to_srt([Subtitle(0.0, 3.0, text)])
+    short = "certi comuni ti chiedono 30 giorni"
+    assert wrap_subtitle_text(short) == short
+
+
+def test_one_line_reaches_the_engine_and_is_remembered(window, ui_env, monkeypatch, tmp_path):
+    from ui.prefs import read_config
+    pw = window._active()
+    pw.home.one_line_toggle.setChecked(True)
+    got = {}
+    monkeypatch.setattr(pw.progress, "start",
+                        lambda path, settings, config=None: got.update(config=config))
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x" * 10)
+    pw.home._on_file_selected(str(clip))
+    pw.home._on_start()
+    assert got["config"].readability.layout_rules().max_lines == 1
+    assert read_config(_FakeSettings())[0].readability.max_lines == 1
+
+
 def _file_menu_texts(win) -> list:
     menu = win.menuBar().actions()[0].menu()
     return [a.text() for a in menu.actions() if not a.isSeparator()]
@@ -800,6 +926,7 @@ def test_saved_config_restored_at_startup(ui_env, qapp):
     try:
         assert win._active().home.current_config().decoding == _custom_config().decoding
         assert win._active().home.config_name() == "podcast"
+        assert win._active().home.one_line_toggle.isChecked()      # max_lines = 1
         assert math.isclose(active_readability().max_cps, 15.0)
     finally:
         for pw in win._projects:
