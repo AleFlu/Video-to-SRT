@@ -155,6 +155,7 @@ class HomeWidget(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFocusPolicy(Qt.NoFocus)   # contenitore: Tab va ai controlli, non qui
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         inner = QWidget()
         inner.setStyleSheet("background: transparent;")

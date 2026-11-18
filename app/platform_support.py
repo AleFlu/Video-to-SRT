@@ -161,7 +161,8 @@ def mono_font_family() -> str:
 
 # ── Scorciatoie ──────────────────────────────────────────────────────────────
 
-_MAC_GLYPHS = {"ctrl": "⌘", "shift": "⇧", "alt": "⌥", "return": "↵", "enter": "↵"}
+_MAC_GLYPHS = {"ctrl": "⌘", "meta": "⌃", "shift": "⇧", "alt": "⌥", "return": "↵",
+               "enter": "↵"}
 
 
 def shortcut_label(seq: str) -> str:
@@ -175,6 +176,17 @@ def shortcut_label(seq: str) -> str:
 def fullscreen_shortcut() -> str:
     """Scorciatoia per lo schermo intero."""
     return "Meta+Ctrl+F" if IS_MAC else "F11"
+
+
+def project_tab_shortcuts() -> tuple:
+    """
+    (successivo, precedente): sequenze per scorrere i tab dei progetti.
+    ⌘⇧] / ⌘⇧[ non si digitano su tutte le tastiere (su quella italiana ] e [ richiedono
+    ⌥): si aggiunge Ctrl+Tab / Ctrl+Maiusc+Tab, che su macOS è ⌃Tab (⌘Tab è del sistema).
+    """
+    ctrl = "Meta" if IS_MAC else "Ctrl"
+    return (["Ctrl+Shift+]", f"{ctrl}+Tab"],
+            ["Ctrl+Shift+[", f"{ctrl}+Shift+Backtab", f"{ctrl}+Shift+Tab"])
 
 
 # ── File manager e icone ─────────────────────────────────────────────────────

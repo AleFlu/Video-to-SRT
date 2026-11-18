@@ -244,6 +244,15 @@ def toggle_theme(app=None) -> str:
     return new
 
 
+def focus_rule_on_accent(selector: str, radius: int | None = None) -> str:
+    """
+    Anello di focus per i pulsanti pieni in accento: il token `focus` coincide con il
+    fondo `acc_fill` (sarebbe invisibile), quindi l'anello usa `acc_ink`.
+    """
+    rad = f" border-radius: {radius}px;" if radius is not None else ""
+    return f"{selector}:focus {{ border: 1px solid {c('acc_ink')};{rad} }}"
+
+
 def focus_rule(selector: str, radius: int | None = None) -> str:
     """
     Regola QSS per l'anello di focus da tastiera. Da aggiungere agli stylesheet
@@ -558,6 +567,15 @@ def build_stylesheet(theme: str | None = None) -> str:
     /* Anello di focus da tastiera (gli stili inline aggiungono theme.focus_rule) */
     QPushButton:focus, QToolButton:focus {{
         border: 1px solid {FOCUS};
+    }}
+    /* i pulsanti con objectName hanno un bordo proprio (selettore più specifico) */
+    QPushButton#secondary:focus, QPushButton#danger:focus, QPushButton#ghost:focus,
+    QPushButton#toolbar:focus {{
+        border: 1px solid {FOCUS};
+    }}
+    /* pieno in accento: `focus` ha lo stesso colore del fondo, l'anello è in inchiostro */
+    QPushButton#primary:focus {{
+        border: 1px solid {INK};
     }}
     QCheckBox:focus {{
         color: {TEXT};

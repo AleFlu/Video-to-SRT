@@ -18,7 +18,7 @@ import re
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QRect, QSize
-from PySide6.QtGui import QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton, QFrame,
 )
@@ -227,6 +227,11 @@ class FindReplaceDialog(QDialog):
         self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il dialog viene distrutto
         theme.MANAGER.theme_changed.connect(self._apply_palette)
+
+        # Ctrl+W / ⌘W chiude il dialog (Esc lo chiude già, come ogni QDialog)
+        close_sc = QShortcut(self)
+        close_sc.setKeys(QKeySequence.Close)   # tutte le varianti della piattaforma
+        close_sc.activated.connect(self.close)
 
         # Ordine di tab: campi → opzioni → azioni
         chain = [self.find_edit, self.replace_edit, self.case_check, self.word_check,

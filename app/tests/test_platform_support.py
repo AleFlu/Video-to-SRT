@@ -25,6 +25,21 @@ def test_shortcut_label_non_mac(monkeypatch):
     assert ps.shortcut_label("Ctrl+Shift+T") == "Ctrl+Shift+T"
 
 
+def test_shortcut_label_mac_control_key(monkeypatch):
+    monkeypatch.setattr(ps, "IS_MAC", True)
+    assert ps.shortcut_label("Meta+Ctrl+F") == "⌃⌘F"
+
+
+def test_project_tab_shortcuts_have_layout_independent_alternative(monkeypatch):
+    monkeypatch.setattr(ps, "IS_MAC", True)
+    nxt, prev = ps.project_tab_shortcuts()
+    assert nxt[0] == "Ctrl+Shift+]" and "Meta+Tab" in nxt       # ⌃Tab: ⌘Tab è del sistema
+    assert prev[0] == "Ctrl+Shift+[" and "Meta+Shift+Backtab" in prev
+    monkeypatch.setattr(ps, "IS_MAC", False)
+    nxt, prev = ps.project_tab_shortcuts()
+    assert "Ctrl+Tab" in nxt and "Ctrl+Shift+Backtab" in prev
+
+
 def test_fullscreen_shortcut(monkeypatch):
     monkeypatch.setattr(ps, "IS_MAC", True)
     assert ps.fullscreen_shortcut() == "Meta+Ctrl+F"

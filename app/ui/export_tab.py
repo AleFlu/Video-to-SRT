@@ -352,6 +352,7 @@ class _ExportPanel(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setFocusPolicy(Qt.NoFocus)   # contenitore: Tab va ai controlli, non qui
         body.addWidget(self._scroll, 1)
 
         content = QWidget()
@@ -491,10 +492,12 @@ class _ExportPanel(QWidget):
         self._preview.setStyleSheet(
             "QPlainTextEdit {"
             f"  background: {c('panel')}; color: {c('dim')};"
-            "  border: none;"
+            "  border: 1px solid transparent;"
             f"  font-family: {theme.FONT_MONO}; font-size: 12px;"
-            "  padding: 16px 20px;"
+            "  padding: 15px 19px;"
             "}"
+            # anello di focus (l'anteprima si scorre anche da tastiera)
+            f"QPlainTextEdit:focus {{ border-color: {c('focus')}; }}"
         )
         self._preview_hl.rehighlight()
         for r in self._rows:

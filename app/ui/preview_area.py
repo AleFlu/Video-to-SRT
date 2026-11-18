@@ -174,11 +174,12 @@ class PreviewArea(QWidget):
 
         # ── Wiring player ──────────────────────────────────────────────────────
         self.player.duration_changed.connect(self._on_duration)
+        # seeked arriva prima di position_changed: la forma d'onda sa che è un seek
+        # esplicito (riattiva l'auto-scroll, niente salto della vista per un click)
+        self.player.seeked.connect(self.waveform.on_seeked)
         self.player.position_changed.connect(self.waveform.set_position)
         self.player.duration_changed.connect(self.waveform.set_duration)
-        self.player.source_ready.connect(
-            lambda: self.waveform.set_duration(self.player.duration())
-        )
+        self.player.source_ready.connect(self._on_source_ready)
         self.waveform.seek_requested.connect(self.player.seek)
         # Errori di caricamento/decodifica: mai uno schermo nero muto
         self.player.error_occurred.connect(self._on_player_error)
@@ -363,6 +364,9 @@ class PreviewArea(QWidget):
 
     # ── Slots player ───────────────────────────────────────────────────────────
 
+    def _on_source_ready(self):
+        self.waveform.set_duration(self.player.duration())
+
     def _on_duration(self, ms: int):
         self.duration_lbl.setText("durata " + _ms_to_full_label(ms))
 
@@ -423,6 +427,9 @@ class _VideoPlayerView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHint(QPainter.Antialiasing)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Solo visualizzazione: nessuna fermata di Tab (i comandi sono nel trasporto)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAccessibleName("Anteprima video")
 
     def _apply_palette(self, _name=None):
         self.setStyleSheet(f"background: {theme.c('video_bg')}; border: none;")

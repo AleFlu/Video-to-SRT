@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QFontMetrics, QKeySequence, QShortcut
 
 from ui import icons, theme
+from ui.widgets import PROP_SPACE_ACTIVATES
 import platform_support
 
 
@@ -49,6 +50,7 @@ class _TabButton(QWidget):
         self.setMouseTracking(True)
         # Selezionabile da tastiera (Tab + Invio/Spazio); Ctrl+W chiude il progetto attivo
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setProperty(PROP_SPACE_ACTIVATES, True)   # Spazio seleziona la tab (non è Play)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName("projectTab")
 
@@ -243,6 +245,7 @@ class ProjectTabBar(QWidget):
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setFocusPolicy(Qt.NoFocus)   # non è una fermata di Tab: lo sono le tab
 
         self._tabs_widget = QWidget()
         self._tabs_layout = QHBoxLayout(self._tabs_widget)
@@ -267,16 +270,21 @@ class ProjectTabBar(QWidget):
         outer.addWidget(self._scroll, 1)
 
         # ── Shortcut ──────────────────────────────────────────────────────────
+        # Contesto finestra (non applicazione): con il focus in un dialog (Trova e
+        # sostituisci, Esporta) Ctrl+W non deve chiudere il progetto sotto
         sc_close = QShortcut(QKeySequence("Ctrl+W"), self)
-        sc_close.setContext(Qt.ApplicationShortcut)
+        sc_close.setContext(Qt.WindowShortcut)
         sc_close.activated.connect(self._shortcut_close_current)
 
-        sc_next = QShortcut(QKeySequence("Ctrl+Shift+]"), self)
-        sc_next.setContext(Qt.ApplicationShortcut)
+        next_keys, prev_keys = platform_support.project_tab_shortcuts()
+        sc_next = QShortcut(self)
+        sc_next.setKeys([QKeySequence(k) for k in next_keys])
+        sc_next.setContext(Qt.WindowShortcut)
         sc_next.activated.connect(self._shortcut_next_tab)
 
-        sc_prev = QShortcut(QKeySequence("Ctrl+Shift+["), self)
-        sc_prev.setContext(Qt.ApplicationShortcut)
+        sc_prev = QShortcut(self)
+        sc_prev.setKeys([QKeySequence(k) for k in prev_keys])
+        sc_prev.setContext(Qt.WindowShortcut)
         sc_prev.activated.connect(self._shortcut_prev_tab)
 
         # Ctrl+Shift+T (nuovo progetto) è l'azione del menu File della MainWindow:

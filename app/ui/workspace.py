@@ -130,6 +130,13 @@ class WorkspaceWidget(QWidget):
         self._sync_timer.setInterval(SYNC_DEBOUNCE_MS)
         self._sync_timer.timeout.connect(self.sync_preview_subs)
 
+        # ── Ordine di Tab: toolbar → ricerca → tabella → inspector → forma d'onda
+        #    → trasporto (la preview è costruita prima, ma si percorre dopo) ──────
+        chain = [*self.timeline.focus_chain(), self.preview.waveform,
+                 *self.preview.transport.focus_chain()]
+        for a, b in zip(chain, chain[1:]):
+            QWidget.setTabOrder(a, b)
+
         # ── Connessioni generali ───────────────────────────────────────────────
         self._wire()
 

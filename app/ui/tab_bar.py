@@ -21,6 +21,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QSizePolicy
 
 from ui import icons, theme
+import platform_support
 
 
 _TAB_TRANSCRIPTION = 0
@@ -91,6 +92,8 @@ class TabBar(QWidget):
         exp_layout.setSpacing(0)
 
         self._btn_export = QPushButton("Esportazione")
+        self._btn_export.setToolTip(
+            f"Esportazione  {platform_support.shortcut_label('Ctrl+E')}")
         self._btn_export.setFixedHeight(bar_h)
         self._btn_export.setCursor(Qt.PointingHandCursor)
         self._btn_export.setCheckable(True)   # stato "selezionato" leggibile dagli screen reader

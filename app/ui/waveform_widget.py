@@ -8,8 +8,17 @@ waveform_widget.py — Widget forma d'onda audio con overlay dei sottotitoli.
   - Rendering: lo strato statico (sfondo, forma d'onda, blocchi sottotitolo,
     righello) è in cache in una QPixmap ridisegnata solo su resize, zoom/pan,
     cambio tema o sottotitoli; a ogni tick del player si ridisegna solo il playhead.
-  - Interazione: click → seek (o selezione del blocco sottotitolo); trascinamento →
-    pan (senza spostare il playhead); rotella verticale → zoom, orizzontale → pan.
+  - Interazione (il playhead si sposta SOLO con un click o con la tastiera):
+      · click → seek (o selezione del blocco sottotitolo); trascinamento → pan;
+      · rotella verticale/orizzontale o due dita sul trackpad → scorrimento della
+        finestra visibile (solo se c'è zoom; `pixelDelta` per lo scorrimento fluido,
+        verso "naturale" del sistema così come lo consegna Qt);
+      · Ctrl/⌘ o Alt + rotella, oppure pizzico sul trackpad → zoom attorno al cursore;
+      · doppio clic sullo sfondo (non su un blocco) → zoom su tutta la durata;
+      · tastiera (con il focus): ←/→ ±1 s, Home/Fine, +/− zoom, 0 tutta la durata.
+  - Auto-scroll del playhead: dopo uno scorrimento/zoom manuale è sospeso per
+    FOLLOW_HOLD_S secondi dall'ultimo gesto (regola a tempo: semplice e senza stati
+    da indovinare); un seek esplicito (click, tasti) lo riattiva subito.
 """
 
 from __future__ import annotations
@@ -19,9 +28,10 @@ import logging
 import math
 import subprocess
 import threading
+import time
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal, QRect, QRectF, QObject
+from PySide6.QtCore import Qt, Signal, QEvent, QRect, QRectF, QObject
 from PySide6.QtGui import (
     QPainter, QPainterPath, QPen, QFont, QFontMetrics, QPixmap,
 )
@@ -48,6 +58,29 @@ _LANE_H = 52
 # Barre della forma d'onda: 2 px di larghezza ogni 3
 _BAR_PITCH = 3
 _BAR_W = 2
+# Zoom: finestra visibile minima (ms)
+_MIN_SPAN_MS = 500.0
+# Scorrimento con la rotella "a scatti" (angleDelta): frazione della finestra per tacca
+_WHEEL_PAN_FRACTION = 0.1
+# Auto-scroll del playhead sospeso per N secondi dopo uno scorrimento/zoom manuale
+FOLLOW_HOLD_S = 2.0
+# Seek da tastiera (←/→) quando la forma d'onda ha il focus
+_KEY_SEEK_MS = 1000
+# Fattore di zoom dei tasti +/−
+_KEY_ZOOM = 0.8
+
+
+def waveform_help() -> str:
+    """Come si usa la forma d'onda (tooltip e descrizione accessibile)."""
+    mod = platform_support.shortcut_label("Ctrl")
+    return (f"Scorri con la rotella o con due dita · {mod} + rotella o pizzico per lo zoom"
+            " · clic per spostarti")
+
+
+def waveform_keys_help() -> str:
+    """Tasti della forma d'onda (descrizione accessibile, seconda riga del tooltip)."""
+    return ("Doppio clic: tutta la durata · ←/→ ±1 s · Home/Fine: inizio/fine"
+            " · +/−: zoom · 0: tutta la durata")
 
 
 # -----------------------------------------------------------------------
@@ -255,6 +288,19 @@ class _AudioLoader(threading.Thread):
 
 
 # -----------------------------------------------------------------------
+# Gesti nativi (pizzico) → WaveformWidget
+# -----------------------------------------------------------------------
+
+class _GestureFilter(QObject):
+    """Inoltra i QNativeGestureEvent del widget a `WaveformWidget.native_gesture`."""
+
+    def eventFilter(self, obj, event):  # noqa: N802 (override Qt)
+        if event.type() == QEvent.NativeGesture and isinstance(obj, WaveformWidget):
+            return obj.native_gesture(event)
+        return False
+
+
+# -----------------------------------------------------------------------
 # Widget principale
 # -----------------------------------------------------------------------
 
@@ -276,6 +322,10 @@ class WaveformWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumHeight(_RULER_H + _LANE_H + 41)
         self.setAccessibleName("Forma d'onda")
+        self.setAccessibleDescription(f"{waveform_help()}. {waveform_keys_help()}.")
+        self.setToolTip(f"{waveform_help()}\n{waveform_keys_help()}")
+        # Raggiungibile con Tab e con il click (le frecce spostano il playhead)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         # Dati audio (picchi normalizzati)
         self._mins = None
@@ -308,6 +358,11 @@ class WaveformWidget(QWidget):
         self._press_y: int = 0
         self._drag_start_view: float = 0.0
 
+        # Auto-scroll sospeso fino a questo istante (orologio monotòno, s)
+        self._clock = time.monotonic
+        self._follow_hold_until: float = 0.0
+        self._seek_target: Optional[int] = None   # posizione dell'ultimo seek esplicito
+
         # Messaggio di stato
         self._status_msg: str = "Nessun file caricato"
 
@@ -323,6 +378,8 @@ class WaveformWidget(QWidget):
 
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self._gesture_filter = _GestureFilter(self)
+        self.installEventFilter(self._gesture_filter)
 
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
@@ -374,7 +431,9 @@ class WaveformWidget(QWidget):
         """Aggiorna il playhead: ridisegna solo le strisce interessate, salvo auto-scroll."""
         old_x = self._ms_to_x(self._playhead_ms)
         self._playhead_ms = ms
-        if self._auto_scroll():
+        scrolled = self._auto_scroll()
+        self._seek_target = None
+        if scrolled:
             self.update()
             return
         new_x = self._ms_to_x(ms)
@@ -418,6 +477,8 @@ class WaveformWidget(QWidget):
         self._playhead_ms = 0
         self._view_start_ms = 0.0
         self._view_end_ms = 0.0
+        self._follow_hold_until = 0.0
+        self._seek_target = None
         self.set_subtitles([])
         self._selected_row = -1
         self._status_msg = "Nessun file caricato"
@@ -533,6 +594,11 @@ class WaveformWidget(QWidget):
                 painter.drawPixmap(QRect(0, 0, x, h), self._played_layer(),
                                    QRect(0, 0, int(x * dpr), int(h * dpr)))
             self._draw_playhead(painter, w, h)
+            if self.hasFocus():
+                # anello di focus da tastiera (1 px, token `focus`)
+                painter.setPen(QPen(theme.qcolor("focus"), 1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(0, 0, w - 1, h - 1)
         finally:
             painter.end()
 
@@ -730,11 +796,8 @@ class WaveformWidget(QWidget):
         self._panning = True
         span = self._view_end_ms - self._view_start_ms
         if self.width() > 0 and span > 0:
-            new_start = self._drag_start_view - dx * span / self.width()
-            new_start = max(0.0, min(float(self._duration_ms) - span, new_start))
-            self._view_start_ms = new_start
-            self._view_end_ms = new_start + span
-            self.update()
+            self._set_view(self._drag_start_view - dx * span / self.width(), span)
+            self._hold_follow()
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton or not self._pressed:
@@ -753,28 +816,165 @@ class WaveformWidget(QWidget):
         if ms >= 0:
             self.seek_requested.emit(int(ms))
 
+    def mouseDoubleClickEvent(self, event):
+        """Doppio clic sullo sfondo: zoom su tutta la durata. Su un blocco: come un click."""
+        pos = event.position()
+        if event.button() == Qt.LeftButton and self._row_at(pos.x(), pos.y()) < 0:
+            self._pressed = False      # il rilascio che segue non è un secondo click
+            self.reset_zoom()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def wheelEvent(self, event):
-        """Scroll verticale: zoom; scroll orizzontale: pan."""
-        delta = event.angleDelta()
+        """
+        Rotella / due dita: scorre la finestra visibile (solo se c'è zoom).
+        Ctrl/⌘ o Alt + rotella: zoom attorno al cursore. Il playhead non si muove.
+        """
         span = self._view_end_ms - self._view_start_ms
         if span <= 0 or self._duration_ms == 0:
+            event.ignore()
             return
-
-        if abs(delta.y()) >= abs(delta.x()):
-            center_ms = self._x_to_ms(event.position().x())
-            factor = max(0.1, min(10.0, 1.0 - delta.y() / 1200.0))
-            new_span = max(500.0, min(float(self._duration_ms), span * factor))
-            frac = (center_ms - self._view_start_ms) / span if span > 0 else 0.5
-            new_start = center_ms - frac * new_span
+        angle = event.angleDelta()
+        if event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier):
+            # con Alt alcune piattaforme consegnano la rotella verticale come orizzontale
+            d = angle.y() if abs(angle.y()) >= abs(angle.x()) else angle.x()
+            if d:
+                self.zoom_at(event.position().x(), max(0.1, min(10.0, 1.0 - d / 1200.0)))
+            event.accept()
+            return
+        pixel = event.pixelDelta()
+        if not pixel.isNull():
+            # trackpad: spostamento in pixel 1:1 con le dita (verso già "naturale")
+            px = pixel.x() if abs(pixel.x()) > abs(pixel.y()) else pixel.y()
+            delta_ms = -px * span / max(1, self.width())
         else:
-            new_span = span
-            new_start = self._view_start_ms - delta.x() * span / 500.0
-
-        new_start = max(0.0, min(float(self._duration_ms) - new_span, new_start))
-        self._view_start_ms = new_start
-        self._view_end_ms = new_start + new_span
-        self.update()
+            d = angle.x() if abs(angle.x()) > abs(angle.y()) else angle.y()
+            delta_ms = -d / 120.0 * span * _WHEEL_PAN_FRACTION
+        if span >= self._duration_ms:
+            event.ignore()             # tutta la durata già visibile: niente da scorrere
+            return
+        if delta_ms:
+            self.pan_by(delta_ms)
         event.accept()
+
+    def native_gesture(self, event) -> bool:
+        """
+        Pizzico sul trackpad (macOS): zoom attorno al cursore; doppio tocco: tutto.
+        Chiamato da `_GestureFilter` (niente override di `event()`: riceverebbe anche
+        gli eventi della distruzione del widget). True se il gesto è stato gestito.
+        """
+        gesture = event.gestureType()
+        if gesture == Qt.ZoomNativeGesture:
+            self.zoom_by_pinch(event.position().x(), event.value())
+        elif gesture == Qt.SmartZoomNativeGesture:
+            self.reset_zoom()
+        elif gesture not in (Qt.BeginNativeGesture, Qt.EndNativeGesture):
+            return False
+        event.accept()
+        return True
+
+    def keyPressEvent(self, event):
+        """←/→ ±1 s, Home/Fine, +/− zoom attorno al playhead, 0 tutta la durata."""
+        key = event.key()
+        if event.modifiers() & ~Qt.KeypadModifier:
+            super().keyPressEvent(event)
+            return
+        if key in (Qt.Key_Left, Qt.Key_Right) and self._duration_ms > 0:
+            step = -_KEY_SEEK_MS if key == Qt.Key_Left else _KEY_SEEK_MS
+            self.seek_requested.emit(max(0, min(self._duration_ms, self._playhead_ms + step)))
+        elif key == Qt.Key_Home and self._duration_ms > 0:
+            self.seek_requested.emit(0)
+        elif key == Qt.Key_End and self._duration_ms > 0:
+            self.seek_requested.emit(self._duration_ms)
+        elif key in (Qt.Key_Plus, Qt.Key_Equal, Qt.Key_Minus):
+            x = self._ms_to_x(self._playhead_ms)
+            x = self.width() / 2 if x is None else x
+            self.zoom_at(x, _KEY_ZOOM if key != Qt.Key_Minus else 1.0 / _KEY_ZOOM)
+        elif key == Qt.Key_0:
+            self.reset_zoom()
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
+
+    # ----------------------------------------------------------------
+    # Zoom / scorrimento della vista (mai il playhead)
+    # ----------------------------------------------------------------
+
+    def is_zoomed(self) -> bool:
+        """True se la finestra visibile è più corta della durata."""
+        return 0 < self._view_end_ms - self._view_start_ms < self._duration_ms
+
+    def _set_view(self, start_ms: float, span_ms: float) -> bool:
+        """Imposta la finestra visibile (limitata alla durata). True se è cambiata."""
+        if self._duration_ms <= 0 or span_ms <= 0:
+            return False
+        span_ms = min(float(self._duration_ms), span_ms)
+        start_ms = max(0.0, min(float(self._duration_ms) - span_ms, start_ms))
+        if (abs(start_ms - self._view_start_ms) < 1e-6
+                and abs(start_ms + span_ms - self._view_end_ms) < 1e-6):
+            return False
+        self._view_start_ms = start_ms
+        self._view_end_ms = start_ms + span_ms
+        self.update()
+        return True
+
+    def pan_by(self, delta_ms: float) -> bool:
+        """Scorre la finestra visibile di `delta_ms` (solo con zoom attivo)."""
+        if not self.is_zoomed():
+            return False
+        span = self._view_end_ms - self._view_start_ms
+        self._hold_follow()
+        return self._set_view(self._view_start_ms + delta_ms, span)
+
+    def zoom_at(self, x: float, factor: float) -> bool:
+        """Zoom di `factor` (< 1 avvicina) tenendo fermo l'istante sotto la x data."""
+        span = self._view_end_ms - self._view_start_ms
+        if span <= 0 or self._duration_ms == 0 or factor <= 0:
+            return False
+        center_ms = self._x_to_ms(x)
+        new_span = max(_MIN_SPAN_MS, min(float(self._duration_ms), span * factor))
+        frac = (center_ms - self._view_start_ms) / span
+        self._hold_follow()
+        return self._set_view(center_ms - frac * new_span, new_span)
+
+    def zoom_by_pinch(self, x: float, value: float) -> bool:
+        """Pizzico: `value` è la variazione di scala del gesto (> 0 = dita che si aprono)."""
+        return self.zoom_at(x, 1.0 / (1.0 + max(-0.9, value)))
+
+    def reset_zoom(self) -> None:
+        """Mostra tutta la durata (e riattiva subito l'auto-scroll)."""
+        self.resume_follow()
+        if self._duration_ms > 0:
+            self._set_view(0.0, float(self._duration_ms))
+
+    def _hold_follow(self) -> None:
+        self._follow_hold_until = self._clock() + FOLLOW_HOLD_S
+
+    def resume_follow(self) -> None:
+        """Riattiva subito l'auto-scroll del playhead."""
+        self._follow_hold_until = 0.0
+
+    def on_seeked(self, ms: int) -> None:
+        """
+        Seek esplicito (AudioPlayer.seeked, emesso prima di position_changed): riattiva
+        l'auto-scroll e, per la posizione appena chiesta, la vista si sposta solo se il
+        playhead finisce FUORI dalla finestra (un click vicino al bordo non la fa saltare).
+        """
+        self.resume_follow()
+        self._seek_target = int(ms)
+
+    def _follow_suspended(self) -> bool:
+        return self._clock() < self._follow_hold_until
 
     # ----------------------------------------------------------------
     # Helpers
@@ -805,8 +1005,11 @@ class WaveformWidget(QWidget):
         """
         if self._duration_ms == 0 or self._view_end_ms == 0.0 or self._pressed:
             return False
+        if self._follow_suspended():
+            return False
         span = self._view_end_ms - self._view_start_ms
-        margin = span * 0.15
+        # in riproduzione si scorre prima del bordo; dopo un seek solo se è fuori vista
+        margin = 0.0 if self._playhead_ms == self._seek_target else span * 0.15
         if self._view_start_ms + margin <= self._playhead_ms <= self._view_end_ms - margin:
             return False
         new_start = self._playhead_ms - span * 0.2

@@ -47,7 +47,7 @@ from core.audio_player import AudioPlayer
 from ui.inspector_widget import InspectorWidget
 from ui.find_replace_dialog import FindReplaceDialog
 from ui.transport_bar import RATE_STEPS
-from ui.widgets import protect_extension_buttons
+from ui.widgets import focus_owns_key, forward_key, protect_extension_buttons
 from ui import icons, theme
 import platform_support
 
@@ -63,6 +63,18 @@ _HINT_GAP = 6    # spazio tra testo e scorciatoia
 
 # Ritardo con cui si raggruppano gli aggiornamenti O(N) (status, overlay preview)
 SYNC_DEBOUNCE_MS = 50
+
+# Tasti di riproduzione (QShortcut della timeline): (nome, sequenza, metodo)
+PLAYBACK_KEYS = (
+    ("play_pause", "Space", "_shortcut_play_pause"),
+    ("pause", "K", "_jkl_k"),
+    ("rewind", "J", "_jkl_j"),
+    ("forward", "L", "_jkl_l"),
+    ("seek_back", "Left", "_seek_back"),
+    ("seek_forward", "Right", "_seek_forward"),
+    ("prev_subtitle", "Shift+Left", "_go_prev_sub"),
+    ("next_subtitle", "Shift+Right", "_go_next_sub"),
+)
 
 # Nome colore del modello → token del tema
 _MODEL_COLOR_TOKENS = {
@@ -357,6 +369,9 @@ class SubtitleTimeline(QWidget):
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
         self.view.verticalHeader().setVisible(False)
+        # Tab esce dalla tabella (non salta di cella in cella: nessuna trappola per la
+        # tastiera); ↑/↓ cambiano riga, F2/Invio modificano la cella
+        self.view.setTabKeyNavigation(False)
         self.view.setWordWrap(False)
         self.view.setTextElideMode(Qt.ElideRight)
         # Righe da 34 px (mockup); almeno una riga di testo con font grandi / HiDPI
@@ -476,6 +491,7 @@ class SubtitleTimeline(QWidget):
             btn = tb.widgetForAction(act)
             if btn is not None:
                 btn.setAccessibleName(label)
+                btn.setFocusPolicy(Qt.TabFocus)   # la toolbar li crea fuori dalla catena di Tab
         self._sync_undo_tips()
         tb.addSeparator()
 
@@ -615,6 +631,15 @@ class SubtitleTimeline(QWidget):
         """La toolbar (42 px) dell'editor."""
         return self._toolbar
 
+    def focus_chain(self) -> list:
+        """Controlli nell'ordine di Tab: toolbar (sinistra → destra), ricerca, tabella, inspector."""
+        tb = self._toolbar
+        chain = [tb.widgetForAction(self.act_undo), tb.widgetForAction(self.act_redo),
+                 *self._tb_buttons, self._insp_btn, self._search_box,
+                 self._export_btn, self._export_arrow, self.view]
+        chain += self.inspector.focus_chain()
+        return [w for w in chain if w is not None]
+
     def detach_toolbar(self) -> QToolBar:
         """
         Stacca la toolbar dal widget e la restituisce: il workspace la mette a tutta
@@ -687,26 +712,28 @@ class SubtitleTimeline(QWidget):
             "}"
             f"QToolButton#tbInspector:hover {{ background: {c('raise')}; }}"
             f"QToolButton#tbInspector:checked {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QToolButton#tbInspector", 4)
         )
         # Esporta: primario con angoli esterni a 4 px, freccia attaccata (1 px di stacco)
         self._export_btn.setStyleSheet(
             "QPushButton {"
             f"  background: {c('acc_fill')}; color: {c('acc_ink')}; font-weight: 600;"
-            f"  font-size: 13px; border: none; border-radius: 4px; border-top-right-radius: 0;"
-            f"  border-bottom-right-radius: 0; padding: 0 9px; min-height: {_BTN_HEIGHT}px;"
+            "  font-size: 13px; border: 1px solid transparent; border-radius: 4px;"
+            "  border-top-right-radius: 0; border-bottom-right-radius: 0; padding: 0 8px;"
+            f"  min-height: {_BTN_HEIGHT - 2}px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
             f"QPushButton:pressed {{ background: {c('acc_fill_d')}; }}"
-            + theme.focus_rule("QPushButton")
+            + theme.focus_rule_on_accent("QPushButton")
         )
         self._export_arrow.setStyleSheet(
             "QPushButton {"
             f"  background: {c('acc_fill')}; color: {c('acc_ink')};"
-            "  border: none; border-radius: 4px; border-top-left-radius: 0;"
-            f"  border-bottom-left-radius: 0; padding: 0; min-height: {_BTN_HEIGHT}px;"
+            "  border: 1px solid transparent; border-radius: 4px; border-top-left-radius: 0;"
+            f"  border-bottom-left-radius: 0; padding: 0; min-height: {_BTN_HEIGHT - 2}px;"
             "}"
             f"QPushButton:hover {{ background: {c('acc_fill_h')}; }}"
-            + theme.focus_rule("QPushButton")
+            + theme.focus_rule_on_accent("QPushButton")
         )
         self._empty_lbl.setStyleSheet(
             f"color: {c('dim')}; font-size: 13px; background: {c('bg')};"
@@ -810,15 +837,15 @@ class SubtitleTimeline(QWidget):
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(self._delete_selected)
 
-        # Shortcut playback NLE
-        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self._shortcut_play_pause)
-        QShortcut(QKeySequence(Qt.Key_K),     self, activated=lambda: self._if_not_typing(self._jkl_k))
-        QShortcut(QKeySequence(Qt.Key_J),     self, activated=lambda: self._if_not_typing(self._jkl_j))
-        QShortcut(QKeySequence(Qt.Key_L),     self, activated=lambda: self._if_not_typing(self._jkl_l))
-        QShortcut(QKeySequence(Qt.Key_Left),  self, activated=lambda: self._if_not_typing(lambda: self._seek_relative(-1000)))
-        QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self._if_not_typing(lambda: self._seek_relative(1000)))
-        QShortcut(QKeySequence("Shift+Left"),  self, activated=lambda: self._if_not_typing(self._go_prev_sub))
-        QShortcut(QKeySequence("Shift+Right"), self, activated=lambda: self._if_not_typing(self._go_next_sub))
+        # Shortcut playback NLE: attive solo con l'editor visibile (contesto finestra,
+        # genitore = timeline). Il tasto torna al widget col focus se è suo (vedi
+        # `_on_playback_shortcut`): si scrive nei campi, Spazio preme i pulsanti.
+        self._playback_shortcuts: dict = {}
+        for name, seq, method in PLAYBACK_KEYS:
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setObjectName(f"playback_{name}")
+            sc.activated.connect(self._on_playback_shortcut)
+            self._playback_shortcuts[sc.objectName()] = (seq, method)
 
     # ---- API pubblica ----
 
@@ -851,9 +878,13 @@ class SubtitleTimeline(QWidget):
         if self.player is not None:
             try:
                 self.player.position_changed.disconnect(self._on_player_pos)
+                self.player.seeked.disconnect(self._on_user_seek)
             except (RuntimeError, TypeError):
                 pass
         self.player = player
+        # seeked arriva PRIMA di position_changed: la selezione segue il click dell'utente
+        # anche quando il follow della riproduzione è sospeso (vedi _on_user_seek)
+        self.player.seeked.connect(self._on_user_seek)
         self.player.position_changed.connect(self._on_player_pos)
 
     def set_loop(self, on: bool):
@@ -1074,25 +1105,69 @@ class SubtitleTimeline(QWidget):
         self.view.selectRow(row)
         self.view.scrollTo(self.model.index(row, COL_TEXT), QAbstractItemView.EnsureVisible)
 
+    def _on_user_seek(self, ms: int):
+        """
+        Seek esplicito (click su forma d'onda o slider, J/←/→, Maiusc+←/→): la riga del
+        sottotitolo che contiene la nuova posizione diventa subito quella selezionata,
+        anche in pausa e anche con il focus nell'inspector o una selezione multipla
+        (regole del follow della riproduzione, `_follow_blocked`, non applicate).
+        Restano protetti solo l'editing di una cella e il testo non confermato
+        dell'inspector. Tra due sottotitoli la selezione non cambia.
+        """
+        if self.model.rowCount() == 0:
+            return
+        if self.view.state() == QAbstractItemView.State.EditingState:
+            return
+        if self.inspector.has_uncommitted_text():
+            return
+        row = self.row_at_time(ms / 1000.0)
+        if row < 0:
+            return
+        if row == self._current_row() and len(self.view.selectionModel().selectedRows()) <= 1:
+            return
+        self.view.selectRow(row)
+        self.view.scrollTo(self.model.index(row, COL_TEXT), QAbstractItemView.EnsureVisible)
+
     # ---- Shortcut playback ----
 
-    @staticmethod
-    def _focus_is_text_input() -> bool:
-        from PySide6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox
+    def _on_playback_shortcut(self):
+        """
+        Slot unico delle QShortcut di riproduzione. Se il widget col focus usa quel
+        tasto (si scrive in un campo, Spazio su un pulsante, frecce sul volume…) il
+        tasto gli viene restituito; altrimenti si esegue l'azione di riproduzione.
+        """
+        sc = self.sender()
+        entry = self._playback_shortcuts.get(sc.objectName()) if sc is not None else None
+        if entry is None:
+            return
+        seq, method = entry
         fw = QApplication.focusWidget()
-        return isinstance(fw, (QLineEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox))
-
-    def _if_not_typing(self, fn):
-        if not self._focus_is_text_input():
-            fn()
+        if focus_owns_key(fw, seq):
+            # la scorciatoia è disattivata durante l'inoltro: il tasto inviato a mano
+            # ripasserebbe dalla mappa delle scorciatoie e tornerebbe qui
+            sc.setEnabled(False)
+            try:
+                forward_key(fw, seq)
+            finally:
+                sc.setEnabled(True)
+            return
+        getattr(self, method)()
 
     def _seek_relative(self, delta_ms: int):
         if self.player is not None:
             self.player.seek_relative(delta_ms)
 
+    def _seek_back(self):
+        """←: indietro di 1 s."""
+        self._seek_relative(-1000)
+
+    def _seek_forward(self):
+        """→: avanti di 1 s."""
+        self._seek_relative(1000)
+
     def _shortcut_play_pause(self):
         if self.player is not None:
-            self._if_not_typing(self.player.toggle_play_pause)
+            self.player.toggle_play_pause()
 
     @staticmethod
     def _step_rate(rate: float, direction: int) -> float:

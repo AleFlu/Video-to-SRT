@@ -8,7 +8,10 @@ tenta comunque di caricare il file originale: non vengono mai cercati WAV
 "vicini" o temporanei, per non rischiare di riprodurre audio non correlato.
 
 Segnali pubblici:
-    position_changed(ms: int)   — posizione di riproduzione aggiornata
+    position_changed(ms: int)   — posizione di riproduzione aggiornata (anche dopo
+                                  un seek in pausa)
+    seeked(ms: int)             — seek esplicito (click, tastiera): emesso prima di
+                                  position_changed
     duration_changed(ms: int)   — durata totale del media caricato
     state_changed(state: str)   — "playing" | "paused" | "stopped"
     source_ready()              — media caricato e pronto
@@ -36,6 +39,7 @@ class AudioPlayer(QObject):
     """
 
     position_changed = Signal(int)   # ms
+    seeked           = Signal(int)   # ms — seek esplicito (prima di position_changed)
     duration_changed = Signal(int)   # ms
     state_changed    = Signal(str)   # "playing" | "paused" | "stopped"
     source_ready     = Signal()
@@ -52,6 +56,8 @@ class AudioPlayer(QObject):
         # Stato interno
         self._source_path: str = ""
         self._is_ready: bool = False
+        # Seek chiesto prima che il media fosse caricato: applicato al caricamento
+        self._pending_seek: int | None = None
 
         # Timer per emettere position_changed anche a bassa frequenza
         self._pos_timer = QTimer(self)
@@ -77,6 +83,7 @@ class AudioPlayer(QObject):
         della sorgente emette error_occurred.
         """
         self._is_ready = False
+        self._pending_seek = None
         self._source_path = file_path
 
         path = Path(file_path)
@@ -109,16 +116,35 @@ class AudioPlayer(QObject):
         self._player.stop()
 
     def seek(self, ms: int) -> None:
-        """Salta alla posizione indicata in millisecondi."""
+        """
+        Salta alla posizione indicata in millisecondi (limitata a [0, durata]).
+
+        Emette SUBITO `seeked` e poi `position_changed`, anche in pausa: il timer di
+        posizione gira solo in riproduzione, quindi senza questa emissione playhead,
+        timecode, overlay e selezione si aggiornerebbero solo dopo Play. Se il media
+        non è ancora caricato la richiesta resta in sospeso e viene applicata al
+        caricamento (`_on_media_status`).
+        """
+        ms = max(0, int(ms))
         if self._is_ready:
-            self._player.setPosition(max(0, ms))
+            duration = self._player.duration()
+            if duration > 0:
+                ms = min(ms, duration)
+            self._pending_seek = None
+            self._player.setPosition(ms)
+        else:
+            self._pending_seek = ms
+        self.seeked.emit(ms)
+        self.position_changed.emit(ms)
 
     def seek_relative(self, delta_ms: int) -> None:
         """Sposta la posizione di delta_ms millisecondi rispetto all'attuale."""
         self.seek(self.position() + delta_ms)
 
     def position(self) -> int:
-        """Posizione corrente in ms."""
+        """Posizione corrente in ms (quella richiesta, se il seek è ancora in sospeso)."""
+        if self._pending_seek is not None:
+            return self._pending_seek
         return self._player.position()
 
     def duration(self) -> int:
@@ -155,6 +181,7 @@ class AudioPlayer(QObject):
         self._player.setSource(QUrl())
         self._pos_timer.stop()
         self._is_ready = False
+        self._pending_seek = None
         self._source_path = ""
 
     # ----------------------------------------------------------------
@@ -186,6 +213,9 @@ class AudioPlayer(QObject):
             QMediaPlayer.BufferedMedia,
         ):
             self._is_ready = True
+            if self._pending_seek is not None:
+                pending, self._pending_seek = self._pending_seek, None
+                self._player.setPosition(pending)
             self.source_ready.emit()
             self.duration_changed.emit(self._player.duration())
         elif status == QMediaPlayer.EndOfMedia:

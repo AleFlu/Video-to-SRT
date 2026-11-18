@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from core.audio_player import AudioPlayer
 from ui import icons, theme
+from ui.widgets import PROP_ARROWS_SEEK
 import platform_support
 
 # Altezza della barra (mockup)
@@ -172,8 +173,15 @@ class TransportBar(QWidget):
         self.seek_slider.setSingleStep(5)
         self.seek_slider.setPageStep(50)
         self.seek_slider.setFixedHeight(20)
-        self.seek_slider.setToolTip("Posizione: clicca o trascina per spostarti")
+        self.seek_slider.setToolTip(
+            "Posizione: clicca o trascina per spostarti  ·  ←/→ ±1 s")
         self.seek_slider.setAccessibleName("Posizione di riproduzione")
+        self.seek_slider.setAccessibleDescription(
+            "Clic o trascinamento per spostarti. Frecce sinistra/destra: ±1 secondo; "
+            "Pagina su/giù: ±5%; Home/Fine: inizio/fine.")
+        # ←/→ sono il seek ±1 s dell'editor (stesso passo ovunque), non il passo dello slider
+        self.seek_slider.setProperty(PROP_ARROWS_SEEK, True)
+        self.seek_slider.setFocusPolicy(Qt.StrongFocus)
         self.seek_slider.setObjectName("seekSlider")
         self.seek_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
@@ -245,6 +253,11 @@ class TransportBar(QWidget):
         # Stato iniziale disabilitato (nessun file caricato)
         self._set_enabled(False)
 
+    def focus_chain(self) -> list:
+        """Controlli nell'ordine di Tab (sinistra → destra)."""
+        return [self.btn_play, self.btn_stop, self.seek_slider, self.volume_slider,
+                self.rate_combo, self.btn_loop]
+
     # ----------------------------------------------------------------
     # Tema
     # ----------------------------------------------------------------
@@ -291,7 +304,7 @@ class TransportBar(QWidget):
             f"QToolButton#transportLoop:hover {{ background: {c('raise')}; }}"
             f"QToolButton#transportLoop:checked {{ background: {c('raise')};"
             f" border: 1px solid {c('acc')}; }}"
-            + theme.focus_rule("QToolButton#transportPlay", 4)
+            + theme.focus_rule_on_accent("QToolButton#transportPlay", 4)
             + theme.focus_rule("QToolButton#transportStop", 4)
             + theme.focus_rule("QToolButton#transportLoop", 4)
             # velocità: mono, bordo di 1 px
@@ -299,6 +312,10 @@ class TransportBar(QWidget):
             f" border: 1px solid {c('line')}; border-radius: 4px; padding: 0 4px 0 9px;"
             f" min-height: 26px; font-family: {theme.FONT_MONO}; font-size: 13px; }}"
             f"QComboBox#rateCombo:hover {{ background: {c('raise')}; border-color: {c('line_2')}; }}"
+            f"QComboBox#rateCombo:focus {{ border-color: {c('focus')}; }}"
+            # anello di focus degli slider (lo stile della barra toglie quello globale)
+            f"QWidget#transportBar QSlider:focus {{ border: 1px solid {c('focus')};"
+            " border-radius: 3px; }"
         )
         self.label_pos.setStyleSheet(
             f"color: {c('text')}; letter-spacing: 0.2px; font-family: {theme.FONT_MONO};"
@@ -341,7 +358,7 @@ class TransportBar(QWidget):
             self.label_pos.setText(_ms_to_full_label(ms))
             if self._duration_ms > 0:
                 self._syncing = True
-                self.seek_slider.setValue(int(ms * 1000 / self._duration_ms))
+                self.seek_slider.setValue(round(ms * 1000 / self._duration_ms))
                 self._syncing = False
 
     @Slot(int)
@@ -390,7 +407,9 @@ class TransportBar(QWidget):
             self._player.stop()
 
     def _value_to_ms(self, value: int) -> int:
-        return int(value * self._duration_ms / 1000)
+        # arrotondato (non troncato): valore → ms → valore torna identico, lo slider
+        # non "scivola" indietro di un passo a ogni seek da tastiera
+        return round(value * self._duration_ms / 1000)
 
     def _on_seek_pressed(self):
         self._dragging_seek = True

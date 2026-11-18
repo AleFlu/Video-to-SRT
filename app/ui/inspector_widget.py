@@ -54,6 +54,7 @@ class InspectorWidget(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFocusPolicy(Qt.NoFocus)   # contenitore: Tab va ai controlli, non qui
         outer.addWidget(scroll)
 
         content = QWidget()
@@ -204,7 +205,7 @@ class InspectorWidget(QWidget):
         layout.addStretch(1)
 
         # Ordine di tab: Inizio → Fine → spostamenti → Testo
-        chain = [self.start_spin, self.end_spin, *self._shift_buttons, self.text_edit]
+        chain = self.focus_chain()
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
 
@@ -214,6 +215,10 @@ class InspectorWidget(QWidget):
         self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
+
+    def focus_chain(self) -> list:
+        """Campi nell'ordine di Tab: Inizio → Fine → spostamenti → Testo."""
+        return [self.start_spin, self.end_spin, *self._shift_buttons, self.text_edit]
 
     # ---- Tema ----
     @staticmethod

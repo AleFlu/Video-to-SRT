@@ -6,6 +6,8 @@ widgets.py — Piccoli widget riutilizzabili dell'interfaccia.
   - DepsBanner  : avviso a una riga in Home quando FFmpeg o il modello Whisper mancano.
   - ToggleSwitch: interruttore rettangolare 38×20 con etichetta (acceso/spento/non disponibile).
   - fmt_size    : dimensione file leggibile ("12.3 MB").
+  - focus_owns_key / forward_key: i tasti senza modificatori delle scorciatoie di
+                  riproduzione restano al widget col focus quando è lui a usarli.
 """
 
 from __future__ import annotations
@@ -13,12 +15,57 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QSize, Signal
-from PySide6.QtGui import QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QIcon, QKeyEvent, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QAbstractButton, QAbstractSlider, QAbstractSpinBox, QApplication, QComboBox, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from ui import icons, theme
+
+# Proprietà dinamiche dei widget per `focus_owns_key`
+PROP_SPACE_ACTIVATES = "spaceActivates"   # widget custom attivabile con Spazio
+PROP_ARROWS_SEEK = "arrowsSeek"           # slider le cui frecce sono il seek ±1 s globale
+
+
+def is_text_input(widget) -> bool:
+    """True se `widget` è un campo in cui si scrive (riga, area di testo, spin box)."""
+    return isinstance(widget, (QLineEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox))
+
+
+def focus_owns_key(widget, seq: str) -> bool:
+    """
+    True se il widget col focus usa da sé il tasto `seq` (una delle scorciatoie di
+    riproduzione senza Ctrl: "Space", "J", "K", "L", "Left", "Right", "Shift+Left",
+    "Shift+Right"). In quel caso la scorciatoia non deve rubargli il tasto:
+      - nei campi di testo si scrive (tutti i tasti);
+      - Spazio preme pulsanti, interruttori, tab e apre le combo;
+      - ←/→ muovono gli slider (volume), salvo quelli marcati `arrowsSeek`.
+    """
+    if widget is None:
+        return False
+    if is_text_input(widget):
+        return True
+    if seq == "Space":
+        return (isinstance(widget, (QAbstractButton, QComboBox))
+                or bool(widget.property(PROP_SPACE_ACTIVATES)))
+    if seq in ("Left", "Right"):
+        return isinstance(widget, QAbstractSlider) and not widget.property(PROP_ARROWS_SEEK)
+    return False
+
+
+def forward_key(widget, seq: str) -> None:
+    """Consegna a `widget` il tasto premuto (che una QShortcut aveva intercettato)."""
+    combo = QKeySequence(seq)[0]
+    key, mods = combo.key(), combo.keyboardModifiers()
+    if key == Qt.Key_Space:
+        text = " "
+    elif Qt.Key_A <= key <= Qt.Key_Z:
+        text = chr(int(key)).lower()
+    else:
+        text = ""
+    QApplication.sendEvent(widget, QKeyEvent(QEvent.KeyPress, key, mods, text))
 
 
 def fmt_size(path: str) -> str:
@@ -311,6 +358,7 @@ class ToggleSwitch(QWidget):
         self._name = name
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setProperty(PROP_SPACE_ACTIVATES, True)   # Spazio cambia stato (non è Play)
         self.setObjectName("toggleSwitch")
         self.setMinimumHeight(max(28, self.fontMetrics().height() + 8))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)

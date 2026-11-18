@@ -81,25 +81,43 @@ CI: stessi `ruff check app` + `pytest` su macOS/Windows/Ubuntu (Python 3.11, sen
 
 ## Shortcut (⌘ su macOS = Ctrl altrove; etichette via `platform_support.shortcut_label`)
 
+Verificate da `app/tests/test_shortcuts_audit.py` (sequenze vere, focus su tabella, ricerca,
+testo dell'Inspector, forma d'onda, Home/risultato ed Esportazione).
+
 | Shortcut | Azione |
 |---|---|
-| Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
-| Ctrl+K / Ctrl+M / Ctrl+Shift+K | Dividi / Unisci col successivo / Elimina selezionati |
-| Ctrl+F / Ctrl+Alt+F | Trova (ricerca inline) / Trova e sostituisci |
-| Ctrl+I | Mostra/nascondi Inspector |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / Redo (in un campo di testo agiscono sul campo) |
+| Ctrl+K / Ctrl+M / Ctrl+Shift+K | Dividi / Unisci col successivo / Elimina selezionati (solo Editor) |
+| Canc / ⌫ (focus sulla tabella) | Elimina selezionati |
+| Ctrl+F / Ctrl+Alt+F | Trova (ricerca inline) / Trova e sostituisci (Windows/Linux anche Ctrl+H) |
+| Ctrl+I | Mostra/nascondi Inspector (solo Editor) |
+| Ctrl+Invio (testo dell'Inspector) | Applica il testo |
 | Ctrl+O / Ctrl+N | Apri file / nuova trascrizione |
 | Ctrl+S / Ctrl+E | Esporta SRT / apri tab Esportazione |
 | Ctrl+Shift+S | Salva progetto `.v2srt` |
-| Ctrl+Shift+T / Ctrl+W | Nuovo / chiudi tab progetto |
-| Ctrl+Shift+] / [ | Tab progetto successivo / precedente |
+| Ctrl+Shift+T / Ctrl+W | Nuovo / chiudi tab progetto (Ctrl+W solo nella finestra principale; nel dialog Trova lo chiude) |
+| Ctrl+Shift+] / [ — anche Ctrl+Tab / Ctrl+Shift+Tab (mac ⌃Tab / ⌃⇧Tab) | Tab progetto successivo / precedente |
 | Ctrl+Shift+L | Cambia tema chiaro/scuro |
-| Meta+Ctrl+F (mac) / F11 | Schermo intero |
-| Space / K / J / L | Play-Pausa / pausa / seek −2 s / play (non attivi mentre si scrive) |
-| ← / → | Seek ±1 s |
+| Meta+Ctrl+F (mac ⌃⌘F) / F11 | Schermo intero |
+| Space / K / J / L | Play-Pausa / pausa / seek −2 s / play (solo con l'Editor visibile; mai mentre si scrive; Spazio su un pulsante lo preme) |
+| ← / → | Seek ±1 s (sullo slider del volume lo regolano) |
 | Shift+← / Shift+→ | Sottotitolo precedente / successivo |
+| Forma d'onda col focus | ←/→ ±1 s, Home/Fine inizio/fine, +/− zoom, 0 tutta la durata |
+
+Forma d'onda col mouse/trackpad: rotella o due dita (verticale e orizzontale) = scorrimento
+(solo con zoom, il playhead non si muove); Ctrl/⌘ o Alt + rotella e pizzico = zoom attorno al
+cursore; doppio clic sullo sfondo = tutta la durata; clic = seek. Dopo uno scorrimento manuale
+l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek esplicito lo riattiva.
 
 ## Trappole note
 
+- **Seek in pausa**: `AudioPlayer.seek` emette subito `seeked` e poi `position_changed` (in pausa
+  il backend non notifica; prima del caricamento il seek resta in sospeso). `seeked` sposta la
+  selezione della tabella anche dove il follow della riproduzione (`_follow_blocked`) è sospeso.
+- **Tasti di riproduzione**: sono QShortcut della timeline (contesto finestra). Se il widget col
+  focus usa quel tasto (campo di testo, Spazio su pulsanti/interruttori, frecce sul volume) il
+  tasto gli viene restituito (`ui.widgets.focus_owns_key`); widget custom attivabili con Spazio:
+  proprietà `spaceActivates`.
 - **Inspector passivo**: non modifica il modello; emette segnali `(row, valore)` e l'editor crea
   il comando. Se scrivesse direttamente: dataChanged → refresh → editingFinished → loop infinito.
 - **Timestamp in due formati**: `srt_io.format_timestamp_srt` → `HH:MM:SS,mmm` (virgola, standard SRT);

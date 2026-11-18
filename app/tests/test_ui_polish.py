@@ -103,6 +103,7 @@ class _StubPlayer(QObject):
     """Player finto: registra seek/rate senza backend multimediale."""
 
     position_changed = Signal(int)
+    seeked = Signal(int)
     duration_changed = Signal(int)
     state_changed = Signal(str)
     source_ready = Signal()
