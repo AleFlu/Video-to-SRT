@@ -259,13 +259,31 @@ def _compute_peaks_ffmpeg(file_path: str, target: int, cancel: Optional[threadin
 # Worker per il caricamento audio in background
 # -----------------------------------------------------------------------
 
-class _AudioLoaderSignals(QObject):
-    done = Signal(int, object)   # (generazione, risultato di compute_peaks)
-    error = Signal(int, str)     # (generazione, messaggio)
+class _AudioLoaderRelay(QObject):
+    """Unico ponte thread → UI per tutti i loader (crea il primo WaveformWidget, nel thread UI).
+
+    Non viene mai distrutto: se ogni loader avesse il proprio QObject, il thread di sistema ne
+    rilascerebbe l'ultimo riferimento a fine lavoro e il QObject verrebbe distrutto fuori dal
+    suo thread mentre la UI ne consegna ancora gli eventi (crash casuali).
+    Il primo argomento è il loader che ha emesso: ogni widget scarta quelli non suoi.
+    """
+
+    done = Signal(object, object)   # (loader, risultato di compute_peaks)
+    error = Signal(object, str)     # (loader, messaggio)
+
+
+_RELAY: _AudioLoaderRelay | None = None
+
+
+def _loader_relay() -> _AudioLoaderRelay:
+    global _RELAY
+    if _RELAY is None:
+        _RELAY = _AudioLoaderRelay()
+    return _RELAY
 
 
 class _AudioLoader(threading.Thread):
-    """Calcola i picchi in un thread di sistema (nessun oggetto Qt-widget toccato)."""
+    """Calcola i picchi in un thread di sistema (nessun oggetto Qt creato o posseduto)."""
 
     def __init__(self, file_path: str, generation: int, target: int = TARGET_BUCKETS):
         super().__init__(daemon=True)
@@ -273,20 +291,22 @@ class _AudioLoader(threading.Thread):
         self.generation = generation
         self.target = target
         self.cancel = threading.Event()
-        self.signals = _AudioLoaderSignals()
 
     def run(self):
+        relay = _RELAY   # creato dal widget prima dello start
+        if relay is None:
+            return
         try:
             result = compute_peaks(self.file_path, self.target, self.cancel)
             if result is not None and not self.cancel.is_set():
-                self.signals.done.emit(self.generation, result)
+                relay.done.emit(self, result)
         except ImportError as e:
-            self.signals.error.emit(self.generation, f"numpy/soundfile non disponibili ({e})")
+            relay.error.emit(self, f"numpy/soundfile non disponibili ({e})")
         except FileNotFoundError:
-            self.signals.error.emit(self.generation, "ffmpeg non trovato")
+            relay.error.emit(self, "ffmpeg non trovato")
         except Exception as e:  # noqa: BLE001
             logger.warning("Calcolo forma d'onda fallito: %s", self.file_path, exc_info=True)
-            self.signals.error.emit(self.generation, str(e) or type(e).__name__)
+            relay.error.emit(self, str(e) or type(e).__name__)
 
 
 # -----------------------------------------------------------------------
@@ -337,6 +357,11 @@ class WaveformWidget(QWidget):
         self._duration_ms: int = 0
         self._loading: bool = False
         self._loader: _AudioLoader | None = None
+        # Relay condiviso (thread UI). Slot bound + QueuedConnection: eseguiti nel thread UI
+        # e scollegati automaticamente se il widget viene distrutto prima della fine.
+        relay = _loader_relay()
+        relay.done.connect(self._on_relay_done, Qt.ConnectionType.QueuedConnection)
+        relay.error.connect(self._on_relay_error, Qt.ConnectionType.QueuedConnection)
 
         # Sottotitoli + indice ordinato per inizio (bisect)
         self._subtitles: List[Subtitle] = []
@@ -408,10 +433,6 @@ class WaveformWidget(QWidget):
         self._invalidate()
 
         loader = _AudioLoader(file_path, self._load_generation)
-        # Slot bound + QueuedConnection: eseguiti nel thread UI e scollegati
-        # automaticamente se il widget viene distrutto prima della fine.
-        loader.signals.done.connect(self._on_loader_done, Qt.ConnectionType.QueuedConnection)
-        loader.signals.error.connect(self._on_loader_error, Qt.ConnectionType.QueuedConnection)
         self._loader = loader
         loader.start()
 
@@ -495,6 +516,14 @@ class WaveformWidget(QWidget):
     # ----------------------------------------------------------------
     # Slot interni (loader)
     # ----------------------------------------------------------------
+
+    def _on_relay_done(self, loader, result):
+        if loader is self._loader:
+            self._on_loader_done(loader.generation, result)
+
+    def _on_relay_error(self, loader, msg: str):
+        if loader is self._loader:
+            self._on_loader_error(loader.generation, msg)
 
     def _on_loader_done(self, generation: int, result):
         if generation != self._load_generation:

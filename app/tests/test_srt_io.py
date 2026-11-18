@@ -209,19 +209,19 @@ def test_write_vtt_creates_file(tmp_path, subs):
     out = tmp_path / "out.vtt"
     write_vtt(subs, str(out))
     assert out.exists()
-    assert out.read_text().startswith("WEBVTT")
+    assert out.read_text(encoding="utf-8").startswith("WEBVTT")
 
 def test_write_txt_creates_file(tmp_path, subs):
     out = tmp_path / "out.txt"
     write_txt(subs, str(out))
     assert out.exists()
-    assert "Ciao mondo" in out.read_text()
+    assert "Ciao mondo" in out.read_text(encoding="utf-8")
 
 def test_write_ass_creates_file(tmp_path, subs):
     out = tmp_path / "out.ass"
     write_ass(subs, str(out))
     assert out.exists()
-    assert "[Script Info]" in out.read_text()
+    assert "[Script Info]" in out.read_text(encoding="utf-8")
 
 
 # ── unique_output_path ────────────────────────────────────────────────────────

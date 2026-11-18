@@ -41,5 +41,6 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app
 
+      # -v: in caso di crash nativo (segfault/abort) il log mostra quale test era in corso
       - name: Test (pytest)
-        run: python -m pytest -q
+        run: python -X faulthandler -m pytest -v

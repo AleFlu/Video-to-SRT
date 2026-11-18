@@ -118,7 +118,7 @@ def test_waveform_failure_degrades_without_dialog(app, monkeypatch):
 
 def test_removed_preview_timecode_has_no_users(app):
     for f in list(UI.glob("*.py")):
-        assert "timecode_lbl" not in f.read_text(), f.name
+        assert "timecode_lbl" not in f.read_text(encoding="utf-8"), f.name
 
 
 def test_every_theme_token_used_in_ui_exists(app):
@@ -128,7 +128,7 @@ def test_every_theme_token_used_in_ui_exists(app):
     for f in UI.glob("*.py"):
         if f.name == "theme.py":
             continue
-        used |= set(re.findall(r"""\b(?:c|qcolor)\(\s*['"](\w+)['"]""", f.read_text()))
+        used |= set(re.findall(r"""\b(?:c|qcolor)\(\s*['"](\w+)['"]""", f.read_text(encoding="utf-8")))
     assert used - keys == set()
 
 
@@ -136,7 +136,7 @@ def test_no_text_glyph_icons_in_ui_strings(app):
     glyphs = "●▶■←→★✓⚠◧↑↩"
     bad = []
     for f in UI.glob("*.py"):
-        for n, line in enumerate(f.read_text().splitlines(), 1):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#")[0]
             if re.search(r"""(QLabel|QPushButton|QToolButton|QAction|setText|emit)\(\s*f?["'][^"']*[%s]"""
                          % glyphs, code):

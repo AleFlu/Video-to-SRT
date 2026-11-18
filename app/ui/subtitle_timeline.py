@@ -22,7 +22,9 @@ import bisect
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal, QByteArray, QModelIndex, QRect, QSettings, QSize, QTimer
+from PySide6.QtCore import (
+    Qt, Signal, QByteArray, QEvent, QModelIndex, QObject, QRect, QSettings, QSize, QTimer,
+)
 from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QUndoStack, QShortcut,
 )
@@ -57,6 +59,11 @@ _sl = platform_support.shortcut_label
 _TOOLBAR_HEIGHT = 42
 _BTN_HEIGHT = 28
 _SEARCH_WIDTH = 250
+_SEARCH_WIDTH_COMPACT = 150
+# Livelli di compattezza della toolbar quando la finestra è stretta: prima spariscono le
+# scorciatoie disegnate, poi i testi (resta l'icona, il nome è nel tooltip), infine la
+# ricerca si accorcia. Così ricerca ed Esporta non finiscono mai nel menu di overflow.
+TOOLBAR_LEVELS = 4
 _ROW_HEIGHT = 34
 _HINT_PAD = 9    # padding laterale dei pulsanti
 _HINT_GAP = 6    # spazio tra testo e scorciatoia
@@ -160,14 +167,21 @@ class _HintButton(QPushButton):
     def __init__(self, text: str, hint: str = "", parent=None):
         super().__init__(text, parent)
         self._hint = hint
+        self._full_text = text
+        self._show_hint = True
         self.setObjectName("tbButton")
 
     def hint(self) -> str:
-        return self._hint
+        return self._hint if self._show_hint else ""
+
+    def set_compact(self, level: int) -> None:
+        """0 completo · 1 senza scorciatoia · 2+ solo icona."""
+        self._show_hint = level < 1
+        self.setText(self._full_text if level < 2 else "")
 
     def paintEvent(self, event):  # noqa: N802 (override Qt)
         super().paintEvent(event)
-        _paint_hint(self, self._hint)
+        _paint_hint(self, self.hint())
 
 
 class _HintToolButton(QToolButton):
@@ -176,11 +190,33 @@ class _HintToolButton(QToolButton):
     def __init__(self, hint: str = "", parent=None):
         super().__init__(parent)
         self._hint = hint
+        self._show_hint = True
         self.setObjectName("tbInspector")
+
+    def hint(self) -> str:
+        return self._hint if self._show_hint else ""
+
+    def set_compact(self, level: int) -> None:
+        self._show_hint = level < 1
+        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if level < 2
+                                else Qt.ToolButtonIconOnly)
 
     def paintEvent(self, event):  # noqa: N802 (override Qt)
         super().paintEvent(event)
-        _paint_hint(self, self._hint)
+        _paint_hint(self, self.hint())
+
+
+class _ToolbarFitter(QObject):
+    """Al ridimensionamento della toolbar sceglie quanto compattarla (vedi fit_toolbar)."""
+
+    def __init__(self, timeline: "SubtitleTimeline"):
+        super().__init__(timeline)
+        self._timeline = timeline
+
+    def eventFilter(self, obj, event):  # noqa: N802 (override Qt)
+        if event.type() in (QEvent.Resize, QEvent.Show):
+            self._timeline.fit_toolbar()
+        return False
 
 
 class _SearchField(QLineEdit):
@@ -623,6 +659,10 @@ class SubtitleTimeline(QWidget):
         self.act_find_replace.triggered.connect(self.open_find_replace)
 
         self._toolbar = tb
+        self._toolbar_level = 0
+        self._fitting_toolbar = False
+        self._toolbar_fitter = _ToolbarFitter(self)
+        tb.installEventFilter(self._toolbar_fitter)
         self._apply_toolbar_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._apply_toolbar_palette)
@@ -703,7 +743,8 @@ class SubtitleTimeline(QWidget):
                 f"QPushButton:disabled {{ color: {c('faint')}; }}"
                 + theme.focus_rule("QPushButton", 4)
             )
-        right = _HINT_PAD + _HINT_GAP + _hint_width(self._insp_btn._hint)
+        insp_hint = self._insp_btn.hint()
+        right = _HINT_PAD + (_HINT_GAP + _hint_width(insp_hint) if insp_hint else 0)
         self._insp_btn.setStyleSheet(
             "QToolButton#tbInspector {"
             f"  color: {c('text')}; padding: 0 {right}px 0 {_HINT_PAD}px;"
@@ -761,9 +802,40 @@ class SubtitleTimeline(QWidget):
     # ---- Ricerca inline ----
 
     def focus_search(self):
-        """Porta il focus sulla casella di ricerca inline."""
+        """Porta il focus sulla casella di ricerca inline (se la finestra è così stretta
+        che la casella non si vede, apre Trova e sostituisci)."""
+        if not self._search_box.isVisible() and self._toolbar.isVisible():
+            self.open_find_replace()
+            return
         self._search_box.setFocus()
         self._search_box.selectAll()
+
+    def toolbar_level(self) -> int:
+        return self._toolbar_level
+
+    def fit_toolbar(self) -> None:
+        """Sceglie il livello di compattezza più basso con cui la toolbar ci sta tutta."""
+        tb = self._toolbar
+        if self._fitting_toolbar or tb.width() <= 0:
+            return
+        self._fitting_toolbar = True
+        try:
+            for level in range(TOOLBAR_LEVELS):
+                self._apply_toolbar_level(level)
+                if tb.sizeHint().width() <= tb.width():
+                    break
+        finally:
+            self._fitting_toolbar = False
+
+    def _apply_toolbar_level(self, level: int) -> None:
+        if level == self._toolbar_level:
+            return
+        self._toolbar_level = level
+        for b in (*self._tb_buttons, self._insp_btn):
+            b.set_compact(level)
+        self._search_box.setFixedWidth(_SEARCH_WIDTH if level < 3 else _SEARCH_WIDTH_COMPACT)
+        self._apply_toolbar_palette()
+        self._toolbar.layout().invalidate()
 
     def _on_search(self, text: str):
         self._search_idx = -1
