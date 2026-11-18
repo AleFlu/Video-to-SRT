@@ -61,7 +61,8 @@ def _custom_config() -> TranscriptionConfig:
             condition_on_previous_text=True,
         ),
         vad=VadOptions(threshold=0.4, min_silence_duration_ms=300, speech_pad_ms=200),
-        readability=ReadabilityLimits(max_chars_per_line=32, max_lines=1, max_cps=15.0,
+        readability=ReadabilityLimits(subtitle_format="reel", max_chars_per_line=32,
+                                      max_lines=1, max_cps=15.0,
                                       warn_cps=12.0, min_duration_s=0.8, max_duration_s=5.0,
                                       min_gap_s=0.1, keep_low_confidence_words=False),
     )
@@ -692,61 +693,88 @@ def test_home_config_label_uses_theme_tokens(ui_env):
         theme.MANAGER.theme_changed.emit(original)
 
 
-# ── Una riga per sottotitolo ──────────────────────────────────────────────────
+# ── Formato dei sottotitoli: Film e TV / Reel ─────────────────────────────────
 
-def test_home_one_line_toggle_sets_max_lines(ui_env):
-    from PySide6.QtTest import QTest
+def test_format_presets():
+    film = ReadabilityLimits()
+    assert film.subtitle_format == "film" and not film.light_punctuation
+    assert (film.max_lines, film.max_chars_per_line) == (2, 42)
+    reel = film.with_format("reel")
+    assert reel.light_punctuation
+    assert (reel.max_lines, reel.max_chars_per_line, reel.max_duration_s) == (1, 32, 4.0)
+    # gli altri limiti restano quelli di partenza; tornare a film ridà i predefiniti
+    assert (reel.max_cps, reel.warn_cps, reel.min_gap_s) == (film.max_cps, film.warn_cps,
+                                                            film.min_gap_s)
+    assert reel.with_format("film") == film
+    with pytest.raises(ValueError, match="subtitle_format"):
+        ReadabilityLimits(subtitle_format="tiktok")
+
+
+def test_format_round_trips_in_the_file():
+    cfg = replace(TranscriptionConfig(),
+                  readability=ReadabilityLimits().with_format("reel"))
+    assert TranscriptionConfig.from_json(cfg.to_json()) == cfg
+    # file senza il campo (versioni precedenti): formato film
+    data = TranscriptionConfig().to_dict()
+    del data["readability"]["subtitle_format"]
+    assert TranscriptionConfig.from_dict(data).readability.subtitle_format == "film"
+
+
+def test_light_punctuation():
+    from core.subtitle_layout import light_punctuation
+    assert light_punctuation("Ci vediamo domani.") == "Ci vediamo domani"
+    assert light_punctuation("e poi, ") == "e poi"
+    assert light_punctuation("ecco cosa serve:") == "ecco cosa serve"
+    assert light_punctuation("Davvero?") == "Davvero?"
+    assert light_punctuation("Basta!") == "Basta!"
+    assert light_punctuation("e quindi…") == "e quindi…"
+    assert light_punctuation("Sì, va bene.") == "Sì, va bene"   # la virgola interna resta
+
+
+def test_engine_light_punctuation_only_for_reels():
+    import engine
+    words = [{"word": w, "start": i * 0.4, "end": i * 0.4 + 0.3, "probability": 0.9}
+             for i, w in enumerate([" Ciao", " a", " tutti.", " Come", " state?"])]
+    seg = {"start": 0.0, "end": 2.0, "text": "Ciao a tutti. Come state?", "words": words}
+    film = engine._build_subtitles([seg], ReadabilityLimits().layout_rules(), 3.0, True)
+    reel = engine._build_subtitles([seg], ReadabilityLimits().layout_rules(), 3.0, True,
+                                   light_punct=True)
+    assert " ".join(s["text"] for s in film) == "Ciao a tutti. Come state?"
+    assert all(not s["text"].endswith((".", ",")) for s in reel)
+    assert reel[-1]["text"].endswith("?")
+
+
+def test_home_format_menu_sets_preset(ui_env):
     from ui.home_widget import HomeWidget
     home = HomeWidget()
-    assert not home.one_line_toggle.isChecked()
-    assert home.current_config().readability.max_lines == 2
-    QTest.mouseClick(home.one_line_toggle, Qt.LeftButton)
-    assert home.current_config().readability.max_lines == 1
+    assert home.format_combo.currentData() == "film"
+    assert home.current_config() == TranscriptionConfig()
+    home.format_combo.setCurrentIndex(home.format_combo.findData("reel"))
+    r = home.current_config().readability
+    assert (r.subtitle_format, r.max_lines, r.max_chars_per_line) == ("reel", 1, 32)
+    assert "Reel e social" in home._preset_lbl.text()
     # è un controllo della Home, non un parametro avanzato: l'intestazione non cambia
     assert home._config_lbl.full_text() == "Parametri predefiniti"
-    assert set(home._get_settings()) == {"model_size", "language", "vad_filter", "denoise",
-                                         "high_accuracy", "beam_size"}
-    QTest.mouseClick(home.one_line_toggle, Qt.LeftButton)
+    home.format_combo.setCurrentIndex(home.format_combo.findData("film"))
     assert home.current_config() == TranscriptionConfig()
 
 
-def test_home_one_line_follows_config_and_keeps_other_line_counts(ui_env):
+def test_home_format_follows_config_and_keeps_custom_limits(ui_env):
     from ui.home_widget import HomeWidget
     home = HomeWidget()
-    one = replace(TranscriptionConfig(), readability=ReadabilityLimits(max_lines=1))
-    home.apply_config(one)
-    assert home.one_line_toggle.isChecked()
-    assert home.current_config() == one
+    reel = replace(TranscriptionConfig(), readability=ReadabilityLimits().with_format("reel"))
+    home.apply_config(reel)
+    assert home.format_combo.currentData() == "reel"
+    assert home.current_config() == reel
     assert home._config_lbl.full_text() == "Parametri predefiniti"
-    home.one_line_toggle.setChecked(False)
-    assert home.current_config() == TranscriptionConfig()
-    # 3 righe da file: l'interruttore spento le conserva, acceso passa a una riga
+    # limiti personalizzati da file: restano finché non si cambia formato
     three = replace(TranscriptionConfig(), readability=ReadabilityLimits(max_lines=3))
     home.apply_config(three)
-    assert not home.one_line_toggle.isChecked()
+    assert home.format_combo.currentData() == "film"
     assert home.current_config() == three
     assert home._config_lbl.full_text() == "Parametri personalizzati"
-    home.one_line_toggle.setChecked(True)
+    home.format_combo.setCurrentIndex(home.format_combo.findData("reel"))
     assert home.current_config().readability.max_lines == 1
-    home.one_line_toggle.setChecked(False)
-    assert home.current_config() == three
-
-
-def test_home_one_line_row_uses_theme_tokens(ui_env):
-    from ui import theme
-    from ui.home_widget import HomeWidget
-    home = HomeWidget()
-    assert home.one_line_toggle.accessibleName() == "Una riga per sottotitolo: Disattiva"
-    original = theme.get_theme()
-    try:
-        for name in ("light", "dark"):
-            theme.set_theme(name)
-            theme.MANAGER.theme_changed.emit(name)
-            assert theme.c("text") in home._one_line_title.styleSheet()
-            assert theme.c("dim") in home._one_line_desc.styleSheet()
-    finally:
-        theme.set_theme(original)
-        theme.MANAGER.theme_changed.emit(original)
 
 
 def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, qapp):
@@ -761,8 +789,8 @@ def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, q
         return w.rect().translated(w.mapTo(home, w.rect().topLeft()))
 
     assert not rect(home._model_hint).intersects(rect(home.model_combo))
-    assert home.one_line_toggle.parentWidget().height() >= \
-        home.one_line_toggle.parentWidget().sizeHint().height()
+    assert home.accuracy_toggle.parentWidget().height() >= \
+        home.accuracy_toggle.parentWidget().sizeHint().height()
     # il pulsante resta sempre visibile, sotto l'area che scorre
     viewport = home._settings_scroll.viewport()
     assert rect(viewport).bottom() < rect(home.start_btn).top()
@@ -803,10 +831,11 @@ def test_export_wraps_on_two_lines_even_in_one_line_mode():
     assert wrap_subtitle_text(short) == short
 
 
-def test_one_line_reaches_the_engine_and_is_remembered(window, ui_env, monkeypatch, tmp_path):
+def test_reel_format_reaches_the_engine_and_is_remembered(window, ui_env, monkeypatch,
+                                                          tmp_path):
     from ui.prefs import read_config
     pw = window._active()
-    pw.home.one_line_toggle.setChecked(True)
+    pw.home.format_combo.setCurrentIndex(pw.home.format_combo.findData("reel"))
     got = {}
     monkeypatch.setattr(pw.progress, "start",
                         lambda path, settings, config=None: got.update(config=config))
@@ -815,7 +844,8 @@ def test_one_line_reaches_the_engine_and_is_remembered(window, ui_env, monkeypat
     pw.home._on_file_selected(str(clip))
     pw.home._on_start()
     assert got["config"].readability.layout_rules().max_lines == 1
-    assert read_config(_FakeSettings())[0].readability.max_lines == 1
+    assert got["config"].readability.light_punctuation
+    assert read_config(_FakeSettings())[0].readability.subtitle_format == "reel"
 
 
 def _file_menu_texts(win) -> list:
@@ -926,7 +956,7 @@ def test_saved_config_restored_at_startup(ui_env, qapp):
     try:
         assert win._active().home.current_config().decoding == _custom_config().decoding
         assert win._active().home.config_name() == "podcast"
-        assert win._active().home.one_line_toggle.isChecked()      # max_lines = 1
+        assert win._active().home.format_combo.currentData() == "reel"
         assert math.isclose(active_readability().max_cps, 15.0)
     finally:
         for pw in win._projects:

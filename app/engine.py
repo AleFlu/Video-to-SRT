@@ -23,7 +23,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.constants import MAX_CHARS_PER_LINE  # noqa: F401 — riesportata per compatibilità
 from core.constants import normalize_language
-from core.subtitle_layout import LayoutRules, find_uncovered_speech, layout, words_from_segments
+from core.subtitle_layout import (
+    LayoutRules, find_uncovered_speech, layout, light_punctuation, words_from_segments,
+)
 from core.transcription_config import ITALIAN_PROMPT  # noqa: F401 — riesportata per compatibilità
 from core.transcription_config import TranscriptionConfig, VadOptions
 from platform_support import cpu_threads, ffmpeg_executable_name, subprocess_kwargs
@@ -484,18 +486,22 @@ def preload_model(model_size: str = DEFAULT_MODEL,
 # Composizione dei sottotitoli
 # ============================================================
 def _build_subtitles(raw_segments: Sequence[Any], rules: LayoutRules,
-                     audio_end: Optional[float], italian: bool) -> List[Dict]:
+                     audio_end: Optional[float], italian: bool,
+                     light_punct: bool = False) -> List[Dict]:
     """Segmenti Whisper → sottotitoli definitivi ``{"start", "end", "text", "confidence"}``.
 
     ``core.subtitle_layout.layout`` decide divisione, testo e tempi (regole Netflix
     italiane); qui si aggiunge solo la correzione del code-switching se la lingua
     effettiva è l'italiano. Il testo non va a capo (lo fa l'esportazione) e i tempi sono
-    già quelli finali: nessuno li deve ritoccare dopo.
+    già quelli finali: nessuno li deve ritoccare dopo. ``light_punct`` (formato reel)
+    toglie punto e virgola in fondo a ogni sottotitolo.
     """
     subs = layout(raw_segments, rules, audio_end=audio_end)
-    if italian:
-        for sub in subs:
+    for sub in subs:
+        if italian:
             sub["text"] = _postprocess_codeswitching(sub["text"])
+        if light_punct:
+            sub["text"] = light_punctuation(sub["text"])
     return subs
 
 
@@ -760,7 +766,8 @@ def _transcribe_whisperx(
     status("WhisperX · Segmentazione sottotitoli...")
     italian = language == "it" or (language is None and detected_lang == "it")
     collected = _build_subtitles(segments, config.readability.layout_rules(),
-                                 _wav_duration(audio_path), italian)
+                                 _wav_duration(audio_path), italian,
+                                 config.readability.light_punctuation)
 
     status(f"Trascrizione completata: {len(collected)} sottotitoli (WhisperX)")
     progress(1.0)
@@ -981,7 +988,8 @@ def transcribe(
         status("Segmentazione sottotitoli...")
         italian = language == "it" or (language is None and info.language == "it")
         collected = _build_subtitles(raw_segments, config.readability.layout_rules(),
-                                     info.duration or None, italian)
+                                     info.duration or None, italian,
+                                     config.readability.light_punctuation)
 
         status(f"Trascrizione completata: {len(collected)} sottotitoli")
         progress(1.0)

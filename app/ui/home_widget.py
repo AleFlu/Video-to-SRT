@@ -5,16 +5,16 @@ Layout (mockup Home.dc.html): banco di lavoro a tutta larghezza, due colonne.
   ┌── [DepsBanner — solo se dipendenze mancano] ───────────────────────────┐
   │ Sorgente                       │  Impostazioni di trascrizione (420 px) │
   │  zona di rilascio 330 px       │   Modello Whisper  + RAM/qualità       │
-  │  (o riga "file caricato")      │   Lingua                               │
+  │  (o riga "file caricato")      │   Lingua · Glossario · Formato         │
   │ Recenti (Nome|Cartella|Dim.)   │   Filtro VAD · Alta precisione         │
-  │                                │   Una riga per sottotitolo             │
   │                                │   riepilogo · Stima · Avvia            │
   └────────────────────────────────┴────────────────────────────────────────┘
 
 Configurazione: i controlli mostrano le scelte di base di una TranscriptionConfig
-(core.transcription_config), il glossario e "Una riga per sottotitolo"
-(readability.max_lines = 1); gli altri parametri avanzati (decodifica, VAD Silero,
-leggibilità) non hanno controlli e vengono da File → Importa configurazione….
+(core.transcription_config), il glossario e il formato dei sottotitoli (Film e TV o
+Reel: readability.subtitle_format e i suoi valori); gli altri parametri avanzati
+(decodifica, VAD Silero, leggibilità) non hanno controlli e vengono da File → Importa
+configurazione….
 L'intestazione del pannello indica da dove vengono (predefiniti o nome del file
 importato).
 
@@ -42,9 +42,7 @@ from PySide6.QtWidgets import (
 from core.constants import (
     SUPPORTED_AUDIO_EXTS, SUPPORTED_MEDIA_EXTS, SUPPORTED_SUBTITLE_EXTS,
 )
-from core.transcription_config import (
-    AUTO_LANGUAGE, ReadabilityLimits, TranscriptionConfig, parse_glossary,
-)
+from core.transcription_config import AUTO_LANGUAGE, TranscriptionConfig, parse_glossary
 from ui.prefs import RECENT_KEY, add_recent, read_list
 from ui.widgets import DepsBanner, ElidedLabel, SwitchPill, ToggleSwitch, fmt_size
 from ui import icons, theme
@@ -118,6 +116,13 @@ def _line_edit_ss() -> str:
         f"QLineEdit:hover {{ border-color: {c('line_2')}; }}"
         f"QLineEdit:focus {{ border: 1px solid {c('focus')}; }}"
     )
+
+
+# Formati dei sottotitoli (core.transcription_config.FORMAT_PRESETS)
+FORMAT_CHOICES = (
+    ("Film e TV — fino a 2 righe", "film"),
+    ("Reel e social — 1 riga", "reel"),
+)
 
 
 class HomeWidget(QWidget):
@@ -201,7 +206,7 @@ class HomeWidget(QWidget):
 
         # Ordine di tab: file → impostazioni → avvio
         chain = [self.drop, self.model_combo, self.lang_combo, self.glossary_edit,
-                 self.vad_toggle, self.accuracy_toggle, self.one_line_toggle,
+                 self.format_combo, self.vad_toggle, self.accuracy_toggle,
                  self.start_btn]
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
@@ -237,7 +242,7 @@ class HomeWidget(QWidget):
         self.glossary_edit.setStyleSheet(_line_edit_ss())
         self.vad_toggle._apply_palette()
         self.accuracy_toggle._apply_palette()
-        self.one_line_toggle._apply_palette()
+        self.format_combo.setStyleSheet(ss)
         self._apply_accuracy_palette()
         self._set_start_btn_state(self._source_path is not None)
         self.update()
@@ -287,11 +292,11 @@ class HomeWidget(QWidget):
             f"font-size: 12px; color: {c('dim')}; background: transparent;"
         )
         self._set_start_kbd("label")
-        for desc in (self._vad_desc, self._acc_desc, self._one_line_desc):
+        for desc in (self._vad_desc, self._acc_desc):
             desc.setStyleSheet(
                 f"font-size: 12px; color: {c('dim')}; background: transparent;"
             )
-        for title in (self._vad_title, self._one_line_title):
+        for title in (self._vad_title,):
             title.setStyleSheet(
                 f"font-size: 13px; font-weight: 500; color: {c('text')};"
                 " background: transparent;"
@@ -412,6 +417,25 @@ class HomeWidget(QWidget):
         ll.addWidget(self.lang_combo)
         lay.addWidget(row_l)
 
+        # Formato dei sottotitoli: Film/TV (2 righe, punteggiatura completa) o Reel
+        row_f, fl = self._set_row()
+        fl.addWidget(self._field("Formato sottotitoli"))
+        fl.addSpacing(6)
+        self.format_combo = QComboBox()
+        self.format_combo.setAccessibleName("Formato dei sottotitoli")
+        self.format_combo.setStyleSheet(ss)
+        for label, code in FORMAT_CHOICES:
+            self.format_combo.addItem(label, code)
+        self.format_combo.setToolTip(
+            "Film e TV: fino a 2 righe da 42 caratteri, punteggiatura completa.\n"
+            "Reel e social: 1 riga corta, sottotitoli brevi, senza punto né virgola "
+            "in fondo."
+        )
+        self._set_format(self._config.readability.subtitle_format)
+        self.format_combo.currentIndexChanged.connect(self._update_preset_label)
+        fl.addWidget(self.format_combo)
+        lay.addWidget(row_f)
+
         # Glossario: termini inglesi, marchi, nomi propri (hotwords di faster-whisper)
         row_g, gl = self._set_row()
         gl.addWidget(self._field("Glossario (termini separati da virgola)"))
@@ -452,18 +476,6 @@ class HomeWidget(QWidget):
         # descrizione visibile solo quando l'opzione non è disponibile (dice perché)
         self._acc_desc.setVisible(self._acc_desc.property("unavailable") is True)
 
-        # Una riga per sottotitolo (readability.max_lines = 1): sottotitoli più brevi
-        self._one_line_title = QLabel("Una riga per sottotitolo")
-        self._one_line_desc = QLabel("Sottotitoli più brevi, adatti a reel e video verticali")
-        self.one_line_toggle = _ToggleSwitch("Attiva", "Disattiva",
-                                             name="Una riga per sottotitolo")
-        self.one_line_toggle.setToolTip(
-            "Ogni sottotitolo sta su una sola riga: più sottotitoli, più brevi.\n"
-            "Spenta: fino a due righe (standard per i video orizzontali)."
-        )
-        self.one_line_toggle.setChecked(self._config.readability.max_lines == 1)
-        lay.addWidget(self._toggle_row(self._one_line_title, self._one_line_desc,
-                                       self.one_line_toggle))
 
         # beam_spin non visibile: valore di default letto da _get_settings()
         self.beam_spin = QSpinBox()
@@ -566,6 +578,7 @@ class HomeWidget(QWidget):
         model_key = self.model_combo.currentData()
         if model_key:
             parts.append(str(model_key))
+        parts.append(self.format_combo.currentText().split(" —")[0])
         parts.append("VAD attivo" if self.vad_toggle.isChecked() else "VAD disattivo")
         parts.append("alta precisione" if self.accuracy_toggle.isChecked() else "standard")
         self._preset_lbl.setText("  ·  ".join(parts))
@@ -691,7 +704,7 @@ class HomeWidget(QWidget):
             self.accuracy_toggle.setChecked(config.high_accuracy)
         self.beam_spin.setValue(config.beam_size)
         self.glossary_edit.setText(", ".join(config.decoding.glossary))
-        self.one_line_toggle.setChecked(config.readability.max_lines == 1)
+        self._set_format(config.readability.subtitle_format)
         self._update_preset_label()
         self._update_config_label()
 
@@ -700,16 +713,16 @@ class HomeWidget(QWidget):
 
         Se "Alta precisione" non è disponibile su questo computer si conserva il valore
         della configurazione (la trascrizione userà comunque la modalità standard).
-        "Una riga per sottotitolo" spenta conserva le righe della configurazione (2, o 3
-        da un file importato). ValueError (in italiano) se il glossario non è valido.
+        Il formato scelto applica i suoi valori (righe, caratteri, durata); se è lo
+        stesso della configurazione restano i limiti di quella (anche se personalizzati).
+        ValueError (in italiano) se il glossario non è valido.
         """
         acc = self.accuracy_toggle
         glossary = parse_glossary(self.glossary_edit.text())
-        lines = self._config.readability.max_lines
-        if self.one_line_toggle.isChecked():
-            lines = 1
-        elif lines == 1:
-            lines = ReadabilityLimits().max_lines
+        readability = self._config.readability
+        fmt = self.format_combo.currentData() or "film"
+        if fmt != readability.subtitle_format:
+            readability = readability.with_format(fmt)
         return replace(
             self._config,
             model_size=self.model_combo.currentData(),
@@ -718,7 +731,7 @@ class HomeWidget(QWidget):
             high_accuracy=acc.isChecked() if acc.isEnabled() else self._config.high_accuracy,
             beam_size=self.beam_spin.value(),
             decoding=replace(self._config.decoding, glossary=glossary),
-            readability=replace(self._config.readability, max_lines=lines),
+            readability=readability,
         )
 
     def config_name(self) -> str:
@@ -742,15 +755,17 @@ class HomeWidget(QWidget):
         )
 
     def _advanced_is_default(self) -> bool:
-        """True se i parametri senza controlli sono i predefiniti (una riga per
-        sottotitolo ha il suo interruttore e non conta)."""
+        """True se i parametri senza controlli sono i predefiniti (il formato dei
+        sottotitoli ha il suo menu: conta solo se i limiti differiscono dal formato)."""
         base = TranscriptionConfig()
         cfg = self._config
-        readability = cfg.readability
-        if readability.max_lines == 1:
-            readability = replace(readability, max_lines=base.readability.max_lines)
-        return (cfg.decoding, cfg.vad, readability, cfg.denoise) == (
-            base.decoding, base.vad, base.readability, base.denoise)
+        fmt = cfg.readability.subtitle_format
+        return (cfg.decoding, cfg.vad, cfg.readability, cfg.denoise) == (
+            base.decoding, base.vad, base.readability.with_format(fmt), base.denoise)
+
+    def _set_format(self, subtitle_format: str) -> None:
+        i = self.format_combo.findData(subtitle_format)
+        self.format_combo.setCurrentIndex(max(0, i))
 
     def _update_estimate(self):
         if not self._source_path:

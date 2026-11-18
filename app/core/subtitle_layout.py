@@ -298,6 +298,16 @@ def _normalize_spaces(text: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+_TRAILING_SOFT_PUNCT_RE = re.compile(r"[.,;:]+$")
+
+
+def light_punctuation(text: str) -> str:
+    """Punteggiatura leggera dei reel: toglie punto, virgola, punto e virgola e due punti
+    in fondo al sottotitolo (il taglio fa già da pausa); restano ? ! e …, che danno il
+    tono. Il resto del testo non cambia."""
+    return _TRAILING_SOFT_PUNCT_RE.sub("", text.rstrip())
+
+
 def fix_typography(text: str) -> str:
     """Correzioni tipografiche italiane, idempotenti (``fix(fix(x)) == fix(x)``).
 

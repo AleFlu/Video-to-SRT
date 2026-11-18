@@ -44,7 +44,7 @@ import logging
 import math
 import os
 import re
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from core.constants import (
@@ -315,6 +315,25 @@ class VadOptions:
                 "speech_pad_ms": self.speech_pad_ms}
 
 
+# ── Formati dei sottotitoli ───────────────────────────────────────────────────
+# "film": guida Netflix italiana (2 righe da 42 caratteri, punteggiatura completa).
+# "reel": video verticali e social (1 riga corta, sottotitoli brevi, niente punto o
+# virgola in fondo al sottotitolo; restano ? ! …).
+SUBTITLE_FORMATS: Tuple[str, ...] = ("film", "reel")
+FORMAT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "film": {"max_lines": 2, "max_chars_per_line": MAX_CHARS_PER_LINE,
+             "max_duration_s": MAX_SUBTITLE_DURATION},
+    "reel": {"max_lines": 1, "max_chars_per_line": 32, "max_duration_s": 4.0},
+}
+
+
+def _check_format(path: str, value: Any) -> str:
+    if value not in SUBTITLE_FORMATS:
+        raise _invalid(path, "deve essere " + " o ".join(f'"{f}"' for f in SUBTITLE_FORMATS),
+                       value)
+    return value
+
+
 @dataclass(frozen=True)
 class ReadabilityLimits:
     """Limiti di leggibilità e opzioni di segmentazione dei sottotitoli.
@@ -325,6 +344,7 @@ class ReadabilityLimits:
     dell'editor; ``warn_cps`` è l'obiettivo di lettura che il motore cerca di rispettare.
     """
 
+    subtitle_format: str = "film"
     max_chars_per_line: int = MAX_CHARS_PER_LINE
     max_lines: int = 2
     max_cps: float = MAX_CPS
@@ -338,6 +358,7 @@ class ReadabilityLimits:
 
     def __post_init__(self) -> None:
         p = self.SECTION
+        _check_format(f"{p}.subtitle_format", self.subtitle_format)
         _set(self, "max_chars_per_line",
              _check_int(f"{p}.max_chars_per_line", self.max_chars_per_line, 10, 100))
         _set(self, "max_lines", _check_int(f"{p}.max_lines", self.max_lines, 1, 3))
@@ -359,6 +380,20 @@ class ReadabilityLimits:
 
     def to_dict(self) -> Dict[str, Any]:
         return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    def with_format(self, subtitle_format: str) -> "ReadabilityLimits":
+        """Gli stessi limiti con il formato indicato e i suoi valori (righe, caratteri per
+        riga, durata massima); gli altri limiti restano quelli attuali."""
+        _check_format("readability.subtitle_format", subtitle_format)
+        values = dict(FORMAT_PRESETS[subtitle_format], subtitle_format=subtitle_format)
+        if self.min_duration_s >= values["max_duration_s"]:
+            values["min_duration_s"] = ReadabilityLimits.min_duration_s
+        return replace(self, **values)
+
+    @property
+    def light_punctuation(self) -> bool:
+        """True per i reel: niente punto né virgola in fondo ai sottotitoli."""
+        return self.subtitle_format == "reel"
 
     def layout_rules(self) -> LayoutRules:
         """Regole per ``core.subtitle_layout``: i tempi puntano a ``warn_cps`` (obiettivo
