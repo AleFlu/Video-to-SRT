@@ -8,8 +8,10 @@ waveform_widget.py — Widget forma d'onda audio con overlay dei sottotitoli.
   - Rendering: lo strato statico (sfondo, forma d'onda, blocchi sottotitolo,
     righello) è in cache in una QPixmap ridisegnata solo su resize, zoom/pan,
     cambio tema o sottotitoli; a ogni tick del player si ridisegna solo il playhead.
-  - Interazione (il playhead si sposta SOLO con un click o con la tastiera):
-      · click → seek (o selezione del blocco sottotitolo); trascinamento → pan;
+  - Interazione (il playhead si sposta SOLO con click, scrub o tastiera):
+      · click → seek (o selezione del blocco sottotitolo); tenere premuto e trascinare
+        → scrub: il playhead segue il mouse e resta dove lo si lascia (oltre i bordi,
+        con zoom, la vista scorre); ⌥/Alt + trascinamento → pan;
       · rotella verticale/orizzontale o due dita sul trackpad → scorrimento della
         finestra visibile (solo se c'è zoom; `pixelDelta` per lo scorrimento fluido,
         verso "naturale" del sistema così come lo consegna Qt);
@@ -74,7 +76,7 @@ def waveform_help() -> str:
     """Come si usa la forma d'onda (tooltip e descrizione accessibile)."""
     mod = platform_support.shortcut_label("Ctrl")
     return (f"Scorri con la rotella o con due dita · {mod} + rotella o pizzico per lo zoom"
-            " · clic per spostarti")
+            " · clic o trascina per spostarti")
 
 
 def waveform_keys_help() -> str:
@@ -357,6 +359,7 @@ class WaveformWidget(QWidget):
         self._press_x: int = 0
         self._press_y: int = 0
         self._drag_start_view: float = 0.0
+        self._scrubbing: bool = False
 
         # Auto-scroll sospeso fino a questo istante (orologio monotòno, s)
         self._clock = time.monotonic
@@ -780,9 +783,11 @@ class WaveformWidget(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # Nessun seek alla pressione: un trascinamento è un pan, non uno spostamento
+            # Nessun seek alla pressione: un click su un blocco lo seleziona soltanto; se
+            # il mouse si sposta oltre _CLICK_SLOP parte lo scrub (o il pan con ⌥/Alt)
             self._pressed = True
             self._panning = False
+            self._scrubbing = False
             self._press_x = int(event.position().x())
             self._press_y = int(event.position().y())
             self._drag_start_view = self._view_start_ms
@@ -790,21 +795,47 @@ class WaveformWidget(QWidget):
     def mouseMoveEvent(self, event):
         if not (self._pressed and (event.buttons() & Qt.LeftButton)):
             return
-        dx = int(event.position().x()) - self._press_x
-        if not self._panning and abs(dx) < _CLICK_SLOP:
-            return
-        self._panning = True
+        x = event.position().x()
+        dx = int(x) - self._press_x
+        if not (self._panning or self._scrubbing):
+            if abs(dx) < _CLICK_SLOP:
+                return
+            if event.modifiers() & Qt.AltModifier:
+                self._panning = True
+                self.setCursor(Qt.ClosedHandCursor)
+            else:
+                self._scrubbing = True
+                self.setCursor(Qt.SizeHorCursor)
         span = self._view_end_ms - self._view_start_ms
-        if self.width() > 0 and span > 0:
+        if self.width() <= 0 or span <= 0:
+            return
+        if self._panning:
             self._set_view(self._drag_start_view - dx * span / self.width(), span)
             self._hold_follow()
+        else:
+            self._scrub_to(x)
+
+    def _scrub_to(self, x: float) -> None:
+        """Scrub: il playhead segue il mouse. Oltre i bordi, con zoom, la vista scorre."""
+        span = self._view_end_ms - self._view_start_ms
+        w = self.width()
+        if x < 0 or x > w:
+            over = x if x < 0 else x - w
+            self._set_view(self._view_start_ms + over * span / w, span)
+        x = min(max(x, 0.0), float(w))
+        ms = self._view_start_ms + x / w * span
+        ms = int(min(max(ms, 0.0), float(self._duration_ms)))
+        if ms != self._playhead_ms:
+            self.seek_requested.emit(ms)
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton or not self._pressed:
             return
         self._pressed = False
-        if self._panning:
-            self._panning = False
+        if self._panning or self._scrubbing:
+            # lo scrub ha già spostato il playhead: resta dove si è lasciato il mouse
+            self._panning = self._scrubbing = False
+            self.unsetCursor()
             return
         # Click semplice: blocco sottotitolo → selezione, altrimenti seek (una sola volta)
         x, y = event.position().x(), event.position().y()

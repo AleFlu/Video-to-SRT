@@ -1,16 +1,19 @@
 """
 preview_area.py — Zona alta dell'editor: monitor video + forma d'onda + trasporto.
 
-Il monitor (sinistra, 452 px) e la forma d'onda (destra) sono affiancati quando il
-file è un video; per un file solo audio il monitor si chiude e la forma d'onda
-occupa tutta la larghezza. Senza media il monitor mostra "Nessun file caricato".
+Il monitor (sinistra, 452 px all'inizio) e la forma d'onda (destra) sono affiancati
+quando il file è un video, separati da un bordo trascinabile (la larghezza si ricorda);
+per un file solo audio il monitor si chiude e la forma d'onda occupa tutta la larghezza.
+Senza media il monitor mostra "Nessun file caricato". Il video va a schermo intero con
+i sottotitoli dal pulsante del trasporto o con un doppio clic (Esc, F o doppio clic per
+uscire).
 
 Layout:
   ┌────────────────┬──────────────────────────────────────┐
   │ monitor video  │ riga info (nome file · durata)  26px │
   │ (QStackedLayout│ righello 22 px                       │
   │  video / testo)│ forma d'onda                         │
-  │   452 px       │ corsia sottotitoli 52 px             │
+  │ 452 px ⇔       │ corsia sottotitoli 52 px             │
   ├────────────────┴──────────────────────────────────────┤
   │ TransportBar (46 px)                                  │
   └───────────────────────────────────────────────────────┘
@@ -22,11 +25,11 @@ import logging
 from pathlib import Path
 from typing import List
 
-from PySide6.QtCore import Qt, QSizeF
+from PySide6.QtCore import Qt, QSettings, QSizeF, Signal
 from PySide6.QtGui import QFont, QPainter, QFontMetrics, QBrush, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLayout, QFrame,
-    QSizePolicy, QStackedLayout, QGraphicsView, QGraphicsScene,
+    QSizePolicy, QSplitter, QStackedLayout, QGraphicsView, QGraphicsScene,
 )
 
 from core.subtitle_model import Subtitle
@@ -45,8 +48,10 @@ logger = logging.getLogger(__name__)
 _MONITOR_VIDEO   = 0
 _MONITOR_MESSAGE = 1
 
-# Misure del mockup
+# Misure del mockup (larghezza iniziale del monitor: si allarga trascinando il bordo)
 MONITOR_WIDTH = 452
+MONITOR_MIN_WIDTH = 240
+_SETTINGS_MONITOR_W = "workspace/monitor_width"
 TOP_ZONE_HEIGHT = 286
 _INFO_LINE_HEIGHT = 26
 
@@ -97,12 +102,13 @@ class PreviewArea(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Zona alta: monitor | colonna forma d'onda ──────────────────────────
-        top = QWidget()
+        # ── Zona alta: monitor | colonna forma d'onda (bordo trascinabile) ─────
+        top = QSplitter(Qt.Horizontal)
+        top.setObjectName("previewSplit")
+        top.setChildrenCollapsible(False)
+        top.setHandleWidth(5)
         top.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        top_lay = QHBoxLayout(top)
-        top_lay.setContentsMargins(0, 0, 0, 0)
-        top_lay.setSpacing(0)
+        self._top_split = top
 
         # Monitor: cornice 452 px (padding 12) con il riquadro scuro da 1 px di linea
         self._monitor = QFrame()
@@ -111,7 +117,7 @@ class PreviewArea(QWidget):
         mon_lay.setContentsMargins(12, 12, 12, 12)
         mon_lay.setSpacing(0)
         mon_lay.setSizeConstraint(QLayout.SetNoConstraint)
-        self._monitor.setFixedWidth(MONITOR_WIDTH)
+        self._monitor.setMinimumWidth(MONITOR_MIN_WIDTH)
 
         self._monitor_box = QFrame()
         self._monitor_box.setObjectName("previewMonitorBox")
@@ -127,7 +133,7 @@ class PreviewArea(QWidget):
         self._monitor_msg.setWordWrap(True)
         box_lay.addWidget(self._monitor_msg)                # 1: testo (vuoto / errore)
         mon_lay.addWidget(self._monitor_box, 1)
-        top_lay.addWidget(self._monitor)
+        top.addWidget(self._monitor)
 
         # Collega il player al video item UNA SOLA VOLTA durante costruzione
         if self._video_player_view is not None:
@@ -163,14 +169,28 @@ class PreviewArea(QWidget):
         self.waveform = WaveformWidget()
         self.waveform.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right_lay.addWidget(self.waveform, 1)
-        top_lay.addWidget(right, 1)
+        right.setMinimumWidth(320)
+        top.addWidget(right)
+        top.setStretchFactor(0, 0)
+        top.setStretchFactor(1, 1)
+        width = QSettings("VideoSRT", "v2").value(_SETTINGS_MONITOR_W, MONITOR_WIDTH)
+        try:
+            width = max(MONITOR_MIN_WIDTH, int(width))
+        except (TypeError, ValueError):
+            width = MONITOR_WIDTH
+        top.setSizes([width, 10_000])
+        top.splitterMoved.connect(self._on_monitor_resized)
 
         layout.addWidget(top, 1)
 
         # ── Transport bar (46 px, con il proprio bordo inferiore) ──────────────
         self.transport = TransportBar()
         self.transport.bind_player(self.player)
+        self.transport.fullscreen_requested.connect(self.enter_fullscreen)
         layout.addWidget(self.transport)
+        self._fullscreen: _FullscreenVideo | None = None
+        if self._video_player_view is not None:
+            self._video_player_view.double_clicked.connect(self.enter_fullscreen)
 
         # ── Wiring player ──────────────────────────────────────────────────────
         self.player.duration_changed.connect(self._on_duration)
@@ -207,6 +227,8 @@ class PreviewArea(QWidget):
         """Applica la modalità: audio chiude il monitor, gli altri casi lo mostrano."""
         self._mode = mode
         self._monitor.setVisible(mode != MODE_AUDIO)
+        self.transport.set_fullscreen_available(
+            mode == MODE_VIDEO and self._video_player_view is not None)
         if mode == MODE_VIDEO and self._qvideo_widget is not None:
             self._monitor_stack.setCurrentIndex(_MONITOR_VIDEO)
         else:
@@ -222,6 +244,10 @@ class PreviewArea(QWidget):
             f" border: none; border-right: 1px solid {c('line')}; }}"
             f"QFrame#previewMonitorBox {{ background: {c('video_bg')};"
             f" border: 1px solid {c('line')}; }}"
+        )
+        self._top_split.setStyleSheet(
+            f"QSplitter#previewSplit::handle {{ background: {c('bg')}; }}"
+            f"QSplitter#previewSplit::handle:hover {{ background: {c('line_2')}; }}"
         )
         self._monitor_msg.setStyleSheet(
             f"color: {c('dim')}; font-size: 13px; background: transparent; border: none;"
@@ -313,6 +339,7 @@ class PreviewArea(QWidget):
         Carica un file media nel player.
         Video → monitor e forma d'onda affiancati; solo audio → il monitor si chiude.
         """
+        self.exit_fullscreen()
         self.waveform.reset()
         self._set_overlay_subs([])
         if self._subtitle_overlay is not None:
@@ -335,6 +362,7 @@ class PreviewArea(QWidget):
 
     def clear_media(self):
         """Nessun media associato al progetto: svuota player, waveform e overlay."""
+        self.exit_fullscreen()
         self.waveform.reset()
         self._set_overlay_subs([])
         if self._subtitle_overlay is not None:
@@ -363,6 +391,52 @@ class PreviewArea(QWidget):
         self.waveform.set_selected_row(row)
 
     # ── Slots player ───────────────────────────────────────────────────────────
+
+    # ── Monitor: larghezza e schermo intero ────────────────────────────────────
+
+    def _on_monitor_resized(self, *_):
+        QSettings("VideoSRT", "v2").setValue(_SETTINGS_MONITOR_W, self._monitor.width())
+
+    def is_fullscreen(self) -> bool:
+        return self._fullscreen is not None
+
+    def enter_fullscreen(self):
+        """Video a schermo intero con i sottotitoli (Esc, F o doppio clic per uscire)."""
+        if self._fullscreen is not None or self._mode != MODE_VIDEO \
+                or self._video_player_view is None:
+            return
+        fs = _FullscreenVideo(self.player)
+        fs.closed.connect(self._exit_fullscreen)
+        self._fullscreen = fs
+        self._switch_video_output(fs.view)
+        fs.showFullScreen()
+        fs.activateWindow()
+        fs.setFocus()
+
+    def exit_fullscreen(self):
+        if self._fullscreen is not None:
+            self._fullscreen.close()
+
+    def _exit_fullscreen(self):
+        fs, self._fullscreen = self._fullscreen, None
+        if self._video_player_view is not None:
+            self._switch_video_output(self._video_player_view)
+        if fs is not None:
+            fs.deleteLater()
+        win = self.window()
+        win.activateWindow()
+        win.raise_()
+
+    def _switch_video_output(self, view: "_VideoPlayerView"):
+        """Sposta l'uscita video (e l'overlay) su `view`; in pausa ridisegna il fotogramma."""
+        self._subtitle_overlay = view
+        try:
+            self.player._player.setVideoOutput(view.video_item())
+        except Exception:  # noqa: BLE001
+            logger.warning("Cambio dell'uscita video fallito", exc_info=True)
+        if not self.player.is_playing() and self.player.is_ready():
+            self.player._player.setPosition(self.player.position())
+        self._update_subtitle_overlay(self.player.position())
 
     def _on_source_ready(self):
         self.waveform.set_duration(self.player.duration())
@@ -403,6 +477,8 @@ class _VideoPlayerView(QGraphicsView):
     Il testo del sottotitolo viene disegnato direttamente nel paintEvent
     della view, sopra la scena video.
     """
+
+    double_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -448,6 +524,13 @@ class _VideoPlayerView(QGraphicsView):
         super().resizeEvent(event)
         self._fit_video()
 
+    def mouseDoubleClickEvent(self, event):  # noqa: N802 (override Qt)
+        if event.button() == Qt.LeftButton:
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def _fit_video(self):
         """Adatta il QGraphicsVideoItem alle dimensioni correnti della view."""
         vp = self.viewport()
@@ -469,9 +552,11 @@ class _VideoPlayerView(QGraphicsView):
         p = QPainter(self.viewport())
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
-        p.setFont(self._font)
+        font = QFont(self._font)
+        font.setPixelSize(max(16, int(self.viewport().height() * 0.045)))
+        p.setFont(font)
 
-        fm = QFontMetrics(self._font)
+        fm = QFontMetrics(font)
         vp_w = self.viewport().width()
         vp_h = self.viewport().height()
         padding_h = 12
@@ -523,3 +608,43 @@ class _VideoPlayerView(QGraphicsView):
 
         p.end()
 
+
+
+class _FullscreenVideo(QWidget):
+    """
+    Finestra a schermo intero: solo il video con i sottotitoli, su fondo nero.
+    Esc, F o doppio clic chiudono; Spazio play/pausa; ←/→ ±1 s.
+    """
+
+    closed = Signal()
+
+    def __init__(self, player: AudioPlayer):
+        super().__init__(None, Qt.Window)
+        self.setWindowTitle("Video → SRT — schermo intero")
+        self.setAccessibleName("Video a schermo intero")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {theme.c('video_bg')};")
+        self._player = player
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.view = _VideoPlayerView()
+        self.view.double_clicked.connect(self.close)
+        lay.addWidget(self.view)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def keyPressEvent(self, event):  # noqa: N802 (override Qt)
+        key = event.key()
+        if key in (Qt.Key_Escape, Qt.Key_F):
+            self.close()
+        elif key == Qt.Key_Space:
+            self._player.toggle_play_pause()
+        elif key in (Qt.Key_Left, Qt.Key_Right):
+            self._player.seek_relative(-1000 if key == Qt.Key_Left else 1000)
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+
+    def closeEvent(self, event):  # noqa: N802 (override Qt)
+        super().closeEvent(event)
+        self.closed.emit()

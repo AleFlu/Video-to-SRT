@@ -230,7 +230,8 @@ def test_monitor_collapses_for_audio_and_shows_for_video(app, tmp_path):
 
     pa._set_mode(MODE_VIDEO)                  # decisione video: monitor + onda affiancati
     assert not pa._monitor.isHidden() and not pa.waveform.isHidden()
-    assert pa._monitor.minimumWidth() == pa._monitor.maximumWidth() == 452
+    # 452 px all'inizio, poi allargabile trascinando il bordo (test_video_monitor)
+    assert pa._top_split.sizes()[0] > 0 and pa._monitor.minimumWidth() == 240
     pa.player.unload()
 
 

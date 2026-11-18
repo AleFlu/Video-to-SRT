@@ -204,7 +204,7 @@ def test_waveform_keyboard(wf):
 def test_waveform_help_text(wf):
     mod = platform_support.shortcut_label("Ctrl")
     expected = (f"Scorri con la rotella o con due dita · {mod} + rotella o pizzico per lo zoom"
-                " · clic per spostarti")
+                " · clic o trascina per spostarti")
     assert expected in wf.toolTip()
     assert expected in wf.accessibleDescription()
     assert wf.accessibleName() == "Forma d'onda"

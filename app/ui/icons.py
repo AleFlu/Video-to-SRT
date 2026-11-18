@@ -61,6 +61,7 @@ ICON_PATHS: dict[str, str] = {
     "audio": ("M9 18V6l10-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0"
               "M19 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0"),
     "document": "M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5",
+    "fullscreen": "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
 }
 
 # Icone piene (fill = colore, nessun tratto)

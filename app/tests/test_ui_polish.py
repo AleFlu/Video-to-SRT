@@ -555,7 +555,7 @@ def test_waveform_background_loader(app, tmp_path):
     assert wf._duration_ms == 2000
 
 
-def test_waveform_click_seeks_once_and_drag_pans(app):
+def test_waveform_click_seeks_once_and_alt_drag_pans(app):
     from ui.waveform_widget import WaveformWidget
     wf = WaveformWidget()
     wf.resize(1000, 200)
@@ -567,15 +567,56 @@ def test_waveform_click_seeks_once_and_drag_pans(app):
     assert len(seeks) == 1 and seeks[0] == pytest.approx(4000, abs=10)
 
     seeks.clear()
-    QTest.mousePress(wf, Qt.LeftButton, Qt.NoModifier, QPoint(500, 20))
-    QTest.mouseMove(wf, QPoint(400, 20))
+    QTest.mousePress(wf, Qt.LeftButton, Qt.AltModifier, QPoint(500, 20))
     from PySide6.QtGui import QMouseEvent
     move = QMouseEvent(QMouseEvent.MouseMove, QPointF(300, 20), QPointF(300, 20),
-                       Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+                       Qt.NoButton, Qt.LeftButton, Qt.AltModifier)
     QApplication.sendEvent(wf, move)
-    QTest.mouseRelease(wf, Qt.LeftButton, Qt.NoModifier, QPoint(300, 20))
+    QTest.mouseRelease(wf, Qt.LeftButton, Qt.AltModifier, QPoint(300, 20))
     assert seeks == []                         # il pan non sposta il playhead
     assert wf._view_start_ms > 2000.0
+
+
+def _drag(wf, xs, mods=Qt.NoModifier):
+    from PySide6.QtGui import QMouseEvent
+    QTest.mousePress(wf, Qt.LeftButton, mods, QPoint(xs[0], 20))
+    for x in xs[1:]:
+        QApplication.sendEvent(wf, QMouseEvent(QMouseEvent.MouseMove, QPointF(x, 20),
+                                               QPointF(x, 20), Qt.NoButton,
+                                               Qt.LeftButton, mods))
+    QTest.mouseRelease(wf, Qt.LeftButton, mods, QPoint(xs[-1], 20))
+
+
+def test_waveform_drag_scrubs_and_stays_where_released(app):
+    """Tenere premuto e trascinare sposta il playhead con il mouse; al rilascio resta lì
+    (prima il trascinamento faceva solo scorrere la vista)."""
+    from ui.waveform_widget import WaveformWidget
+    wf = WaveformWidget()
+    wf.resize(1000, 200)
+    wf.set_duration(10_000)
+    wf._view_start_ms, wf._view_end_ms = 2000.0, 6000.0
+    seeks = []
+    wf.seek_requested.connect(seeks.append)
+    wf.seek_requested.connect(wf.set_position)
+    _drag(wf, [500, 520, 700, 750])
+    assert len(seeks) >= 2                       # segue il mouse, non solo al rilascio
+    assert seeks[-1] == pytest.approx(5000, abs=10)
+    assert (wf._view_start_ms, wf._view_end_ms) == (2000.0, 6000.0)   # vista ferma
+    assert not wf._scrubbing and not wf._pressed
+
+
+def test_waveform_scrub_past_the_edge_scrolls_the_view(app):
+    from ui.waveform_widget import WaveformWidget
+    wf = WaveformWidget()
+    wf.resize(1000, 200)
+    wf.set_duration(10_000)
+    wf._view_start_ms, wf._view_end_ms = 2000.0, 6000.0
+    seeks = []
+    wf.seek_requested.connect(seeks.append)
+    wf.seek_requested.connect(wf.set_position)
+    _drag(wf, [900, 950, 1100])
+    assert wf._view_start_ms > 2000.0            # oltre il bordo destro la vista avanza
+    assert seeks[-1] == pytest.approx(wf._view_end_ms, abs=10)
 
 
 # ── ResultWidget virtualizzato ───────────────────────────────────────────────

@@ -107,7 +107,13 @@ testo dell'Inspector, forma d'onda, Home/risultato ed Esportazione).
 
 Forma d'onda col mouse/trackpad: rotella o due dita (verticale e orizzontale) = scorrimento
 (solo con zoom, il playhead non si muove); Ctrl/⌘ o Alt + rotella e pizzico = zoom attorno al
-cursore; doppio clic sullo sfondo = tutta la durata; clic = seek. Dopo uno scorrimento manuale
+cursore; doppio clic sullo sfondo = tutta la durata; clic = seek; tenere premuto e trascinare =
+scrub (il playhead segue il mouse e resta dove lo si lascia; oltre i bordi la vista scorre);
+⌥/Alt + trascinamento = scorrimento della vista.
+
+Video: il bordo tra monitor e forma d'onda si trascina (larghezza ricordata in
+`workspace/monitor_width`); pulsante del trasporto o doppio clic sul video = schermo intero con i
+sottotitoli (Esc, F o doppio clic per uscire; Spazio play/pausa, ←/→ ±1 s). Dopo uno scorrimento manuale
 l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek esplicito lo riattiva.
 
 ## Trappole note

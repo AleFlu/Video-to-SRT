@@ -94,6 +94,7 @@ class TransportBar(QWidget):
     """
 
     loop_toggled = Signal(bool)
+    fullscreen_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -236,6 +237,17 @@ class TransportBar(QWidget):
         self.btn_loop.toggled.connect(self._on_loop_toggled)
         layout.addWidget(self.btn_loop)
 
+        # --- Schermo intero (video con sottotitoli) ---
+        self.btn_fullscreen = QToolButton()
+        self.btn_fullscreen.setObjectName("transportFullscreen")
+        self._fs_icon = icons.bind_icon(self.btn_fullscreen, "fullscreen", "dim")
+        self.btn_fullscreen.setToolTip("Video a schermo intero con i sottotitoli (Esc per uscire)")
+        self.btn_fullscreen.setAccessibleName("Video a schermo intero")
+        self.btn_fullscreen.setFixedSize(32, 28)
+        self.btn_fullscreen.setEnabled(False)
+        self.btn_fullscreen.clicked.connect(self.fullscreen_requested)
+        layout.addWidget(self.btn_fullscreen)
+
         # --- Indicatore JKL ---
         self._jkl_lbl = QLabel(_JKL_IDLE)
         self._jkl_lbl.setObjectName("jklIndicator")
@@ -256,7 +268,7 @@ class TransportBar(QWidget):
     def focus_chain(self) -> list:
         """Controlli nell'ordine di Tab (sinistra → destra)."""
         return [self.btn_play, self.btn_stop, self.seek_slider, self.volume_slider,
-                self.rate_combo, self.btn_loop]
+                self.rate_combo, self.btn_loop, self.btn_fullscreen]
 
     # ----------------------------------------------------------------
     # Tema
@@ -307,6 +319,10 @@ class TransportBar(QWidget):
             + theme.focus_rule_on_accent("QToolButton#transportPlay", 4)
             + theme.focus_rule("QToolButton#transportStop", 4)
             + theme.focus_rule("QToolButton#transportLoop", 4)
+            + "QToolButton#transportFullscreen { background: transparent;"
+            " border: 1px solid transparent; border-radius: 4px; padding: 0; }"
+            + f"QToolButton#transportFullscreen:hover {{ background: {c('raise')}; }}"
+            + theme.focus_rule("QToolButton#transportFullscreen", 4)
             # velocità: mono, bordo di 1 px
             + f"QComboBox#rateCombo {{ background: transparent; color: {c('text')};"
             f" border: 1px solid {c('line')}; border-radius: 4px; padding: 0 4px 0 9px;"
@@ -445,6 +461,10 @@ class TransportBar(QWidget):
     # ----------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------
+
+    def set_fullscreen_available(self, available: bool) -> None:
+        """Il pulsante schermo intero è attivo solo con un video nel monitor."""
+        self.btn_fullscreen.setEnabled(available)
 
     def _set_enabled(self, enabled: bool):
         for w in (self.btn_play, self.btn_stop, self.seek_slider, self.btn_loop):
