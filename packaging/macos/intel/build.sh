@@ -1,14 +1,15 @@
 #!/bin/bash
 # Build Video-to-SRT per macOS Intel (x86_64) — wrapper di build_mac.py sotto Rosetta.
-# Eseguire da qualsiasi cartella:  bash packaging/macos/build_intel.sh [opzioni di build_mac.py]
+# Eseguire da qualsiasi cartella:  bash packaging/macos/intel/build.sh [opzioni di build_mac.py]
 #
-# Layout: lo script sta in <root>/packaging/macos/. Il venv Intel (.venv-intel),
+# Layout: lo script sta in <root>/packaging/macos/intel/. Il venv Intel (.venv-intel),
 # il modello (_build_model/), build/ e dist/ vivono nella root del repository;
-# l'ffmpeg statico x86_64 va in packaging/macos/bin/ffmpeg.
+# l'ffmpeg statico x86_64 va in packaging/macos/intel/bin/ffmpeg.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MACOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 VENV="$REPO_ROOT/.venv-intel"
 cd "$REPO_ROOT"
 
@@ -24,8 +25,8 @@ fi
 
 # Verifica ffmpeg x86_64
 if [ ! -f "$SCRIPT_DIR/bin/ffmpeg" ]; then
-    echo "ERRORE: packaging/macos/bin/ffmpeg non trovato."
-    echo "Scarica ffmpeg x86_64 statico da https://evermeet.cx/ffmpeg/ e mettilo in packaging/macos/bin/ffmpeg"
+    echo "ERRORE: packaging/macos/intel/bin/ffmpeg non trovato."
+    echo "Scarica ffmpeg x86_64 statico da https://evermeet.cx/ffmpeg/ e mettilo in packaging/macos/intel/bin/ffmpeg"
     exit 1
 fi
 
@@ -38,9 +39,9 @@ fi
 
 # build_mac.py rileva x86_64 da platform.machine() e usa bin/ffmpeg; --clean pulisce build/ e dist/
 echo "Avvio PyInstaller..."
-arch -x86_64 "$VENV/bin/python" "$SCRIPT_DIR/build_mac.py" --clean "$@"
+arch -x86_64 "$VENV/bin/python" "$MACOS_DIR/build_mac.py" --clean "$@"
 
 echo ""
 echo "=== Build completata ==="
-echo "App: $REPO_ROOT/dist/Video-to-SRT.app"
+echo "App: $REPO_ROOT/dist/Video-to-SRT.app (Intel x86_64)"
 file "$REPO_ROOT/dist/Video-to-SRT.app/Contents/MacOS/Video-to-SRT"

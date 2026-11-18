@@ -1,72 +1,72 @@
-# Video → SRT — Packaging macOS (Apple Silicon e Intel)
+# Video → SRT — macOS (Apple Silicon and Intel)
 
-Gli script di questa cartella funzionano per entrambe le architetture: `build_mac.py`
-rileva `arm64` / `x86_64` con `platform.machine()`. Possono essere lanciati da
-qualsiasi cartella; i percorsi sono risolti dalla posizione dello script.
+Both architectures share `build_mac.py`, which detects `arm64` / `x86_64` with
+`platform.machine()`. Each architecture has its own entry point:
 
-## Layout
+| Mac | Build command | Python environment | FFmpeg bundled in the app |
+|---|---|---|---|
+| **Apple Silicon** (M1 and later) | `bash packaging/macos/apple-silicon/build.sh` | `.venv/` (arm64) | Homebrew FFmpeg from `PATH` |
+| **Intel** (x86_64) | `bash packaging/macos/intel/build.sh` | `.venv-intel/` (x86_64) | static binary in `packaging/macos/intel/bin/ffmpeg` |
 
-- Sorgenti dell'app: `app/` (entry point `app/main.py`, hook PyInstaller `app/pyi_rth_threads.py`).
-- Creati nella **root del repository** (tutti ignorati da git): `.venv/` (Apple Silicon o dev),
-  `.venv-intel/` (build Intel), `_build_model/` (modello Whisper da includere), `build/`, `dist/`.
-- `packaging/macos/bin/ffmpeg`: ffmpeg statico x86_64, solo per la build Intel (non nel repo).
+Created at the **repository root** and ignored by git: `.venv/`, `.venv-intel/`,
+`_build_model/` (the Whisper model to bundle), `build/`, `dist/`.
 
-| Script | Scopo |
+| Script | Purpose |
 |---|---|
-| `setup_mac.sh` | Setup minimale: Homebrew, ffmpeg, Python, `.venv`, dipendenze, modello |
-| `install.sh` | Setup completo con opzioni `--run`, `--app`, `--dmg` |
-| `build_mac.py` | Build PyInstaller di `dist/Video-to-SRT.app` (+ `.dmg` con `create-dmg`) |
-| `build_intel.sh` | Wrapper che esegue `build_mac.py` come x86_64 (`arch -x86_64`) |
-| `build_installer.sh` | Crea `dist/Video-to-SRT-<versione>-Installer.pkg` dalla `.app` già costruita |
-| `Installa-Video-to-SRT.command` | Installer per l'utente finale (doppio clic) |
+| `install.sh` | Full setup (Homebrew, FFmpeg, Python, `.venv`, dependencies, model) with `--run`, `--app`, `--dmg` |
+| `setup_mac.sh` | Minimal setup |
+| `apple-silicon/build.sh` | Apple Silicon build |
+| `intel/build.sh` | Intel build, runs `build_mac.py` under `arch -x86_64` |
+| `build_mac.py` | Shared PyInstaller build of `dist/Video-to-SRT.app` (+ `.dmg` with `create-dmg`) |
+| `build_installer.sh` | Builds `dist/Video-to-SRT-<version>-Installer.pkg` from an existing `.app` |
+| `Installa-Video-to-SRT.command` | Double-click installer for end users |
 
-## Sviluppo
+## Development
 
 ```bash
-packaging/macos/install.sh --run       # setup (.venv, dipendenze, modello) + avvio
-# oppure, con il venv già pronto:
+packaging/macos/install.sh --run       # setup (.venv, dependencies, model) + launch
+# or, with the venv already set up:
 source .venv/bin/activate && python app/main.py
 ```
 
-Requisiti: macOS 12+, Python 3.10+, Homebrew (installato dallo script se manca).
-FFmpeg viene installato via Homebrew.
+Requirements: macOS 12+, Python 3.10+, Homebrew (installed by the script if missing).
 
-## Build della .app
-
-### Apple Silicon
+## Apple Silicon build
 
 ```bash
-packaging/macos/install.sh --app       # setup + build
-packaging/macos/install.sh --dmg       # setup + build + .dmg (installa create-dmg)
-# oppure manualmente, dal venv della root:
-.venv/bin/python packaging/macos/build_mac.py --clean [--no-dmg] [--sign "Developer ID Application: …"]
+packaging/macos/install.sh --run                    # once: environment and model
+bash packaging/macos/apple-silicon/build.sh         # .app + .dmg
+bash packaging/macos/apple-silicon/build.sh --no-dmg
+bash packaging/macos/apple-silicon/build.sh --sign "Developer ID Application: …"
 ```
 
-Output in `dist/`. Per il `.pkg`: `packaging/macos/build_installer.sh` dopo la build.
-Il modello Whisper viene incluso se presente in `_build_model/` (o nella cache HuggingFace);
-ffmpeg viene incluso se trovato nel PATH / Homebrew.
+`install.sh --app` / `--dmg` do setup and build in one go. The Whisper model is bundled if it
+is in `_build_model/` (or the Hugging Face cache); FFmpeg is bundled if found in `PATH` /
+Homebrew. For a `.pkg`, run `packaging/macos/build_installer.sh` after the build.
 
-### Intel (x86_64)
+## Intel build
 
-Serve un venv x86_64 (anche su Mac ARM, via Rosetta) e un FFmpeg statico x86_64, che
-**non è incluso nel repository**: è un binario da ~76 MB con licenza GPL, e ridistribuirlo
-comporterebbe l'obbligo di fornirne il codice sorgente.
+Needs an x86_64 virtual environment (on an Apple Silicon Mac too, through Rosetta) and a static
+x86_64 FFmpeg. FFmpeg is **not in the repository**: it is a ~76 MB GPL binary, and
+redistributing it would require providing its source code.
 
 ```bash
 arch -x86_64 /usr/bin/python3 -m venv .venv-intel
 arch -x86_64 .venv-intel/bin/pip install -r app/requirements.txt pyinstaller
 
-mkdir -p packaging/macos/bin
-# Scarica il build statico x86_64 da https://evermeet.cx/ffmpeg/ e salvalo come packaging/macos/bin/ffmpeg
-chmod +x packaging/macos/bin/ffmpeg
+mkdir -p packaging/macos/intel/bin
+# Download the static x86_64 build from https://evermeet.cx/ffmpeg/ and save it as
+# packaging/macos/intel/bin/ffmpeg
+chmod +x packaging/macos/intel/bin/ffmpeg
 
-bash packaging/macos/build_intel.sh
+bash packaging/macos/intel/build.sh
 ```
 
-`build_intel.sh` verifica venv, ffmpeg e modello e si ferma con un messaggio esplicativo
-se manca qualcosa; poi lancia `build_mac.py --clean` sotto `arch -x86_64`.
+The script checks the venv, FFmpeg and the model, and stops with an explanation if something
+is missing.
 
-## Note
+## Notes
 
-- Se `app/assets/app.icns` manca la build usa l'icona di default.
-- Firma e notarizzazione sono opzionali (`--sign`); senza firma macOS mostrerà l'avviso Gatekeeper.
+- Without `app/assets/app.icns` the build uses the default icon.
+- Signing and notarization are optional (`--sign`); unsigned apps trigger the Gatekeeper warning
+  on first launch (right-click → Open).

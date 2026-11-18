@@ -48,7 +48,7 @@ _build_model/
 models/
 
 # ffmpeg statico x86_64 per la build Intel (binario GPL, non ridistribuito)
-packaging/macos/bin/
+packaging/macos/intel/bin/
 
 # Cache tool
 .ruff_cache/

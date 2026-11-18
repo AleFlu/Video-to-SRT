@@ -8,7 +8,7 @@ pythonpath = ["app"]
 target-version = "py39"
 line-length = 100
 src = ["app"]
-extend-exclude = ["legacy-v1", "packaging", "docs"]
+extend-exclude = ["packaging", "docs"]
 
 [tool.ruff.lint]
 select = ["E9", "F"]

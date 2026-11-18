@@ -37,11 +37,12 @@ app/                          # tutta l'applicazione
 │   ├── preview_area.py, transport_bar.py, waveform_widget.py
 │   └── export_tab.py, export_panel.py, placeholder_widget.py
 └── tests/                    # pytest (UI offscreen)
-packaging/                    # script di build, ognuno con il proprio README
-├── macos/                    # ARM + Intel: build_mac.py, build_intel.sh, install.sh, ...
+packaging/                    # script di setup/build (README.md: tabella per piattaforma)
+├── macos/                    # build_mac.py condiviso, install.sh, setup_mac.sh, .pkg, ...
+│   ├── apple-silicon/build.sh   # build arm64
+│   └── intel/build.sh           # build x86_64 (Rosetta); ffmpeg statico in intel/bin/
 └── windows/                  # build_windows.py, setup_windows.bat
-docs/                         # piani (docs/plans) e riferimenti di design
-legacy-v1/                    # versione storica: NON toccare
+docs/                         # specifiche, piani, riferimenti di design, media del README
 pyproject.toml                # solo config pytest + ruff (non è un pacchetto installabile)
 requirements-dev.txt          # pytest, ruff
 .github/workflows/ci.yml      # lint + test su macOS, Windows, Linux
@@ -73,7 +74,7 @@ Setup (dalla root): `python -m venv .venv && source .venv/bin/activate` (Windows
 | Avvio | `python app/main.py` |
 | Test | `QT_QPA_PLATFORM=offscreen python -m pytest -q` |
 | Lint | `ruff check app` |
-| Build macOS | `packaging/macos/install.sh --app` (Intel: `packaging/macos/build_intel.sh`) |
+| Build macOS | `bash packaging/macos/apple-silicon/build.sh` · Intel: `bash packaging/macos/intel/build.sh` |
 | Build Windows | `python packaging\windows\build_windows.py` |
 
 Output build in `dist/`, `build/`; modello da includere in `_build_model/` (tutti nella root). Dettagli: `packaging/*/README.md`.

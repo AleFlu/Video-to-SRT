@@ -10,11 +10,12 @@ Uso (dalla root del repo):
 
 Architettura: rilevata con platform.machine() (arm64 / x86_64) e usata per
 scegliere l'ffmpeg da includere. Per la build Intel su un Mac ARM usa
-packaging/macos/build_intel.sh (esegue questo script sotto Rosetta).
+packaging/macos/intel/build.sh (esegue questo script sotto Rosetta); per Apple
+Silicon packaging/macos/apple-silicon/build.sh.
 
 Output (nella root del repository):
     dist/Video-to-SRT.app             — applicazione standalone
-    dist/Video-to-SRT-<versione>.dmg  — installer drag-to-Applications (se create-dmg è disponibile)
+    dist/Video-to-SRT-<versione>-macOS-<arm64|intel>.dmg  — installer drag-to-Applications (se create-dmg è disponibile)
 
 Requisiti:
     pip install pyinstaller
@@ -62,13 +63,13 @@ ICON_FILE       = ASSETS_DIR / "app.icns"
 RUNTIME_HOOK    = APP_DIR / "pyi_rth_threads.py"
 ENTITLEMENTS    = ASSETS_DIR / "entitlements.plist"      # opzionale
 MODEL_SRC_DIR   = REPO_ROOT / "_build_model"             # modello scaricato (ignorato da git)
-BUNDLED_FFMPEG  = HERE / "bin" / "ffmpeg"                # ffmpeg statico x86_64 (build Intel)
+BUNDLED_FFMPEG  = HERE / "intel" / "bin" / "ffmpeg"                # ffmpeg statico x86_64 (build Intel)
 DIST_DIR        = REPO_ROOT / "dist"
 BUILD_DIR       = REPO_ROOT / "build"
 
 
 def find_ffmpeg() -> str | None:
-    """Cerca ffmpeg: prima quello statico in packaging/macos/bin/ (solo x86_64), poi PATH/Homebrew."""
+    """Cerca ffmpeg: prima quello statico in packaging/macos/intel/bin/ (solo x86_64), poi PATH/Homebrew."""
     if platform.machine() == "x86_64" and BUNDLED_FFMPEG.exists():
         return str(BUNDLED_FFMPEG)
     for candidate in (
@@ -272,7 +273,8 @@ def make_dmg(app_path: Path):
         print("⚠️   create-dmg non trovato (brew install create-dmg) — DMG saltato.")
         return
 
-    dmg_path = DIST_DIR / f"{APP_NAME}-{APP_VERSION}.dmg"
+    arch = "intel" if platform.machine() == "x86_64" else "arm64"
+    dmg_path = DIST_DIR / f"{APP_NAME}-{APP_VERSION}-macOS-{arch}.dmg"
     if dmg_path.exists():
         dmg_path.unlink()
 

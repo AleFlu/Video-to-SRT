@@ -1,103 +1,104 @@
 # Video → SRT
 
-Trascrive in **italiano** video e audio e crea sottotitoli `.srt` pronti per il montaggio,
-con un editor per rivederli riga per riga. Tutto gira **sul tuo computer**: nessun file
-viene caricato in rete e, dopo il primo setup, l'app funziona offline.
+Desktop app that transcribes **Italian** video and audio into `.srt` subtitles ready for
+editing, with a built-in editor to review them line by line. Everything runs **on your
+computer**: no file is uploaded anywhere and, after the first setup, the app works offline.
 
-![Video → SRT: dal file alla trascrizione, all'editor, all'esportazione](docs/media/demo.gif)
+![Video → SRT: from file to transcription, editor and export](docs/media/demo.gif)
 
-<sub>Demo registrata con una voce sintetica: avanzamento della trascrizione accelerato, il resto è l'app reale.</sub>
+<sub>Demo recorded with a synthetic voice; the transcription progress is sped up, everything else is the real app. The interface is in Italian.</sub>
+
+**Platforms:** macOS Apple Silicon · macOS Intel · Windows — see [Installation](#installation) and [`packaging/`](packaging/README.md).
 
 ---
 
-## Cosa fa
+## Features
 
-**Trascrizione**
-- Modello Whisper `large-v3` via [faster-whisper](https://github.com/SYSTRAN/faster-whisper), timestamp parola per parola
-- Riduzione del rumore e filtro VAD per saltare i silenzi (meno frasi inventate); i tratti di parlato saltati per errore vengono recuperati
-- **Glossario** per termini inglesi, marchi e nomi propri (`iPhone`, `deploy`, `social media`…), con la punteggiatura italiana preservata
-- Sottotitoli composti secondo le regole di leggibilità professionali: 42 caratteri per riga, 2 righe, 17 caratteri al secondo, durata tra 0,83 e 7 s, a capo senza lasciare articoli e preposizioni a fine riga
+**Transcription**
+- Whisper `large-v3` through [faster-whisper](https://github.com/SYSTRAN/faster-whisper), with word-level timestamps
+- Noise reduction and a voice activity filter (VAD) that skips silence, so fewer invented sentences; speech the filter skipped by mistake is recovered
+- **Glossary** for English terms, brands and names (`iPhone`, `deploy`, `social media`…) without losing Italian punctuation
+- Subtitles laid out with professional readability rules: 42 characters per line, 2 lines, 17 characters per second, 0.83–7 s on screen, and line breaks that never leave an article or preposition at the end of a line
 
 **Editor**
-- Tabella modificabile e Ispettore con tempi al millisecondo, annulla/ripristina illimitato
-- Dividi, unisci, elimina, trova e sostituisci
-- Diagnostica in tempo reale: sovrapposizioni, sottotitoli troppo veloci, troppo corti o troppo lunghi
-- Anteprima video con i sottotitoli sovrapposti e forma d'onda interattiva:
-  clic per spostarti, rotella o due dita per scorrere, ⌘ + rotella o pizzico per lo zoom
-- Scorciatoie da montatore (Spazio, J/K/L, frecce), tutte usabili anche da tastiera con focus visibile
+- Editable table and an Inspector with millisecond timing; unlimited undo/redo
+- Split, merge, delete, find and replace
+- Live checks: overlaps, subtitles that are too fast, too short or too long
+- Video preview with subtitles on top, and an interactive waveform: click to seek, scroll wheel or two fingers to pan, ⌘ + wheel or pinch to zoom
+- Editor-style shortcuts (Space, J/K/L, arrows); everything is keyboard-reachable with a visible focus ring
 
-**Esportazione**
-- SRT, WebVTT, TXT, ASS e progetto `.v2srt` (riapribile e modificabile)
-- Copia diretta per YouTube Studio, Vimeo, Premiere Pro / DaVinci Resolve
+**Export**
+- SRT, WebVTT, TXT, ASS and the `.v2srt` project format (reopen and keep editing)
+- One-click copy for YouTube Studio, Vimeo, Premiere Pro / DaVinci Resolve
 
-**Altro**
-- Più progetti aperti in tab, tema chiaro e scuro, salvataggio automatico
-- **Profili dei parametri** (`.vsrtconfig`): *File → Importa / Esporta configurazione* per salvare e condividere glossario, prompt, VAD e limiti di leggibilità
-- macOS (Apple Silicon e Intel) e Windows
+**Also**
+- Several projects open in tabs, light and dark theme, autosave
+- **Parameter profiles** (`.vsrtconfig`): *File → Import / Export configuration* to save and share glossary, prompt, VAD and readability limits
+- macOS (Apple Silicon and Intel) and Windows
 
 ---
 
-## Come funziona
+## How it works
 
 ```
-file video/audio
-   │  FFmpeg: estrazione audio a 16 kHz + riduzione del rumore
+video / audio file
+   │  FFmpeg: 16 kHz audio + noise reduction
    ▼
-Silero VAD ──► tratti di parlato
+Silero VAD ──► speech regions
    │
    ▼
-faster-whisper large-v3 (italiano, beam search, prompt + glossario)
-   │  parole con tempi e probabilità
+faster-whisper large-v3 (Italian, beam search, prompt + glossary)
+   │  words with timing and confidence
    ▼
-recupero dei tratti saltati ──► composizione dei sottotitoli (righe, durata, CPS)
+recover skipped speech ──► subtitle layout (lines, duration, reading speed)
    │
    ▼
-editor ──► esportazione SRT / VTT / TXT / ASS
+editor ──► export SRT / VTT / TXT / ASS
 ```
 
-| Componente | Tecnologia |
+| Component | Technology |
 |---|---|
-| Riconoscimento vocale | faster-whisper (CTranslate2), modello Whisper `large-v3` |
-| Rilevamento del parlato | Silero VAD |
-| Audio e video | FFmpeg, Qt Multimedia |
-| Interfaccia | PySide6 (Qt 6) |
-| Pacchetti | PyInstaller (`.app` / `.dmg`, `.exe`) |
+| Speech recognition | faster-whisper (CTranslate2), Whisper `large-v3` model |
+| Voice activity detection | Silero VAD |
+| Audio and video | FFmpeg, Qt Multimedia |
+| Interface | PySide6 (Qt 6) |
+| Packaging | PyInstaller (`.app` / `.dmg`, `.exe`) |
 
 ---
 
-## Requisiti
+## Requirements
 
-- **8 GB di RAM** (il modello `large-v3` ne usa circa 6; ci sono modelli più leggeri)
-- **4–10 GB di spazio** per modello e dipendenze
-- **FFmpeg** (lo installano gli script di setup)
-- **Python 3.10+** per lo sviluppo (3.11 consigliato; il codice resta compatibile con 3.9)
-- Internet **solo** al primo avvio, per scaricare dipendenze e modello
+- **8 GB of RAM** (`large-v3` uses about 6 GB; lighter models are available)
+- **4–10 GB of disk space** for the model and dependencies
+- **FFmpeg** (installed by the setup scripts)
+- **Python 3.10+** for development (3.11 recommended; the code stays 3.9-compatible)
+- Internet **only** on first launch, to download dependencies and the model
 
-| Modello | RAM | Qualità in italiano | Quando usarlo |
+| Model | RAM | Italian quality | Use it for |
 |---|---|---|---|
-| `tiny` · `base` | ~1 GB | ★☆☆☆☆ · ★★☆☆☆ | Prove veloci |
-| `small` | ~2 GB | ★★★☆☆ | Computer con poca memoria |
-| `medium` | ~5 GB | ★★★★☆ | Buona alternativa |
-| **`large-v3`** | **~6 GB** | **★★★★★** | **Predefinito** |
-| `large-v3-turbo` | ~4 GB | ★★★★½ | Più veloce, quasi la stessa qualità |
+| `tiny` · `base` | ~1 GB | ★☆☆☆☆ · ★★☆☆☆ | Quick tests |
+| `small` | ~2 GB | ★★★☆☆ | Low-memory machines |
+| `medium` | ~5 GB | ★★★★☆ | A good alternative |
+| **`large-v3`** | **~6 GB** | **★★★★★** | **Default** |
+| `large-v3-turbo` | ~4 GB | ★★★★½ | Faster, nearly the same quality |
 
-**Formati in ingresso:** MP4, MOV, MKV, AVI, WebM, M4V · MP3, WAV, M4A, FLAC, OGG, AAC, WMA · SRT e `.v2srt` per riaprire un lavoro.
+**Input formats:** MP4, MOV, MKV, AVI, WebM, M4V · MP3, WAV, M4A, FLAC, OGG, AAC, WMA · SRT and `.v2srt` to reopen a job.
 
 ---
 
-## Installazione e avvio
+## Installation
 
-**Setup guidato** (FFmpeg, ambiente Python, dipendenze e modello):
+| Platform | Setup and run | Build the app |
+|---|---|---|
+| **macOS · Apple Silicon** | `packaging/macos/install.sh --run` | `bash packaging/macos/apple-silicon/build.sh` → `.app` + `.dmg` |
+| **macOS · Intel** | `packaging/macos/install.sh --run` | `bash packaging/macos/intel/build.sh` → `.app` + `.dmg` |
+| **Windows 10/11** | `packaging\windows\setup_windows.bat --run` | `python packaging\windows\build_windows.py` → `.exe` |
 
-```bash
-packaging/macos/install.sh --run
-```
+The setup scripts install FFmpeg, create the Python environment, install dependencies and
+download the model. Details and troubleshooting: [macOS](packaging/macos/README.md) ·
+[Windows](packaging/windows/README.md).
 
-```bat
-packaging\windows\setup_windows.bat --run
-```
-
-**A mano**, dalla cartella del repository:
+**Manual setup**, from the repository root:
 
 ```bash
 python -m venv .venv
@@ -106,45 +107,47 @@ pip install -r app/requirements.txt -r requirements-dev.txt
 python app/main.py
 ```
 
-FFmpeg deve essere nel `PATH` (macOS: `brew install ffmpeg`; Windows: vedi [`packaging/windows/README.md`](packaging/windows/README.md)).
-Il modello si scarica al primo utilizzo.
+FFmpeg must be on `PATH` (macOS: `brew install ffmpeg`). The model downloads on first use.
 
 ---
 
-## Scorciatoie principali
+## Keyboard shortcuts
 
-⌘ su macOS, Ctrl su Windows e Linux.
+⌘ on macOS, Ctrl on Windows and Linux.
 
-| Tasti | Azione |
+| Keys | Action |
 |---|---|
-| ⌘O · ⌘N | Apri file · nuova trascrizione |
-| Spazio · J / K / L | Play/pausa · indietro 2 s / pausa / play |
-| ← / → · ⇧← / ⇧→ | ±1 s · sottotitolo precedente / successivo |
-| ⌘K · ⌘M · ⌘⇧K | Dividi · unisci col successivo · elimina |
-| ⌘Z · ⌘⇧Z | Annulla · ripristina |
-| ⌘F · ⌘⌥F | Cerca · trova e sostituisci |
-| ⌘I | Mostra/nascondi l'Ispettore |
-| ⌘S · ⌘⇧S · ⌘E | Esporta SRT · salva progetto · scheda Esportazione |
-| ⌘⇧T · ⌘W · ⌃Tab | Nuovo tab · chiudi tab · tab successivo |
-| ⌘⇧L | Tema chiaro/scuro |
+| ⌘O · ⌘N | Open file · new transcription |
+| Space · J / K / L | Play/pause · back 2 s / pause / play |
+| ← / → · ⇧← / ⇧→ | ±1 s · previous / next subtitle |
+| ⌘K · ⌘M · ⌘⇧K | Split · merge with next · delete |
+| ⌘Z · ⌘⇧Z | Undo · redo |
+| ⌘F · ⌘⌥F | Search · find and replace |
+| ⌘I | Show/hide the Inspector |
+| ⌘S · ⌘⇧S · ⌘E | Export SRT · save project · Export tab |
+| ⌘⇧T · ⌘W · ⌃Tab | New tab · close tab · next tab |
+| ⌘⇧L | Light/dark theme |
 
-L'elenco completo, con i casi particolari, è in [`CLAUDE.md`](CLAUDE.md).
+The full list, with edge cases, is in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
-## Sviluppo
+## Development
 
 ```
-app/
-├── main.py               avvio
-├── engine.py             pipeline di trascrizione
-├── platform_support.py   tutto ciò che dipende dal sistema operativo
-├── core/                 modello dei sottotitoli, composizione, I/O, configurazione, player
-├── ui/                   interfaccia PySide6
-└── tests/                test pytest (UI offscreen)
-packaging/                build per macOS e Windows
-docs/                     specifiche, piani, riferimenti di design
-legacy-v1/                prima versione, solo come riferimento
+app/                      the application (one codebase for every platform)
+├── main.py               entry point
+├── engine.py             transcription pipeline
+├── platform_support.py   everything OS-specific
+├── core/                 subtitle model, layout, I/O, configuration, player
+├── ui/                   PySide6 interface
+└── tests/                pytest suite (offscreen UI)
+packaging/
+├── macos/
+│   ├── apple-silicon/    Apple Silicon build
+│   └── intel/            Intel build
+└── windows/              Windows setup and build
+docs/                     specs, plans, design references, README media
 ```
 
 ```bash
@@ -152,40 +155,42 @@ QT_QPA_PLATFORM=offscreen python -m pytest -q    # Windows (cmd): set QT_QPA_PLA
 ruff check app
 ```
 
-La CI (GitHub Actions) esegue lint e test su macOS, Windows e Linux. Le regole di architettura sono in [`CLAUDE.md`](CLAUDE.md).
-
-### Build distribuibile
-
-- **macOS Apple Silicon:** `packaging/macos/install.sh --app` (oppure `--dmg`)
-- **macOS Intel:** `bash packaging/macos/build_intel.sh`
-- **Windows:** `python packaging\windows\build_windows.py` → `dist\VideoSRT\VideoSRT.exe`
-
-Dettagli in [`packaging/macos/README.md`](packaging/macos/README.md) e [`packaging/windows/README.md`](packaging/windows/README.md).
+GitHub Actions runs lint and tests on macOS, Windows and Linux. Architecture rules (in Italian)
+are in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
-## Licenza
+## License
 
-**MIT**: puoi usare, modificare, ridistribuire e vendere il software, anche in prodotti proprietari, mantenendo la nota di copyright. Testo completo in [LICENSE](LICENSE). Il software è fornito senza garanzie.
+**MIT**: you may use, modify, redistribute and sell the software, including in proprietary
+products, as long as you keep the copyright notice. Full text in [LICENSE](LICENSE). The
+software comes with no warranty.
 
-### Componenti di terze parti
+### Third-party components
 
-| Componente | Licenza |
+| Component | License |
 |---|---|
-| [PySide6 / Qt](https://www.qt.io/qt-for-python) | LGPLv3 (o commerciale) |
+| [PySide6 / Qt](https://www.qt.io/qt-for-python) | LGPLv3 (or commercial) |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) / CTranslate2 | MIT |
-| [Whisper](https://github.com/openai/whisper) (modello) | MIT |
+| [Whisper](https://github.com/openai/whisper) (model) | MIT |
 | [Silero VAD](https://github.com/snakers4/silero-vad) | MIT |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT |
 | [NumPy](https://numpy.org/) · [soundfile](https://github.com/bastibe/python-soundfile) | BSD-3-Clause |
-| [FFmpeg](https://ffmpeg.org/) | LGPLv2.1+ / GPLv2+ secondo la build |
-| [PyInstaller](https://pyinstaller.org/) | GPLv2+ con eccezione per il bootloader |
+| [IBM Plex](https://github.com/IBM/plex) (fonts) | SIL Open Font License 1.1 |
+| [FFmpeg](https://ffmpeg.org/) | LGPLv2.1+ / GPLv2+ depending on the build |
+| [PyInstaller](https://pyinstaller.org/) | GPLv2+ with a bootloader exception |
 
-FFmpeg viene eseguito come processo esterno, non collegato al programma: la sua licenza non si estende al codice di questo progetto, che resta MIT.
+FFmpeg runs as a separate process and is not linked into the program, so its license does not
+extend to this project's code, which stays MIT.
 
-**Se ridistribuisci i binari** (`.app` / `.dmg` / `.exe`), il pacchetto contiene componenti copyleft:
+**If you redistribute the binaries** (`.app` / `.dmg` / `.exe`), the package contains copyleft
+components:
 
-- **Qt/PySide6** — la LGPLv3 chiede che l'utente possa sostituire le librerie Qt con una propria versione; pubblicare sorgente e script di build, come fa questo repository, va in questa direzione.
-- **FFmpeg** — le build con `--enable-gpl` sono GPL: chi distribuisce un pacchetto che include FFmpeg deve fornirne anche il sorgente o un'offerta scritta per ottenerlo (GPL, sezione 6). Il sorgente è su [ffmpeg.org](https://ffmpeg.org/download.html).
+- **Qt/PySide6** — LGPLv3 requires that users can replace the Qt libraries with their own
+  version; publishing the full source and build scripts, as this repository does, supports that.
+- **FFmpeg** — builds configured with `--enable-gpl` are GPL. If you ship a package that
+  includes an FFmpeg binary, you must also provide its source code or a written offer for it
+  (GPL section 6). The source is at [ffmpeg.org](https://ffmpeg.org/download.html).
 
-Gli script di setup installano FFmpeg con il gestore di pacchetti del sistema (Homebrew su macOS): in quel caso il binario non viene ridistribuito da questo progetto e l'obbligo non si applica.
+The setup scripts install FFmpeg through the system package manager (Homebrew on macOS); in that
+case this project does not redistribute the binary and the obligation does not apply.
