@@ -126,7 +126,6 @@ class HomeWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("contentPanel")
         self._source_path: str | None = None
-        self._hint_default = "Scegli un file per iniziare"
         # Configurazione di partenza (parametri avanzati + valori iniziali dei controlli)
         self._config = TranscriptionConfig()
         self._config_name = ""
@@ -176,6 +175,7 @@ class HomeWidget(QWidget):
             "Tutto resta sul tuo computer: nessun file viene caricato in rete.", Qt.ElideRight
         )
         self._src_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._src_note.hide()   # frase non necessaria: resta solo il titolo
         src_head.addWidget(self._src_note, 4)
         src_col.addLayout(src_head)
 
@@ -410,6 +410,7 @@ class HomeWidget(QWidget):
         self.vad_toggle.setChecked(True)
         self.vad_toggle.toggled.connect(self._update_preset_label)
         lay.addWidget(self._toggle_row(self._vad_title, self._vad_desc, self.vad_toggle))
+        self._vad_desc.hide()   # spiegazione nel tooltip
 
         # Alta precisione
         self._acc_title = QLabel("Alta precisione")
@@ -422,6 +423,8 @@ class HomeWidget(QWidget):
         self.accuracy_toggle.toggled.connect(self._update_preset_label)
         self._apply_accuracy_availability()
         lay.addWidget(self._toggle_row(self._acc_title, self._acc_desc, self.accuracy_toggle))
+        # descrizione visibile solo quando l'opzione non è disponibile (dice perché)
+        self._acc_desc.setVisible(self._acc_desc.property("unavailable") is True)
 
         # beam_spin non visibile: valore di default letto da _get_settings()
         self.beam_spin = QSpinBox()
@@ -467,9 +470,12 @@ class HomeWidget(QWidget):
         bl_btn.addWidget(self._start_kbd)
         bl.addWidget(self.start_btn)
         bl.addSpacing(8)
-        self._hint_lbl = QLabel(self._hint_default)
+        # Solo per gli errori (formato non supportato, glossario non valido): niente
+        # frasi di istruzione, il pulsante Avvia dice già cosa fare
+        self._hint_lbl = QLabel("")
         self._hint_lbl.setAlignment(Qt.AlignCenter)
         self._hint_lbl.setWordWrap(True)
+        self._hint_lbl.hide()
         bl.addWidget(self._hint_lbl)
         lay.addWidget(bottom)
 
@@ -497,6 +503,7 @@ class HomeWidget(QWidget):
                 "La trascrizione usa la modalità standard.",
             )
             self._acc_desc.setText(f"{reason[:1].upper()}{reason[1:]}: si usa la modalità standard")
+            self._acc_desc.setProperty("unavailable", True)
 
     def _update_model_hint(self, *_):
         """Riga mono sotto il modello: RAM, qualità (da engine.MODELS), "predefinito"."""
@@ -537,8 +544,8 @@ class HomeWidget(QWidget):
 
     def _set_start_btn_state(self, enabled: bool):
         c = theme.c
-        self._hint_lbl.setText("Premi Invio per avviare" if enabled else self._hint_default)
-        self._hint_lbl.setVisible(True)
+        self._hint_lbl.setText("")
+        self._hint_lbl.hide()
         if enabled:
             self.start_btn.setEnabled(True)
             self.start_btn.setText("Avvia trascrizione")
@@ -589,6 +596,7 @@ class HomeWidget(QWidget):
         self._hint_lbl.setText(
             f"Formato .{ext} non supportato" if ext else "Formato non supportato"
         )
+        self._hint_lbl.show()
 
     def _on_start(self):
         if not self._source_path:
@@ -597,6 +605,7 @@ class HomeWidget(QWidget):
             self.current_config()
         except ValueError as e:
             self._hint_lbl.setText(f"Glossario non valido. {e}")
+            self._hint_lbl.show()
             return
         self.start_requested.emit(self._source_path, self._get_settings())
 
@@ -807,6 +816,7 @@ class _DesignDropZone(QWidget):
         lay_idle.addWidget(self._idle_t1)
         self._idle_t2 = _centered("")
         self._idle_t2.setTextFormat(Qt.RichText)
+        self._idle_t2.hide()   # il riquadro è cliccabile e ⌘O è nel menu File
         lay_idle.addWidget(self._idle_t2)
         lay_idle.addSpacing(8)
         self._chips: list = []
