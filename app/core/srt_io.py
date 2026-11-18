@@ -90,13 +90,15 @@ def wrap_subtitle_text(text: str, max_chars: Optional[int] = None,
     Altrimenti, se supera `max_chars`, va a capo nel punto linguisticamente migliore
     (mai dopo articoli/preposizioni, righe bilanciate, quella in basso più lunga) su al
     massimo `max_lines` righe. None = valori della configurazione corrente (predefiniti
-    MAX_CHARS_PER_LINE e 2 righe).
+    MAX_CHARS_PER_LINE e 2 righe; almeno 2 anche con "Una riga per sottotitolo", che
+    decide come il motore divide il parlato: un testo allungato a mano nell'editor va
+    a capo invece di uscire dallo schermo su una riga sola).
     """
     limits = active_readability()
     if max_chars is None:
         max_chars = limits.max_chars_per_line
     if max_lines is None:
-        max_lines = limits.max_lines
+        max_lines = max(2, limits.max_lines)
     if "\n" in text or len(text) <= max_chars:
         return text
     return wrap_lines(text, LayoutRules(max_chars_per_line=max_chars, max_lines=max_lines))
