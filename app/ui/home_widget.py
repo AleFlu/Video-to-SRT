@@ -36,7 +36,7 @@ from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QComboBox, QLineEdit, QSpinBox, QSizePolicy,
-    QFileDialog, QScrollArea, QStackedLayout,
+    QBoxLayout, QFileDialog, QScrollArea, QSplitter, QStackedLayout,
 )
 
 from core.constants import (
@@ -50,7 +50,12 @@ import platform_support
 
 
 _SHOWN_RECENTS = 5
-_PANEL_W = 420          # pannello impostazioni
+_PANEL_W = 420          # pannello impostazioni (larghezza iniziale)
+# Bordo trascinabile tra Sorgente e Impostazioni: limiti e larghezza ricordata
+SETTINGS_MIN_W = 380
+SETTINGS_MAX_W = 600
+SOURCE_MIN_W = 440
+_SETTINGS_PANEL_W_KEY = "home/settings_width"
 _DROP_H = 330           # altezza della zona di rilascio
 _ROW_H = 38             # riga della tabella "Recenti"
 _COL_NAME, _COL_DIR, _COL_SIZE = 12, 15, 110   # proporzioni colonne dei Recenti
@@ -132,10 +137,27 @@ FORMAT_CHOICES = (
 )
 
 
+class _SettingsRows(QWidget):
+    """Righe delle impostazioni. Alcune descrizioni vanno a capo: l'altezza che serve dipende
+    dalla larghezza (bordo trascinabile), quindi la minima si aggiorna a ogni ridimensionamento
+    e la finestra non può schiacciare le righe una sull'altra."""
+
+    min_height_changed = Signal()
+
+    def resizeEvent(self, event):  # noqa: N802 (override Qt)
+        super().resizeEvent(event)
+        lay = self.layout()
+        needed = lay.totalHeightForWidth(self.width()) if lay is not None else -1
+        if needed > 0 and needed != self.minimumHeight():
+            self.setMinimumHeight(needed)
+            self.min_height_changed.emit()
+
+
 class HomeWidget(QWidget):
     """Schermata iniziale: sorgente + recenti a sinistra, impostazioni e avvio a destra."""
 
     start_requested = Signal(str, dict)   # (source_path, settings)
+    min_height_changed = Signal()         # le impostazioni chiedono più (o meno) altezza
     open_requested  = Signal(str)         # SRT / .v2srt da aprire nell'editor
 
     def __init__(self, parent=None):
@@ -160,10 +182,14 @@ class HomeWidget(QWidget):
         self._deps_wrap.setVisible(False)
         root.addWidget(self._deps_wrap)
 
-        cols = QHBoxLayout()
-        cols.setContentsMargins(0, 0, 0, 0)
-        cols.setSpacing(0)
-        root.addLayout(cols, 1)
+        # Sorgente | Impostazioni: il bordo si trascina (entro SETTINGS_MIN_W–SETTINGS_MAX_W
+        # per le impostazioni e SOURCE_MIN_W per la sorgente); la larghezza è ricordata.
+        cols = QSplitter(Qt.Horizontal)
+        cols.setObjectName("homeSplit")
+        cols.setChildrenCollapsible(False)
+        cols.setHandleWidth(5)
+        root.addWidget(cols, 1)
+        self._split = cols
 
         # ── Colonna sinistra (scorrevole se la finestra è bassa) ──────────────
         scroll = QScrollArea()
@@ -175,7 +201,8 @@ class HomeWidget(QWidget):
         inner = QWidget()
         inner.setStyleSheet("background: transparent;")
         scroll.setWidget(inner)
-        cols.addWidget(scroll, 1)
+        scroll.setMinimumWidth(SOURCE_MIN_W)
+        cols.addWidget(scroll)
 
         left = QVBoxLayout(inner)
         left.setContentsMargins(32, 28, 32, 28)
@@ -210,6 +237,10 @@ class HomeWidget(QWidget):
         # ── Pannello impostazioni (420 px) ────────────────────────────────────
         self._settings_card = self._build_settings_card()
         cols.addWidget(self._settings_card)
+        cols.setStretchFactor(0, 1)
+        cols.setStretchFactor(1, 0)
+        cols.setSizes([10_000, self._saved_settings_width()])
+        cols.splitterMoved.connect(self._on_split_moved)
 
         # Ordine di tab: file → impostazioni → avvio
         chain = [self.drop, self.model_combo, self.lang_combo, self.glossary_edit,
@@ -261,6 +292,10 @@ class HomeWidget(QWidget):
         )
         self._src_note.setStyleSheet(
             f"font-size: 12px; color: {c('dim')}; background: transparent;"
+        )
+        self._split.setStyleSheet(
+            f"QSplitter#homeSplit::handle {{ background: {c('bg')}; }}"
+            f"QSplitter#homeSplit::handle:hover {{ background: {c('line_2')}; }}"
         )
         self._settings_card.setStyleSheet(
             f"QFrame#settingsCard {{ background-color: {c('panel')}; border: none;"
@@ -347,6 +382,16 @@ class HomeWidget(QWidget):
         lay.addLayout(h)
         return row
 
+    def _saved_settings_width(self) -> int:
+        value = QSettings("VideoSRT", "v2").value(_SETTINGS_PANEL_W_KEY, _PANEL_W)
+        try:
+            return max(SETTINGS_MIN_W, min(SETTINGS_MAX_W, int(value)))
+        except (TypeError, ValueError):
+            return _PANEL_W
+
+    def _on_split_moved(self, *_):
+        QSettings("VideoSRT", "v2").setValue(_SETTINGS_PANEL_W_KEY, self._settings_card.width())
+
     def _build_settings_card(self) -> QFrame:
         from engine import MODELS, DEFAULT_MODEL
         self._models = MODELS
@@ -356,7 +401,8 @@ class HomeWidget(QWidget):
 
         card = QFrame()
         card.setObjectName("settingsCard")
-        card.setFixedWidth(_PANEL_W)
+        card.setMinimumWidth(SETTINGS_MIN_W)
+        card.setMaximumWidth(SETTINGS_MAX_W)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(28, 28, 28, 24)
         lay.setSpacing(0)
@@ -372,21 +418,13 @@ class HomeWidget(QWidget):
         lay.addLayout(head)
         lay.addSpacing(4)
 
-        # Righe delle impostazioni: scorrono se la finestra è bassa (invece di
-        # schiacciarsi una sull'altra); riepilogo, stima e Avvia restano fissi in fondo.
+        # Righe delle impostazioni: mai a scorrimento; la finestra non scende sotto l'altezza
+        # che serve (MainWindow), così non si schiacciano. Riepilogo, stima e Avvia in fondo.
         card_lay = lay
-        self._settings_scroll = QScrollArea()
-        self._settings_scroll.setWidgetResizable(True)
-        self._settings_scroll.setFrameShape(QFrame.NoFrame)
-        self._settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._settings_scroll.setFocusPolicy(Qt.NoFocus)   # Tab va ai controlli, non qui
-        self._settings_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }")
-        rows = QWidget()
+        rows = _SettingsRows()
+        rows.min_height_changed.connect(self.min_height_changed)
         rows.setObjectName("settingsRows")
         rows.setStyleSheet("QWidget#settingsRows { background: transparent; }")
-        self._settings_scroll.setWidget(rows)
-        self._settings_scroll.viewport().setAutoFillBackground(False)
         lay = QVBoxLayout(rows)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -397,6 +435,11 @@ class HomeWidget(QWidget):
         ml.addSpacing(6)
         self.model_combo = QComboBox()
         self.model_combo.setAccessibleName("Modello Whisper")
+        # Le voci sono lunghe ("consigliato, da scaricare, 1,6 GB"): il menu non deve chiedere
+        # più spazio del pannello (la riga si schiaccerebbe); l'elenco aperto le mostra intere.
+        self.model_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.model_combo.setMinimumContentsLength(12)
+        self.model_combo.view().setTextElideMode(Qt.ElideNone)
         self.model_combo.setStyleSheet(ss)
         for k in self._model_keys:
             self.model_combo.addItem(self._models[k]["label"], k)
@@ -493,9 +536,9 @@ class HomeWidget(QWidget):
         self.beam_spin.setValue(5)
         self.beam_spin.hide()
 
-        lay.addStretch(1)
         lay = card_lay
-        lay.addWidget(self._settings_scroll, 1)
+        lay.addWidget(rows)
+        lay.addStretch(1)
 
         # Parte bassa: riepilogo, stima, avvio, suggerimento
         bottom = QFrame()
@@ -924,20 +967,34 @@ class _DesignDropZone(QWidget):
         self._idle_t2.hide()   # il riquadro è cliccabile e ⌘O è nel menu File
         lay_idle.addWidget(self._idle_t2)
         lay_idle.addSpacing(8)
+        # Formati: un gruppo per tipo (video, audio, sottotitoli) su una riga; se la colonna
+        # è stretta (bordo trascinato) i gruppi vanno uno sotto l'altro invece di essere tagliati
         self._chips: list = []
-        chips = QHBoxLayout()
-        chips.setSpacing(6)
-        chips.addStretch(1)
-        for gi, group in enumerate(_FORMAT_GROUPS):
-            if gi:
-                chips.addSpacing(10)
+        self._chip_groups: list = []
+        self._chips_box = QBoxLayout(QBoxLayout.LeftToRight)
+        self._chips_box.setSpacing(10)
+        for group in _FORMAT_GROUPS:
+            gw = QWidget()
+            gl = QHBoxLayout(gw)
+            gl.setContentsMargins(0, 0, 0, 0)
+            gl.setSpacing(6)
             for name in group:
                 chip = QLabel(name)
                 chip.setAlignment(Qt.AlignCenter)
                 self._chips.append(chip)
-                chips.addWidget(chip)
+                gl.addWidget(chip)
+            self._chip_groups.append(gw)
+            self._chips_box.addWidget(gw, 0, Qt.AlignCenter)
+        # La riga dei formati non impone la sua larghezza alla zona (altrimenti la colonna
+        # non potrebbe stringersi e i gruppi non andrebbero mai a capo: vedi resizeEvent)
+        chips_w = QWidget()
+        chips_w.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        chips = QHBoxLayout(chips_w)
+        chips.setContentsMargins(0, 0, 0, 0)
         chips.addStretch(1)
-        lay_idle.addLayout(chips)
+        chips.addLayout(self._chips_box)
+        chips.addStretch(1)
+        lay_idle.addWidget(chips_w)
 
         # ── Hover ─────────────────────────────────────────────────────────────
         self._w_hover, lay_hover = _state_page()
@@ -1044,6 +1101,19 @@ class _DesignDropZone(QWidget):
         if not self._file_path:
             return "video"
         return "audio" if Path(self._file_path).suffix.lower() in SUPPORTED_AUDIO_EXTS else "video"
+
+    def chips_stacked(self) -> bool:
+        return self._chips_box.direction() == QBoxLayout.TopToBottom
+
+    def resizeEvent(self, event):  # noqa: N802 (override Qt)
+        super().resizeEvent(event)
+        groups = [g.sizeHint().width() for g in self._chip_groups]
+        one_row = sum(groups) + self._chips_box.spacing() * (len(groups) - 1) + 48
+        direction = (QBoxLayout.LeftToRight if self.width() >= one_row
+                     else QBoxLayout.TopToBottom)
+        if direction != self._chips_box.direction():
+            self._chips_box.setDirection(direction)
+            self._set_state(self._state)      # altezza adeguata alle righe dei formati
 
     def _set_state(self, state: str):
         self._state = state

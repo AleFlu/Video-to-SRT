@@ -113,6 +113,11 @@ cursore; doppio clic sullo sfondo = tutta la durata; clic = seek; tenere premuto
 scrub (il playhead segue il mouse e resta dove lo si lascia; oltre i bordi la vista scorre);
 ⌥/Alt + trascinamento = scorrimento della vista.
 
+Home: le impostazioni di trascrizione non scorrono mai; la finestra non scende sotto l'altezza
+che servono (`MainWindow._fit_min_height`). Il bordo tra Sorgente e Impostazioni si trascina
+(impostazioni 380–600 px, sorgente almeno 440 px; larghezza in `home/settings_width`); con la
+colonna stretta i formati della zona di rilascio vanno a capo per gruppi.
+
 Video: il bordo tra monitor e forma d'onda si trascina (larghezza ricordata in
 `workspace/monitor_width`); pulsante del trasporto o doppio clic sul video = schermo intero con i
 sottotitoli (Esc, F o doppio clic per uscire; Spazio play/pausa, ←/→ ±1 s). Dopo uno scorrimento manuale

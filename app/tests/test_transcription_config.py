@@ -777,12 +777,15 @@ def test_home_format_follows_config_and_keeps_custom_limits(ui_env):
     assert home.current_config().readability.max_lines == 1
 
 
-def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, qapp):
-    """Regressione: a 900×600 le righe del pannello impostazioni si sovrapponevano
-    (suggerimento RAM sopra il menu del modello, interruttori sotto il pulsante)."""
+def test_home_settings_never_scroll_and_never_overlap(window, qapp):
+    """Le impostazioni non scorrono (richiesta dell'utente): la finestra non può diventare
+    così bassa da schiacciarle. Alla dimensione minima ogni riga è intera, il menu del
+    modello non tocca la riga sotto e il pulsante Avvia sta sotto l'ultima riga."""
+    from PySide6.QtWidgets import QScrollArea
     home = window._active().home
-    window.resize(900, 600)
+    assert home._settings_card.findChildren(QScrollArea) == []
     window.show()
+    window.resize(window.minimumWidth(), window.minimumHeight())
     qapp.processEvents()
 
     def rect(w):
@@ -790,14 +793,60 @@ def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, q
 
     assert not rect(home._model_hint).intersects(rect(home.model_combo))
     row = home.accuracy_toggle.parentWidget()
-    # testo che va a capo: l'altezza necessaria dipende dalla larghezza reale della riga
     needed = (row.heightForWidth(row.width()) if row.hasHeightForWidth()
               else row.sizeHint().height())
     assert row.height() >= needed
-    # il pulsante resta sempre visibile, sotto l'area che scorre
-    viewport = home._settings_scroll.viewport()
-    assert rect(viewport).bottom() < rect(home.start_btn).top()
-    assert home._settings_scroll.verticalScrollBar().maximum() > 0
+    assert rect(row).bottom() < rect(home.start_btn).top()
+    assert rect(home.start_btn).bottom() <= home.height()
+
+
+def test_home_border_between_source_and_settings_is_draggable_within_limits(window, qapp):
+    from ui.home_widget import (
+        HomeWidget, QSettings, SETTINGS_MAX_W, SETTINGS_MIN_W, SOURCE_MIN_W,
+        _SETTINGS_PANEL_W_KEY,
+    )
+    home = window._active().home
+    window.resize(1400, 900)
+    window.show()
+    qapp.processEvents()
+    split = home._split
+    assert not split.childrenCollapsible()
+    total = sum(split.sizes())
+    split.setSizes([total - 2000, 2000])          # oltre il massimo
+    qapp.processEvents()
+    assert home._settings_card.width() == SETTINGS_MAX_W
+    split.setSizes([total - 10, 10])              # sotto il minimo
+    qapp.processEvents()
+    assert home._settings_card.width() == SETTINGS_MIN_W
+    split.setSizes([10, total - 10])              # sorgente troppo stretta
+    qapp.processEvents()
+    assert split.sizes()[0] >= SOURCE_MIN_W
+    # colonna Sorgente al minimo: niente tagliato, i formati vanno a capo per gruppi
+    window.resize(window.minimumWidth(), 900)
+    qapp.processEvents()
+    total = sum(split.sizes())
+    split.setSizes([SOURCE_MIN_W, total - SOURCE_MIN_W])
+    qapp.processEvents()
+    drop = home.drop
+    assert drop.chips_stacked()
+    assert drop.minimumSizeHint().width() <= drop.width()
+    for chip in drop._chips:
+        assert drop.rect().contains(chip.rect().translated(chip.mapTo(drop, chip.rect().topLeft())))
+    window.resize(1400, 900)
+    qapp.processEvents()
+    total = sum(split.sizes())
+    split.setSizes([total - SETTINGS_MIN_W, SETTINGS_MIN_W])
+    qapp.processEvents()
+    assert not drop.chips_stacked()
+    # la larghezza scelta viene ricordata
+    split.setSizes([total - 500, 500])
+    split.splitterMoved.emit(total - 500, 1)
+    assert int(QSettings("VideoSRT", "v2").value(_SETTINGS_PANEL_W_KEY)) == 500
+    again = HomeWidget()
+    again.resize(1400, 800)
+    again.show()
+    qapp.processEvents()
+    assert again._settings_card.width() == 500
 
 
 def test_one_line_layout_keeps_every_subtitle_on_one_line():

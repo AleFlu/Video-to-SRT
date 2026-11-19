@@ -142,6 +142,7 @@ class MainWindow(QMainWindow):
 
         # ── Primo progetto ────────────────────────────────────────────────────
         self._new_project()   # crea Progetto 1 (con l'ultima configurazione usata)
+        self._fit_min_height()
         # Limiti di leggibilità dell'editor: quelli della configurazione appena applicata
         if self._projects:
             set_active_readability(self._projects[0].home.current_config().readability)
@@ -251,6 +252,7 @@ class MainWindow(QMainWindow):
         self._project_counter += 1
         n = self._project_counter
         pw = ProjectWidget(n, self._ffmpeg_ok, self._model_ok, parent=self)
+        pw.home.min_height_changed.connect(self._fit_min_height)
 
         # Connetti segnali del progetto
         self._projects.append(pw)
@@ -839,6 +841,18 @@ class MainWindow(QMainWindow):
             height = min(height, int(avail.height() * 0.92))
             self.setMinimumSize(min(900, width), min(600, height))
         self.resize(width, height)
+
+    def _fit_min_height(self):
+        """Altezza minima = quella che serve alla Home: le impostazioni di trascrizione non
+        scorrono, quindi la finestra non deve poterle schiacciare (entro lo schermo)."""
+        needed = QMainWindow.minimumSizeHint(self).height()
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            needed = min(needed, screen.availableGeometry().height())
+        if needed > self.minimumHeight():
+            self.setMinimumHeight(needed)
+            if self.height() < needed:
+                self.resize(self.width(), needed)
 
     def _restore_geometry(self):
         geom = QSettings("VideoSRT", "v2").value(_SETTINGS_GEOM)
