@@ -54,3 +54,16 @@ def test_home_has_no_settings_summary_line(ui_env):
     texts = [w.text() for w in home._settings_card.findChildren(QLabel)]
     assert not any("VAD attivo" in t or "VAD disattivo" in t for t in texts)
     assert not hasattr(home, "_preset_lbl")
+
+
+def test_settings_header_shows_only_the_title(ui_env):
+    """Accanto a "Impostazioni di trascrizione" non compare altro testo
+    ("Parametri predefiniti / personalizzati", "Configurazione: …")."""
+    from PySide6.QtWidgets import QLabel
+    from ui.home_widget import HomeWidget
+    home = HomeWidget()
+    home.resize(1200, 800)
+    home.show()
+    visible = [w.text() for w in home._settings_card.findChildren(QLabel) if w.isVisible()]
+    assert "Impostazioni di trascrizione" in visible
+    assert not any(t.startswith(("Parametri", "Configurazione")) for t in visible)

@@ -443,6 +443,9 @@ class HomeWidget(QWidget):
         self._config_lbl = ElidedLabel("", Qt.ElideMiddle)
         self._config_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         head.addWidget(self._config_lbl, 1)
+        # Non mostrata (richiesta dell'utente: in alto solo il titolo). Il testo resta
+        # aggiornato per la logica e i test; l'origine dei parametri è nel menu File.
+        self._config_lbl.hide()
         lay.addLayout(head)
         lay.addSpacing(4)
 
