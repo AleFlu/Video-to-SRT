@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSettings, QSize, Qt
+from PySide6.QtCore import QDir, QSettings, QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence, QUndoGroup
 from PySide6.QtWidgets import (
     QMainWindow, QStackedWidget, QStatusBar, QLabel, QMessageBox, QWidget, QVBoxLayout,
@@ -865,7 +865,7 @@ class MainWindow(QMainWindow):
         ogni file successivo apre un nuovo progetto (se il limite non è raggiunto).
         """
         paths = [
-            u.toLocalFile()
+            QDir.toNativeSeparators(u.toLocalFile())
             for u in e.mimeData().urls()
             if Path(u.toLocalFile()).suffix.lower() in SUPPORTED_ALL_EXTS
         ]

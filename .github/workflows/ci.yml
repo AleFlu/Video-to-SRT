@@ -34,6 +34,16 @@ jobs:
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 \
             libxcb-shape0 libxrender1 libxi6 libxcomposite1 libxdamage1 libxfixes3 libxtst6
 
+      # Il runner Linux non ha audio: il player (backend FFmpeg di Qt) riceve una scheda
+      # audio finta, come su un PC vero, invece di nessun dispositivo.
+      - name: Audio finto (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci_null
+          pactl set-default-sink ci_null
+
       # faster-whisper non serve: i test non caricano il modello
       - name: Installa dipendenze
         run: python -m pip install --upgrade pip PySide6 numpy soundfile pytest ruff

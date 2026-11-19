@@ -19,6 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 @pytest.fixture(scope="session")
@@ -247,9 +248,13 @@ class TestProjectTabBarState:
         from ui.project_tab_bar import ProjectTabBar
         bar = ProjectTabBar()
         bar.add_tab("Vecchio titolo")
+        # larghezza indipendente dai font del sistema (su Windows "Nuovo titolo" non ci stava)
+        font = QFont(bar._tabs[0]._lbl.font())
+        font.setPixelSize(12)
+        bar._tabs[0]._lbl.setFont(font)
         bar.set_tab_title(0, "Nuovo titolo")
         assert bar._tabs[0]._title == "Nuovo titolo"
-        assert bar._tabs[0]._lbl.text() == "Nuovo titolo"   # corto: nessuna elisione
+        assert bar._tabs[0]._lbl.text() == "Nuovo titolo"   # ci sta: nessuna elisione
         long_title = "Titolo lunghissimo " * 10
         bar.set_tab_title(0, long_title)
         assert bar._tabs[0]._lbl.text() != long_title        # eliso

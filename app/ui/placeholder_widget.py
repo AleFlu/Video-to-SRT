@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QDir, Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QSizePolicy,
@@ -143,7 +143,7 @@ class PlaceholderWidget(QWidget):
         if not event.mimeData().hasUrls():
             return ""
         for url in event.mimeData().urls():
-            path = url.toLocalFile()
+            path = QDir.toNativeSeparators(url.toLocalFile())
             if path and Path(path).suffix.lower() in SUPPORTED_ALL_EXTS:
                 return path
         return ""

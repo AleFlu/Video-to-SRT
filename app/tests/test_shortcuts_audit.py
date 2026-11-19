@@ -24,7 +24,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from PySide6.QtCore import QEvent, qInstallMessageHandler
+from PySide6.QtCore import QEvent, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
@@ -111,7 +111,13 @@ def env(app, tmp_path_factory):
     mp.setattr(platform_support, "legacy_cache_dirs", lambda: [])
 
     messages: list = []
-    previous_handler = qInstallMessageHandler(lambda _t, _c, m: messages.append(m))
+    def _handler(kind, _ctx, msg):
+        messages.append(msg)
+        if kind in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg, QtMsgType.QtWarningMsg):
+            # visibile nel log della CI se Qt fa abortire il processo (qFatal)
+            print(f"[qt] {msg}", file=sys.__stderr__, flush=True)
+
+    previous_handler = qInstallMessageHandler(_handler)
 
     win = mw.MainWindow(ffmpeg_ok=True, model_ok=True)
     e = Env(win)

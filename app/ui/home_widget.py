@@ -31,7 +31,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QSettings
+from PySide6.QtCore import QDir, Qt, Signal, QSettings
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
@@ -317,6 +317,8 @@ class HomeWidget(QWidget):
         """Sezione del pannello: (cornice con linea inferiore, layout verticale)."""
         row = QFrame()
         row.setObjectName("setRow")
+        # mai più bassa del necessario: se manca spazio scorre il pannello (non si schiaccia)
+        row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         lay = QVBoxLayout(row)
         lay.setContentsMargins(0, 14, 0, 14)
         lay.setSpacing(0)
@@ -1065,7 +1067,9 @@ class _DesignDropZone(QWidget):
     def _local_paths(mime) -> list:
         if not mime.hasUrls():
             return []
-        return [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+        # separatori nativi: su Windows toLocalFile() restituisce C:/...
+        return [QDir.toNativeSeparators(u.toLocalFile())
+                for u in mime.urls() if u.isLocalFile()]
 
     def dragEnterEvent(self, e):
         paths = self._local_paths(e.mimeData())

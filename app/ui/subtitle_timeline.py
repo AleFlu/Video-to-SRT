@@ -60,10 +60,11 @@ _TOOLBAR_HEIGHT = 42
 _BTN_HEIGHT = 28
 _SEARCH_WIDTH = 250
 _SEARCH_WIDTH_COMPACT = 150
+_SEARCH_WIDTH_MIN = 120
 # Livelli di compattezza della toolbar quando la finestra è stretta: prima spariscono le
 # scorciatoie disegnate, poi i testi (resta l'icona, il nome è nel tooltip), infine la
 # ricerca si accorcia. Così ricerca ed Esporta non finiscono mai nel menu di overflow.
-TOOLBAR_LEVELS = 4
+TOOLBAR_LEVELS = 5
 _ROW_HEIGHT = 34
 _HINT_PAD = 9    # padding laterale dei pulsanti
 _HINT_GAP = 6    # spazio tra testo e scorciatoia
@@ -833,7 +834,11 @@ class SubtitleTimeline(QWidget):
         self._toolbar_level = level
         for b in (*self._tb_buttons, self._insp_btn):
             b.set_compact(level)
-        self._search_box.setFixedWidth(_SEARCH_WIDTH if level < 3 else _SEARCH_WIDTH_COMPACT)
+        self._search_box.setFixedWidth(
+            _SEARCH_WIDTH if level < 3 else _SEARCH_WIDTH_COMPACT if level < 4
+            else _SEARCH_WIDTH_MIN)
+        # ultimo livello: Esporta solo icona (nome accessibile e tooltip restano)
+        self._export_btn.setText("" if level >= 4 else "Esporta SRT")
         self._apply_toolbar_palette()
         self._toolbar.layout().invalidate()
 

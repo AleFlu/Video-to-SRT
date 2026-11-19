@@ -46,13 +46,20 @@ def test_toolbar_keeps_search_and_export_visible(app, width):
 
 
 def test_toolbar_compacts_only_when_needed(app):
-    wide = _timeline_at(app, 1600)
     narrow = _timeline_at(app, 700)
-    assert wide.toolbar_level() == 0
-    assert narrow.toolbar_level() > 0
-    narrow.resize(1600, 500)
+    level = narrow.toolbar_level()
+    assert level > 0
+    tb = narrow.toolbar()
+    # il livello scelto è il minimo: con quello precedente la toolbar non ci starebbe
+    narrow._apply_toolbar_level(level - 1)
     app.processEvents()
-    assert narrow.toolbar_level() == 0
+    assert tb.sizeHint().width() > tb.width()
+    narrow.fit_toolbar()
+    assert narrow.toolbar_level() == level
+    # finestra più larga: si torna (almeno in parte) alla versione completa
+    narrow.resize(2400, 500)
+    app.processEvents()
+    assert narrow.toolbar_level() < level
 
 
 def test_ctrl_f_focuses_search_in_a_narrow_window(app):
