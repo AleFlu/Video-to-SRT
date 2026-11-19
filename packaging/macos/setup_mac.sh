@@ -75,14 +75,7 @@ pip install pyinstaller --quiet
 
 # --- 5. Modello ---
 echo ""
-echo "🧠 [5/5] Download modello large-v3 (~1.5 GB, solo prima volta)..."
-python3 -c "
-from faster_whisper import WhisperModel
-print('   Scaricamento e conversione in corso...')
-model = WhisperModel('large-v3', device='cpu', compute_type='int8')
-del model
-print('   ✅ Modello pronto')
-"
+echo "🧠 [5/5] Modello Whisper: lo propone e lo scarica l'app alla prima trascrizione."
 
 echo ""
 echo "=================================================="

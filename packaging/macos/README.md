@@ -9,11 +9,11 @@ Both architectures share `build_mac.py`, which detects `arm64` / `x86_64` with
 | **Intel** (x86_64) | `bash packaging/macos/intel/build.sh` | `.venv-intel/` (x86_64) | static binary in `packaging/macos/intel/bin/ffmpeg` |
 
 Created at the **repository root** and ignored by git: `.venv/`, `.venv-intel/`,
-`_build_model/` (the Whisper model to bundle), `build/`, `dist/`.
+`_build_model/` (only for `--with-model`), `build/`, `dist/`.
 
 | Script | Purpose |
 |---|---|
-| `install.sh` | Full setup (Homebrew, FFmpeg, Python, `.venv`, dependencies, model) with `--run`, `--app`, `--dmg` |
+| `install.sh` | Full setup (Homebrew, FFmpeg, Python, `.venv`, dependencies) with `--run`, `--app`, `--dmg` |
 | `setup_mac.sh` | Minimal setup |
 | `apple-silicon/build.sh` | Apple Silicon build |
 | `intel/build.sh` | Intel build, runs `build_mac.py` under `arch -x86_64` |
@@ -24,7 +24,7 @@ Created at the **repository root** and ignored by git: `.venv/`, `.venv-intel/`,
 ## Development
 
 ```bash
-packaging/macos/install.sh --run       # setup (.venv, dependencies, model) + launch
+packaging/macos/install.sh --run       # setup (.venv, dependencies) + launch
 # or, with the venv already set up:
 source .venv/bin/activate && python app/main.py
 ```
@@ -34,15 +34,18 @@ Requirements: macOS 12+, Python 3.10+, Homebrew (installed by the script if miss
 ## Apple Silicon build
 
 ```bash
-packaging/macos/install.sh --run                    # once: environment and model
+packaging/macos/install.sh --run                    # once: environment
 bash packaging/macos/apple-silicon/build.sh         # .app + .dmg
 bash packaging/macos/apple-silicon/build.sh --no-dmg
+bash packaging/macos/apple-silicon/build.sh --with-model   # + large-v3 for offline installs
 bash packaging/macos/apple-silicon/build.sh --sign "Developer ID Application: …"
 ```
 
-`install.sh --app` / `--dmg` do setup and build in one go. The Whisper model is bundled if it
-is in `_build_model/` (or the Hugging Face cache); FFmpeg is bundled if found in `PATH` /
-Homebrew. For a `.pkg`, run `packaging/macos/build_installer.sh` after the build.
+`install.sh --app` / `--dmg` do setup and build in one go. The app ships **without** a Whisper
+model: it recommends one for the computer and downloads it at the first transcription.
+`--with-model` bundles large-v3 (~3 GB, from `_build_model/` or the Hugging Face cache) for
+computers without internet. Only the Qt modules the app uses are bundled (no WebEngine, QML,
+3D…). FFmpeg is bundled if found in `PATH` / Homebrew. For a `.pkg`, run `packaging/macos/build_installer.sh` after the build.
 
 ## Intel build
 
@@ -62,8 +65,7 @@ chmod +x packaging/macos/intel/bin/ffmpeg
 bash packaging/macos/intel/build.sh
 ```
 
-The script checks the venv, FFmpeg and the model, and stops with an explanation if something
-is missing.
+The script checks the venv and FFmpeg, and stops with an explanation if something is missing.
 
 ## Notes
 

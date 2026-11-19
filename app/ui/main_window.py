@@ -604,7 +604,9 @@ class MainWindow(QMainWindow):
 
     def _apply_saved_config(self, pw: ProjectWidget):
         """Mostra nella Home di ``pw`` l'ultima configurazione usata."""
-        config, name = read_config(QSettings("VideoSRT", "v2"))
+        from engine import recommended_model
+        config, name = read_config(QSettings("VideoSRT", "v2"),
+                                   default_model=recommended_model())
         try:
             pw.home.apply_config(config, name)
         except ValueError as e:

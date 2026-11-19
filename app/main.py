@@ -414,14 +414,20 @@ def main():
             result["ffmpeg"] = check_ffmpeg()
 
             splash_state.step_changed.emit(3, "Caricamento motore IA…")
-            from engine import preload_model, DEFAULT_MODEL
+            from engine import preload_model, recommended_model
+            from PySide6.QtCore import QSettings
+            from ui.prefs import read_config
 
             splash_state.step_changed.emit(4, "Caricamento modello Whisper…")
 
             def _on_status(msg):
                 splash_state.step_changed.emit(4, msg)
 
-            result["model"] = preload_model(model_size=DEFAULT_MODEL, on_status=_on_status)
+            # Il modello che la Home proporrà (ultimo usato o consigliato per il computer),
+            # solo se è già scaricato: mai un download durante lo splash.
+            model = read_config(QSettings("VideoSRT", "v2"),
+                                default_model=recommended_model())[0].model_size
+            result["model"] = preload_model(model_size=model, on_status=_on_status)
             splash_state.step_changed.emit(5, "Pronto!")
         except BaseException as exc:  # noqa: BLE001 — qualsiasi errore deve chiudere lo splash
             logger.error("Errore nel worker di avvio:\n%s", traceback.format_exc())

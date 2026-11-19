@@ -68,19 +68,24 @@ editor ──► export SRT / VTT / TXT / ASS
 
 ## Requirements
 
-- **8 GB of RAM** (`large-v3` uses about 6 GB; lighter models are available)
-- **4–10 GB of disk space** for the model and dependencies
+- **8 GB of RAM** (16 GB for `large-v3`; lighter models are available)
+- **2–5 GB of disk space** for the app and the model you choose
 - **FFmpeg** (installed by the setup scripts)
 - **Python 3.10+** for development (3.11 recommended; the code stays 3.9-compatible)
-- Internet **only** on first launch, to download dependencies and the model
+- Internet **only** to download the model, once, at the first transcription
 
-| Model | RAM | Italian quality | Use it for |
-|---|---|---|---|
-| `tiny` · `base` | ~1 GB | ★☆☆☆☆ · ★★☆☆☆ | Quick tests |
-| `small` | ~2 GB | ★★★☆☆ | Low-memory machines |
-| `medium` | ~5 GB | ★★★★☆ | A good alternative |
-| **`large-v3`** | **~6 GB** | **★★★★★** | **Default** |
-| `large-v3-turbo` | ~4 GB | ★★★★½ | Faster, nearly the same quality |
+The app is downloaded **without** a model. It reads the computer's RAM and GPU, marks the
+best model for it as *recommended*, and downloads the model you pick at the first
+transcription, after asking, with a progress bar; an interrupted download resumes where it
+stopped. Models already on disk are marked, and you can switch at any time.
+
+| Model | RAM | Download | Italian quality | Recommended on |
+|---|---|---|---|---|
+| `tiny` · `base` | ~1 GB | 80 · 150 MB | ★☆☆☆☆ · ★★☆☆☆ | `base`: under 4 GB of RAM |
+| `small` | ~2 GB | 480 MB | ★★★☆☆ | 4–7 GB of RAM |
+| `medium` | ~5 GB | 1.5 GB | ★★★★☆ | — |
+| `large-v3-turbo` | ~4 GB | 1.6 GB | ★★★★½ | 8–15 GB of RAM, faster |
+| `large-v3` | ~6 GB | 3.1 GB | ★★★★★ | 16 GB of RAM or more, or an NVIDIA GPU |
 
 **Input formats:** MP4, MOV, MKV, AVI, WebM, M4V · MP3, WAV, M4A, FLAC, OGG, AAC, WMA · SRT and `.v2srt` to reopen a job.
 
@@ -94,8 +99,8 @@ editor ──► export SRT / VTT / TXT / ASS
 | **macOS · Intel** | `packaging/macos/install.sh --run` | `bash packaging/macos/intel/build.sh` → `.app` + `.dmg` |
 | **Windows 10/11** | `packaging\windows\setup_windows.bat --run` | `python packaging\windows\build_windows.py` → `.exe` |
 
-The setup scripts install FFmpeg, create the Python environment, install dependencies and
-download the model. Details and troubleshooting: [macOS](packaging/macos/README.md) ·
+The setup scripts install FFmpeg, create the Python environment and install dependencies; the
+model is chosen and downloaded from the app. Details and troubleshooting: [macOS](packaging/macos/README.md) ·
 [Windows](packaging/windows/README.md).
 
 **Manual setup**, from the repository root:
@@ -107,7 +112,7 @@ pip install -r app/requirements.txt -r requirements-dev.txt
 python app/main.py
 ```
 
-FFmpeg must be on `PATH` (macOS: `brew install ffmpeg`). The model downloads on first use.
+FFmpeg must be on `PATH` (macOS: `brew install ffmpeg`). The model downloads at the first transcription.
 
 ---
 

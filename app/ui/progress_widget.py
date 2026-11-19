@@ -89,6 +89,8 @@ _PH_PENDING, _PH_ACTIVE, _PH_DONE = "pending", "active", "done"
 def phase_for_status(msg: str) -> Optional[int]:
     """Indice (0-4) della fase a cui appartiene il messaggio di stato; None se ignoto."""
     m = (msg or "").lower()
+    if "download del modello" in m or m.endswith("scaricato"):
+        return None   # download prima della trascrizione: solo riga di stato e barra
     if "ottimizzazione timing" in m or "generazione file" in m or m.startswith("completato"):
         return 4
     if "segmentazione" in m or m.startswith("trascrizione completata"):

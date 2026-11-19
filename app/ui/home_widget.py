@@ -85,6 +85,13 @@ def _short_dir(path: str) -> str:
     return parent
 
 
+def _gb_text(gb: float) -> str:
+    """Dimensione di un download in italiano: 1,6 GB · 480 MB."""
+    if gb < 1:
+        return f"{int(round(gb * 1000))} MB"
+    return f"{gb:.1f} GB".replace(".", ",")
+
+
 def _quality_text(stars: str) -> str:
     """"★★★★½" -> "4,5/5" (stelle intere + mezza)."""
     n = stars.count("★") + (0.5 if "½" in stars else 0.0)
@@ -392,8 +399,9 @@ class HomeWidget(QWidget):
         self.model_combo.setAccessibleName("Modello Whisper")
         self.model_combo.setStyleSheet(ss)
         for k in self._model_keys:
-            self.model_combo.addItem(self._models[k]["label"].rstrip(" ★").rstrip(), k)
+            self.model_combo.addItem(self._models[k]["label"], k)
         self.model_combo.setCurrentIndex(self._model_keys.index(DEFAULT_MODEL))
+        self._refresh_model_labels()
         self.model_combo.currentIndexChanged.connect(self._update_estimate)
         self.model_combo.currentIndexChanged.connect(self._update_preset_label)
         self.model_combo.currentIndexChanged.connect(self._update_model_hint)
@@ -560,9 +568,32 @@ class HomeWidget(QWidget):
             self._acc_desc.setText(f"{reason[:1].upper()}{reason[1:]}: si usa la modalità standard")
             self._acc_desc.setProperty("unavailable", True)
 
+    def _refresh_model_labels(self) -> None:
+        """Etichette del menu: "consigliato" e "da scaricare, N GB" accanto ai modelli."""
+        from engine import is_model_available, recommended_model
+        rec = recommended_model()
+        for i, key in enumerate(self._model_keys):
+            info = self._models[key]
+            tags = []
+            if key == rec:
+                tags.append("consigliato")
+            if not is_model_available(key):
+                tags.append(f"da scaricare, {_gb_text(info['download_gb'])}")
+            text = info["label"] + (f"  ({', '.join(tags)})" if tags else "")
+            self.model_combo.setItemText(i, text)
+
+    def refresh_models(self) -> None:
+        """Ricalcola cosa è scaricato (dopo un download o tornando alla Home)."""
+        self._refresh_model_labels()
+        self._update_model_hint()
+
+    def showEvent(self, event):  # noqa: N802 (override Qt)
+        super().showEvent(event)
+        self.refresh_models()
+
     def _update_model_hint(self, *_):
-        """Riga mono sotto il modello: RAM, qualità (da engine.MODELS), "predefinito"."""
-        from engine import DEFAULT_MODEL
+        """Riga mono sotto il modello: RAM, qualità, consigliato, scaricato o da scaricare."""
+        from engine import is_model_available, recommended_model
         key = self.model_combo.currentData()
         info = self._models.get(key, {})
         parts = []
@@ -570,8 +601,11 @@ class HomeWidget(QWidget):
             parts.append(f"RAM {info['ram']}")
         if info.get("quality"):
             parts.append(_quality_text(info["quality"]))
-        if key == DEFAULT_MODEL:
-            parts.append("predefinito")
+        if key == recommended_model():
+            parts.append("consigliato per questo computer")
+        if key in self._models:
+            parts.append("scaricato" if is_model_available(key)
+                         else f"da scaricare · {_gb_text(info['download_gb'])}")
         self._model_hint.setText("      ".join(parts))
 
     def _update_preset_label(self):
@@ -778,7 +812,7 @@ class HomeWidget(QWidget):
             model_key = self.model_combo.currentData() or "large-v3"
             factor = {
                 "tiny": 0.15, "base": 0.25, "small": 0.4,
-                "medium": 0.65, "large-v2": 1.0, "large-v3": 1.0,
+                "medium": 0.65, "large-v3-turbo": 0.5, "large-v3": 1.0,
             }.get(model_key, 1.0)
             mins = max(1, int(size_mb * factor / 100 * 1.5))
             srt_kb = max(1, int(size_mb * 0.05))

@@ -6,7 +6,8 @@ Va eseguito con il Python del venv della root del repository; la cartella di
 lavoro non conta (i percorsi sono risolti a partire dalla posizione di questo file).
 
 Uso (dalla root del repo):
-    .venv/bin/python packaging/macos/build_mac.py [--clean] [--no-dmg] [--sign "Developer ID"]
+    .venv/bin/python packaging/macos/build_mac.py [--clean] [--no-dmg] [--with-model]
+                                                  [--sign "Developer ID"]
 
 Architettura: rilevata con platform.machine() (arm64 / x86_64) e usata per
 scegliere l'ffmpeg da includere. Per la build Intel su un Mac ARM usa
@@ -21,14 +22,15 @@ Requisiti:
     pip install pyinstaller
     brew install ffmpeg create-dmg   # opzionale: create-dmg solo per il .dmg
 
-Il modello Whisper viene copiato da <root>/_build_model/ (deve essere già scaricato
-tramite install.sh oppure manualmente con faster-whisper / huggingface-cli).
+Il modello Whisper NON è incluso di norma: l'app propone quello adatto al computer e lo
+scarica alla prima trascrizione. Con --with-model viene copiato large-v3 da
+<root>/_build_model/ (o dalla cache di Hugging Face) per l'uso senza internet.
 
 Struttura file risultante nell'app:
     Video-to-SRT.app/Contents/
         MacOS/Video-to-SRT          — eseguibile principale
         Resources/
-            whisper_model/          — modello Whisper (large-v3)
+            whisper_model/          — modello Whisper (solo con --with-model)
             ffmpeg                  — binario ffmpeg bundled
         Frameworks/                 — librerie Qt/PySide6
 """
@@ -113,28 +115,36 @@ def clean():
             shutil.rmtree(d)
 
 
-def build(sign_id: str | None = None):
+def build(sign_id: str | None = None, with_model: bool = False):
     # Lavoriamo dalla root del repo (il .spec generato finisce in build/).
     os.chdir(REPO_ROOT)
     print(f"Architettura: {platform.machine()}  |  root: {REPO_ROOT}")
 
     # ---- Verifica prerequisiti ----
-    if not shutil.which("pyinstaller"):
+    # Si usa `python -m PyInstaller` del venv: basta che il modulo ci sia (il venv può non
+    # essere attivato, quindi lo script `pyinstaller` può non essere nel PATH).
+    try:
+        import PyInstaller  # noqa: F401
+    except ImportError:
         sys.exit("❌  PyInstaller non trovato. Installa con: pip install pyinstaller")
 
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         print("⚠️   ffmpeg non trovato — l'app funzionerà solo con file già pre-elaborati.")
 
-    model_dir = find_model()
-    if not model_dir:
-        print(
-            f"⚠️   Modello Whisper non trovato in '{MODEL_SRC_DIR}'.\n"
-            "    Esegui: python -c \"from faster_whisper import WhisperModel; "
-            f"WhisperModel('large-v3', download_root='{MODEL_SRC_DIR}')\"\n"
-            "    oppure packaging/macos/install.sh per scaricarlo automaticamente.\n"
-            "    Il build continua, ma l'app non potrà trascrivere."
+    # Modello: di norma NON incluso (l'app propone quello adatto al computer e lo scarica
+    # alla prima trascrizione, con l'avanzamento). --with-model include large-v3 (~3 GB)
+    # per chi deve installare su computer senza internet.
+    model_dir = find_model() if with_model else None
+    if with_model and not model_dir:
+        sys.exit(
+            f"❌  --with-model: modello large-v3 non trovato in '{MODEL_SRC_DIR}' né nella "
+            "cache di Hugging Face.\n    Esegui: python -c \"from faster_whisper import "
+            f"WhisperModel; WhisperModel('large-v3', download_root='{MODEL_SRC_DIR}')\""
         )
+    if not with_model:
+        print("ℹ️   Modello non incluso: l'app lo scarica alla prima trascrizione "
+              "(--with-model per includere large-v3).")
 
     # ---- Costruzione comando PyInstaller ----
     cmd = [
@@ -154,8 +164,21 @@ def build(sign_id: str | None = None):
         "--add-data", f"{APP_DIR / 'ui'}{os.pathsep}ui",
         "--add-data", f"{APP_DIR / 'core'}{os.pathsep}core",
         "--add-data", f"{ASSETS_DIR}{os.pathsep}assets",
-        "--collect-all", "PySide6",
-        "--collect-all", "shiboken6",
+        # Solo i moduli Qt che l'app usa (gli hook di PyInstaller aggiungono i plugin:
+        # piattaforma, stili, multimedia, svg). Con --collect-all PySide6 entravano anche
+        # WebEngine (~650 MB), QML/Quick, 3D, PDF... mai usati.
+        "--hidden-import", "PySide6.QtCore",
+        "--hidden-import", "PySide6.QtGui",
+        "--hidden-import", "PySide6.QtWidgets",
+        "--hidden-import", "PySide6.QtSvg",
+        "--hidden-import", "PySide6.QtMultimedia",
+        "--hidden-import", "PySide6.QtMultimediaWidgets",
+        "--exclude-module", "PySide6.QtWebEngineCore",
+        "--exclude-module", "PySide6.QtWebEngineWidgets",
+        "--exclude-module", "PySide6.QtWebEngineQuick",
+        "--exclude-module", "PySide6.QtQml",
+        "--exclude-module", "PySide6.QtQuick",
+        "--exclude-module", "PySide6.QtPdf",
         "--collect-all", "onnxruntime",
         "--collect-all", "ctranslate2",
         "--collect-data", "faster_whisper",
@@ -164,7 +187,6 @@ def build(sign_id: str | None = None):
         "--hidden-import", "numpy",
         "--hidden-import", "av",
         "--hidden-import", "encodings",
-        "--hidden-import", "pkg_resources",
         # Esclude moduli pesanti inutili
         "--exclude-module", "matplotlib",
         "--exclude-module", "IPython",
@@ -310,6 +332,8 @@ def main():
                         help="Rimuovi build/ e dist/ prima di compilare")
     parser.add_argument("--no-dmg",  action="store_true",
                         help="Salta la creazione del DMG")
+    parser.add_argument("--with-model", action="store_true",
+                        help="Includi il modello large-v3 (~3 GB) per l'uso senza internet")
     parser.add_argument("--sign",    metavar="DEVELOPER_ID", default=None,
                         help='Firma con: "Developer ID Application: Nome (XXXXXXXXXX)"')
     args = parser.parse_args()
@@ -322,7 +346,7 @@ def main():
         print("\n🧹  Pulizia...")
         clean()
 
-    app_path = build(sign_id=args.sign)
+    app_path = build(sign_id=args.sign, with_model=args.with_model)
 
     if not args.no_dmg:
         print("\n📦  Creazione DMG...")

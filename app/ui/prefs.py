@@ -11,7 +11,7 @@ Qui vive anche la persistenza dell'ultima configurazione di trascrizione usata
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 from core.transcription_config import TranscriptionConfig
 
@@ -46,20 +46,24 @@ CONFIG_NAME_KEY = "transcription_config_name"  # origine: nome del file importat
 CONFIG_DIR_KEY = "transcription_config_dir"    # ultima cartella di import/export
 
 
-def read_config(settings) -> Tuple[TranscriptionConfig, str]:
+def read_config(settings, default_model: Optional[str] = None
+                ) -> Tuple[TranscriptionConfig, str]:
     """Ultima configurazione usata e nome della sua origine.
 
-    Se manca o non è più valida (file delle preferenze modificato, versione più
-    recente) si usano i predefiniti, senza eccezioni.
+    Se manca (primo avvio) o non è più valida (file delle preferenze modificato,
+    versione più recente) si usano i predefiniti, senza eccezioni, col modello
+    ``default_model`` se indicato (il consigliato per il computer).
     """
+    default = (TranscriptionConfig(model_size=default_model) if default_model
+               else TranscriptionConfig())
     raw = settings.value(CONFIG_KEY, "")
     if not raw or not isinstance(raw, str):
-        return TranscriptionConfig(), ""
+        return default, ""
     try:
         config = TranscriptionConfig.from_json(raw)
     except ValueError as e:
         log.warning("Configurazione salvata non valida, uso i predefiniti: %s", e)
-        return TranscriptionConfig(), ""
+        return default, ""
     name = settings.value(CONFIG_NAME_KEY, "")
     return config, name if isinstance(name, str) else ""
 

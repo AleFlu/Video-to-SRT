@@ -54,6 +54,35 @@ def cpu_threads() -> int:
     return max(1, count)
 
 
+@lru_cache(maxsize=1)
+def total_ram_bytes() -> int:
+    """RAM fisica totale in byte (0 se non si riesce a leggerla)."""
+    try:
+        if IS_MAC:
+            return _sysctl_int("hw.memsize")
+        if IS_WIN:
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            status = _MemStatus()
+            status.dwLength = ctypes.sizeof(_MemStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.ullTotalPhys)
+            return 0
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except (OSError, ValueError, AttributeError):
+        return 0
+
+
 def ffmpeg_executable_name() -> str:
     """Nome dell'eseguibile ffmpeg per il sistema corrente."""
     return "ffmpeg.exe" if IS_WIN else "ffmpeg"

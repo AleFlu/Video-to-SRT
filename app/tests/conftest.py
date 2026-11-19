@@ -106,3 +106,44 @@ def _cleanup_top_level_widgets():
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     qapp.processEvents()
 
+
+
+# ── Modelli Whisper: niente rete, niente cache reale, hardware fisso ──────────────────────
+# Ogni test vede una cache di Hugging Face vuota e tutta sua; un "download" crea all'istante
+# una copia finta del modello (i test di core.whisper_models sostituiscono _fetch da sé).
+# L'hardware è fisso (16 GB, niente GPU: modello consigliato large-v3) così i risultati non
+# dipendono dal computer su cui girano i test.
+
+@pytest.fixture(autouse=True)
+def isolated_model_cache(tmp_path_factory, monkeypatch) -> Path:
+    from core import whisper_models
+
+    cache = tmp_path_factory.mktemp("hf-hub")
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+
+    def _fake_fetch(key: str) -> None:
+        repo = whisper_models.model_repo(key).replace("/", "--")
+        snap = cache / f"models--{repo}" / "snapshots" / "test"
+        snap.mkdir(parents=True, exist_ok=True)
+        (snap / "config.json").write_text("{}", encoding="utf-8")
+        (snap / "model.bin").write_bytes(b"")
+
+    monkeypatch.setattr(whisper_models, "_fetch", _fake_fetch)
+    try:
+        import engine
+    except ImportError:
+        return cache
+    monkeypatch.setitem(engine._hardware_cache, "hw", (16 * 1024 ** 3, False))
+    return cache
+
+
+# Una QMessageBox.question vera, offscreen, resterebbe aperta per sempre e bloccherebbe la
+# suite: se un test non la sostituisce, fallisce subito dicendo quale domanda è comparsa.
+@pytest.fixture(autouse=True)
+def _no_unexpected_questions(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    def _question(_parent, title, text, *_a, **_k):
+        raise AssertionError(f"QMessageBox.question inattesa: {title!r} — {text!r}")
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))

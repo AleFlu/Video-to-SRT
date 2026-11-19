@@ -7,7 +7,7 @@
 | OS | Windows 10 64-bit | Windows 11 64-bit |
 | Python | 3.10 x64 | 3.11 x64 |
 | RAM | 8 GB | 16 GB |
-| Disk | 10 GB free (model ~3 GB + dependencies) | SSD |
+| Disk | 5 GB free (app, dependencies and the chosen model) | SSD |
 | GPU | — | NVIDIA with CUDA 11.8+ (faster transcription) |
 
 ## Setup and run (development)
@@ -26,8 +26,9 @@
    ```bat
    packaging\windows\setup_windows.bat --run
    ```
-   This creates `.venv\` at the repository root, installs `app\requirements.txt`, downloads the
-   Whisper large-v3 model (~3 GB, first run only) and starts the app.
+   This creates `.venv\` at the repository root, installs `app\requirements.txt` and starts the
+   app. The app recommends a Whisper model for the computer and downloads it at the first
+   transcription (once).
 
 Later runs:
 

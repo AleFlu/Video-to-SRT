@@ -198,11 +198,10 @@ class DepsBanner(QFrame):
                 "(macOS: <code>brew install ffmpeg</code>)"
             )
         if not model_ok:
-            issues.append("Modello Whisper non disponibile")
+            issues.append("Modello Whisper non ancora scaricato")
             hints.append(
-                "• <b>Modello Whisper</b>: esegui lo script di setup "
-                "(<code>setup_mac.sh</code> o <code>setup_windows.bat</code>) "
-                "per scaricarlo (≈ 3 GB)"
+                "• <b>Modello Whisper</b>: viene scaricato alla prima trascrizione, "
+                "con l'avanzamento (serve una connessione a internet)"
             )
 
         if not issues:

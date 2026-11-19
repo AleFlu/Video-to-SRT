@@ -16,12 +16,12 @@ packaging/
 │   ├── apple-silicon/build.sh      Apple Silicon build (arm64)
 │   ├── intel/build.sh              Intel build (x86_64, also from an Apple Silicon Mac via Rosetta)
 │   ├── build_mac.py                shared PyInstaller build used by both
-│   ├── install.sh                  full setup: Homebrew, FFmpeg, venv, model (+ --run / --app / --dmg)
+│   ├── install.sh                  full setup: Homebrew, FFmpeg, venv (+ --run / --app / --dmg)
 │   ├── setup_mac.sh                minimal setup
 │   ├── build_installer.sh          .pkg installer from an existing .app
 │   └── Installa-Video-to-SRT.command   double-click installer for end users
 └── windows/
-    ├── setup_windows.bat           setup: venv, dependencies, model (+ --run)
+    ├── setup_windows.bat           setup: venv, dependencies (+ --run)
     └── build_windows.py            PyInstaller build of the .exe
 ```
 

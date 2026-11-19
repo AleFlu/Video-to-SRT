@@ -845,6 +845,8 @@ def test_reel_format_reaches_the_engine_and_is_remembered(window, ui_env, monkey
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x" * 10)
     pw.home._on_file_selected(str(clip))
+    from core import whisper_models
+    whisper_models._fetch(pw.home.model_combo.currentData())   # modello già scaricato
     pw.home._on_start()
     assert got["config"].readability.layout_rules().max_lines == 1
     assert got["config"].readability.light_punctuation
@@ -946,6 +948,8 @@ def test_start_passes_config_to_worker_and_remembers_it(window, ui_env, monkeypa
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x" * 10)
     pw.home._on_file_selected(str(clip))
+    from core import whisper_models
+    whisper_models._fetch(pw.home.model_combo.currentData())   # modello già scaricato
     pw.home._on_start()
     assert got["config"] == replace(pw.home.current_config(), beam_size=4)
     assert read_config(_FakeSettings()) == (got["config"], "podcast")

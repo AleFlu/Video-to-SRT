@@ -26,6 +26,7 @@ app/                          # tutta l'applicazione
 │   ├── srt_io.py, v2srt_io.py   # lettura/scrittura SRT/VTT/TXT/ASS e progetto .v2srt
 │   ├── transcription_worker.py  # QThread che chiama engine
 │   ├── transcription_config.py  # configurazione .vsrtconfig (decodifica, glossario, VAD, leggibilità)
+│   ├── whisper_models.py     # catalogo modelli, modello consigliato (RAM/GPU), cache HF, download
 │   ├── audio_player.py       # player/anteprima audio
 │   └── constants.py
 ├── ui/                       # interfaccia
@@ -136,8 +137,14 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
 - **Il worker non scrive l'SRT**: i segmenti tornano alla UI per l'editing; scrive solo l'esportazione.
 - **Editor modificato + nuova apertura**: chiedere sempre conferma prima di sovrascrivere; una sola
   trascrizione alla volta; `_editor_loaded` in `ProjectWidget` evita doppi caricamenti.
-- **PyInstaller**: servono `--collect-all PySide6/shiboken6/ctranslate2` e `--paths app`; in app
-  "frozen" `engine.py` cerca `ffmpeg` e `whisper_model` in `sys._MEIPASS`.
+- **PyInstaller**: solo i moduli Qt usati (`--hidden-import PySide6.Qt…`, niente `--collect-all
+  PySide6`: WebEngine pesa ~650 MB), `--collect-all ctranslate2/onnxruntime` e `--paths app`.
+  In app "frozen" `engine.py` cerca `ffmpeg` e `whisper_model` (solo con `--with-model`) in
+  `sys._MEIPASS`.
+- **Modelli Whisper**: mai scaricati allo splash. La Home segna il consigliato
+  (`engine.recommended_model`, da RAM/GPU) e quelli da scaricare; il download parte con la
+  trascrizione dopo la conferma (`ProjectWidget._confirm_model_download`). Nei test la cache di
+  Hugging Face è vuota e isolata e l'hardware è fisso (16 GB, niente GPU) — `conftest.py`.
 - **Icona Dock macOS**: `setWindowIcon` non basta; `platform_support.set_dock_icon` usa pyobjc (Cocoa).
 
 ## Diagnostica

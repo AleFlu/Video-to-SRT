@@ -28,7 +28,10 @@ from core.subtitle_layout import (
 )
 from core.transcription_config import ITALIAN_PROMPT  # noqa: F401 — riesportata per compatibilità
 from core.transcription_config import TranscriptionConfig, VadOptions
-from platform_support import cpu_threads, ffmpeg_executable_name, subprocess_kwargs
+from core import whisper_models
+from platform_support import (
+    cpu_threads, ffmpeg_executable_name, subprocess_kwargs, total_ram_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,15 +193,9 @@ def _postprocess_codeswitching(text: str) -> str:
     return text
 
 
-MODELS = {
-    "tiny":           {"label": "tiny — Test rapidi",              "ram": "~1 GB",  "quality": "★☆☆☆☆"},
-    "base":           {"label": "base — Qualità base",             "ram": "~1 GB",  "quality": "★★☆☆☆"},
-    "small":          {"label": "small — Discreta per italiano",   "ram": "~2 GB",  "quality": "★★★☆☆"},
-    "medium":         {"label": "medium — Buona qualità",          "ram": "~5 GB",  "quality": "★★★★☆"},
-    "large-v3":       {"label": "large-v3 — Massima qualità ★",   "ram": "~6 GB",  "quality": "★★★★★"},
-    "large-v3-turbo": {"label": "large-v3-turbo — Ottima + veloce","ram": "~4 GB",  "quality": "★★★★½"},
-}
-DEFAULT_MODEL = "large-v3"
+# Catalogo, modelli scaricati e download: core.whisper_models (qui riesportati)
+MODELS = whisper_models.MODELS
+DEFAULT_MODEL = whisper_models.DEFAULT_MODEL
 
 
 # ============================================================
@@ -420,6 +417,41 @@ def get_optimal_device() -> Tuple[str, str]:
     return "cpu", "int8"
 
 
+_hardware_cache: Dict[str, Any] = {}
+
+
+def detect_hardware() -> Tuple[int, bool]:
+    """(RAM totale in byte, GPU CUDA presente), letti una volta sola."""
+    if "hw" not in _hardware_cache:
+        _hardware_cache["hw"] = (total_ram_bytes(), get_optimal_device()[0] == "cuda")
+    return _hardware_cache["hw"]
+
+
+def recommended_model() -> str:
+    """Il modello più adatto a questo computer (vedi ``whisper_models.recommend_model``)."""
+    return whisper_models.recommend_model(*detect_hardware())
+
+
+def is_model_available(model_size: str) -> bool:
+    """True se il modello si può caricare senza scaricare niente (incluso o in cache)."""
+    if model_size == DEFAULT_MODEL and get_bundled_model_dir():
+        return True
+    return whisper_models.is_downloaded(model_size)
+
+
+def ensure_model(model_size: str, *, on_status: Optional[Callable] = None,
+                 on_progress: Optional[Callable] = None,
+                 cancel_event: Optional[threading.Event] = None) -> None:
+    """Scarica il modello se manca, con stato e avanzamento (annullabile)."""
+    if is_model_available(model_size):
+        return
+    try:
+        whisper_models.download(model_size, on_status=on_status, on_progress=on_progress,
+                                cancel_event=cancel_event)
+    except whisper_models.DownloadCancelled:
+        raise TranscriptionCancelled("Download del modello annullato") from None
+
+
 def _get_or_load_model(model_size: str = DEFAULT_MODEL,
                        on_status: Optional[Callable] = None):
     """Ritorna il modello faster-whisper, caricandolo una sola volta (thread-safe)."""
@@ -470,7 +502,14 @@ def _get_or_load_model(model_size: str = DEFAULT_MODEL,
 
 def preload_model(model_size: str = DEFAULT_MODEL,
                   on_status: Optional[Callable] = None) -> bool:
-    """Pre-carica il modello all'avvio. False (con messaggio) se fallisce."""
+    """Pre-carica il modello all'avvio se è già sul computer (mai un download allo
+    splash: si scarica alla prima trascrizione, con l'avanzamento). False se manca o se
+    il caricamento fallisce."""
+    if not is_model_available(model_size):
+        logger.info("Modello %s non ancora scaricato: niente pre-caricamento", model_size)
+        if on_status:
+            on_status(f"Modello {model_size} da scaricare alla prima trascrizione")
+        return False
     try:
         _setup_environment()
         _get_or_load_model(model_size, on_status=on_status)
@@ -843,6 +882,10 @@ def transcribe(
 
     _setup_environment()
 
+    # Modello mancante: lo si scarica prima di tutto (avanzamento 0–5 %, stato in GB)
+    if not (high_accuracy and _has_whisperx() and not _is_frozen()):
+        ensure_model(model_size, on_status=on_status,
+                     on_progress=lambda p: progress(0.05 * p), cancel_event=cancel_event)
     progress(0.05)
 
     _check_cancel(cancel_event)

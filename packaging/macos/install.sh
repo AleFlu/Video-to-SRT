@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh — Installer professionale per Video → SRT v2
-#  Scarica dipendenze, prepara il modello e costruisce il file .app / .dmg.
+#  Scarica le dipendenze e costruisce il file .app / .dmg.
 #
 #  Uso rapido:
 #      chmod +x install.sh
@@ -27,15 +27,13 @@ info() { echo -e "   $*"; }
 
 # ── Costanti ─────────────────────────────────────────────────────────────────
 # Layout: questo script sta in <root>/packaging/macos/; l'app in <root>/app/.
-# venv (.venv), modello (_build_model/), build/ e dist/ vivono nella root del repo.
+# venv (.venv), build/ e dist/ vivono nella root del repo.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
 VENV_DIR="$REPO_ROOT/.venv"
-MODEL_DIR="$REPO_ROOT/_build_model"
 APP_NAME="Video-to-SRT"
 PYTHON_MIN="3.10"
-MODEL_SIZE="large-v3"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
@@ -57,7 +55,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Uso: ./install.sh [--run] [--app] [--dmg] [--help]"
             echo ""
-            echo "  (nessun flag)   Setup venv + dipendenze + modello"
+            echo "  (nessun flag)   Setup venv + dipendenze"
             echo "  --run           Setup + avvia l'app in modalità sviluppo"
             echo "  --app           Setup + costruisci Video-to-SRT.app"
             echo "  --dmg           Setup + costruisci .app + .dmg distribuibile"
@@ -142,34 +140,10 @@ else
 fi
 
 # ── 7. Modello Whisper ────────────────────────────────────────────────────────
-step "Verifica modello Whisper ($MODEL_SIZE)"
-
-if [[ -d "$MODEL_DIR" ]] && [[ -n "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]]; then
-    ok "Modello trovato in $MODEL_DIR"
-else
-    info "Modello non trovato — download in corso (≈ 3 GB, potrebbe richiedere diversi minuti)…"
-    mkdir -p "$MODEL_DIR"
-    python3 - "$MODEL_DIR" <<'PYEOF'
-import sys
-from pathlib import Path
-model_dir = Path(sys.argv[1])
-
-try:
-    from faster_whisper import WhisperModel
-    print(f"   Download modello large-v3 in {model_dir} ...")
-    WhisperModel("large-v3", device="cpu", download_root=str(model_dir))
-    print("   Download completato.")
-except Exception as e:
-    print(f"   Errore durante il download: {e}")
-    print("   Puoi scaricare il modello manualmente più tardi.")
-    sys.exit(0)
-PYEOF
-    if [[ -n "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]]; then
-        ok "Modello scaricato in $MODEL_DIR"
-    else
-        warn "Download modello fallito — l'app funzionerà ma non potrà trascrivere."
-    fi
-fi
+# Niente download qui: l'app propone il modello adatto al computer (RAM, GPU) e lo
+# scarica alla prima trascrizione, con l'avanzamento.
+step "Modello Whisper"
+info "Si sceglie e si scarica dall'app, alla prima trascrizione."
 
 # ── 8. Test rapido ────────────────────────────────────────────────────────────
 step "Verifica importazioni Python"

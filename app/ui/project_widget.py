@@ -285,7 +285,25 @@ class ProjectWidget(QWidget):
 
     # ── Flusso trascrizione ────────────────────────────────────────────────────
 
+    def _confirm_model_download(self, model_size: str) -> bool:
+        """True se il modello c'è già o se l'utente accetta di scaricarlo adesso."""
+        from core.whisper_models import MODELS
+        from engine import is_model_available
+        if not model_size or is_model_available(model_size):
+            return True
+        gb = f"{MODELS[model_size]['download_gb']:.1f}".replace(".", ",")
+        answer = QMessageBox.question(
+            self, "Scaricare il modello?",
+            f"Il modello {model_size} non è ancora su questo computer: va scaricato una "
+            f"volta sola (circa {gb} GB, serve internet).\n\n"
+            "Il download parte con la trascrizione e si vede l'avanzamento; se lo "
+            "interrompi riprende da dove si era fermato.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        return answer == QMessageBox.Yes
+
     def _on_start_requested(self, source_path: str, settings: dict):
+        if not self._confirm_model_download(settings.get("model_size", "")):
+            return
         # Configurazione completa (parametri avanzati inclusi), ricordata come ultima usata
         config = self.home.current_config()
         write_config(QSettings("VideoSRT", "v2"), config, self.home.config_name())

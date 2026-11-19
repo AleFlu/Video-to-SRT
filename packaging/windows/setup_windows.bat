@@ -77,13 +77,9 @@ if errorlevel 1 (
     :ffmpeg_ok
 )
 
-REM ── Download modello Whisper ──────────────────────────────────────────────────
-echo [INFO] Verifica modello Whisper large-v3...
-python -c "from faster_whisper import WhisperModel; print('[INFO] Download modello large-v3 (prima esecuzione, ~3 GB)...'); WhisperModel('large-v3', device='cpu', compute_type='int8'); print('[INFO] Modello pronto.')" 2>&1
-if errorlevel 1 (
-    echo [AVVISO] Download modello fallito o gia' presente.
-    echo Il modello verra' scaricato al primo avvio dell'app.
-)
+REM ── Modello Whisper ───────────────────────────────────────────────────────────
+REM L'app propone il modello adatto al computer e lo scarica alla prima trascrizione.
+echo [INFO] Modello Whisper: si sceglie e si scarica dall'app alla prima trascrizione.
 
 echo.
 echo [OK] Setup completato.

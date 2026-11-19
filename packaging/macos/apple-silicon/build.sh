@@ -28,7 +28,15 @@ fi
 
 if ! "$VENV/bin/python" -c "import PyInstaller" 2>/dev/null; then
     echo "Installo PyInstaller nel venv..."
-    "$VENV/bin/pip" install --quiet pyinstaller
+    # venv creato con pip oppure con uv (che non installa pip nel venv)
+    if "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+        "$VENV/bin/python" -m pip install --quiet pyinstaller
+    elif command -v uv >/dev/null 2>&1; then
+        uv pip install --quiet --python "$VENV/bin/python" pyinstaller
+    else
+        echo "ERRORE: né pip né uv disponibili per installare PyInstaller nel venv."
+        exit 1
+    fi
 fi
 
 "$VENV/bin/python" "$MACOS_DIR/build_mac.py" --clean "$@"

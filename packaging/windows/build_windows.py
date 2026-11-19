@@ -78,8 +78,21 @@ def build(onefile: bool = False, clean: bool = False):
         # app/ nel path di analisi: main.py importa engine, platform_support, core, ui
         "--paths", str(app_dir),
         # Raccogli tutti i moduli necessari
-        "--collect-all", "PySide6",
-        "--collect-all", "shiboken6",
+        # Solo i moduli Qt che l'app usa (gli hook di PyInstaller aggiungono i plugin:
+        # piattaforma, stili, multimedia, svg). Con --collect-all PySide6 entravano anche
+        # WebEngine (~650 MB), QML/Quick, 3D, PDF... mai usati.
+        "--hidden-import", "PySide6.QtCore",
+        "--hidden-import", "PySide6.QtGui",
+        "--hidden-import", "PySide6.QtWidgets",
+        "--hidden-import", "PySide6.QtSvg",
+        "--hidden-import", "PySide6.QtMultimedia",
+        "--hidden-import", "PySide6.QtMultimediaWidgets",
+        "--exclude-module", "PySide6.QtWebEngineCore",
+        "--exclude-module", "PySide6.QtWebEngineWidgets",
+        "--exclude-module", "PySide6.QtWebEngineQuick",
+        "--exclude-module", "PySide6.QtQml",
+        "--exclude-module", "PySide6.QtQuick",
+        "--exclude-module", "PySide6.QtPdf",
         "--collect-all", "ctranslate2",
         "--collect-all", "faster_whisper",
         "--collect-all", "onnxruntime",

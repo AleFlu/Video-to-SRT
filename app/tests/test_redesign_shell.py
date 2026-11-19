@@ -78,11 +78,12 @@ def test_home_start_emits_same_settings_keys(app, tmp_path):
                               "high_accuracy", "beam_size"}
 
 
-def test_home_model_hint_shows_ram_quality_default(app):
+def test_home_model_hint_shows_ram_quality_recommended(app):
     from ui.home_widget import HomeWidget
     home = HomeWidget()
     text = home._model_hint.full_text()
-    assert "RAM" in text and "qualità 5/5" in text and "predefinito" in text
+    # hardware dei test (conftest): 16 GB senza GPU → large-v3 consigliato
+    assert "RAM" in text and "qualità 5/5" in text and "consigliato" in text
 
 
 # ── Progress ─────────────────────────────────────────────────────────────────
