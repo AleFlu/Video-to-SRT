@@ -43,3 +43,14 @@ def test_redundant_descriptions_hidden(ui_env):
     assert home.drop._idle_t2.isHidden()
     # il perché del Filtro VAD resta nel tooltip
     assert "senza parlato" in home.vad_toggle.toolTip()
+
+
+def test_home_has_no_settings_summary_line(ui_env):
+    """Il riepilogo "Italiano · large-v3 · Film e TV · VAD attivo · standard" sopra la stima
+    ripeteva i controlli: tolto su richiesta dell'utente."""
+    from PySide6.QtWidgets import QLabel
+    from ui.home_widget import HomeWidget
+    home = HomeWidget()
+    texts = [w.text() for w in home._settings_card.findChildren(QLabel)]
+    assert not any("VAD attivo" in t or "VAD disattivo" in t for t in texts)
+    assert not hasattr(home, "_preset_lbl")

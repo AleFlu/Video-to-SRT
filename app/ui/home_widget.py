@@ -319,10 +319,6 @@ class HomeWidget(QWidget):
         mono = (f"font-size: 11px; color: {c('dim')}; background: transparent;"
                 f" font-family: {theme.FONT_MONO};")
         self._model_hint.setStyleSheet(mono)
-        self._preset_lbl.setStyleSheet(
-            f"font-size: 12px; color: {c('dim')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};"
-        )
         self._estimate_title.setStyleSheet(
             f"font-size: 11px; font-weight: 500; color: {c('label')}; background: transparent;"
         )
@@ -492,7 +488,6 @@ class HomeWidget(QWidget):
         self.model_combo.setCurrentIndex(self._model_keys.index(DEFAULT_MODEL))
         self._refresh_model_labels()
         self.model_combo.currentIndexChanged.connect(self._update_estimate)
-        self.model_combo.currentIndexChanged.connect(self._update_preset_label)
         self.model_combo.currentIndexChanged.connect(self._update_model_hint)
         ml.addWidget(self.model_combo)
         ml.addSpacing(8)
@@ -512,7 +507,6 @@ class HomeWidget(QWidget):
                             ("Rilevamento automatico", "auto")):
             self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(0)
-        self.lang_combo.currentIndexChanged.connect(self._update_preset_label)
         ll.addWidget(self.lang_combo)
         lay.addWidget(row_l)
 
@@ -531,7 +525,6 @@ class HomeWidget(QWidget):
             "in fondo."
         )
         self._set_format(self._config.readability.subtitle_format)
-        self.format_combo.currentIndexChanged.connect(self._update_preset_label)
         fl.addWidget(self.format_combo)
         lay.addWidget(row_f)
 
@@ -557,7 +550,6 @@ class HomeWidget(QWidget):
         self.vad_toggle = _ToggleSwitch("Attivo", "Disattivo", name="Filtro VAD")
         self.vad_toggle.setToolTip("Salta i tratti senza parlato (consigliato)")
         self.vad_toggle.setChecked(True)
-        self.vad_toggle.toggled.connect(self._update_preset_label)
         lay.addWidget(self._toggle_row(self._vad_title, self._vad_desc, self.vad_toggle))
         self._vad_desc.hide()   # spiegazione nel tooltip
 
@@ -569,7 +561,6 @@ class HomeWidget(QWidget):
         self.accuracy_toggle.setToolTip(
             "Allineamento fonetico delle parole con WhisperX: tempi più precisi, più lento."
         )
-        self.accuracy_toggle.toggled.connect(self._update_preset_label)
         self._apply_accuracy_availability()
         lay.addWidget(self._toggle_row(self._acc_title, self._acc_desc, self.accuracy_toggle))
         # descrizione visibile solo quando l'opzione non è disponibile (dice perché)
@@ -587,15 +578,13 @@ class HomeWidget(QWidget):
         lay.addWidget(self._settings_scroll, 1)
         self._sync_scroll_min()
 
-        # Parte bassa: riepilogo, stima, avvio, suggerimento
+        # Parte bassa: stima, avvio, suggerimento (niente riepilogo: le scelte si leggono
+        # già nei controlli sopra)
         bottom = QFrame()
         bottom.setObjectName("setBottom")
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(0, 12, 0, 0)
         bl.setSpacing(0)
-        self._preset_lbl = ElidedLabel("", Qt.ElideRight)
-        bl.addWidget(self._preset_lbl)
-        bl.addSpacing(12)
         est = QHBoxLayout()
         self._estimate_title = QLabel("Stima")
         est.addWidget(self._estimate_title)
@@ -632,7 +621,6 @@ class HomeWidget(QWidget):
         bl.addWidget(self._hint_lbl)
         lay.addWidget(bottom)
 
-        self._update_preset_label()
         self._update_model_hint()
         self._update_config_label()
         return card
@@ -697,17 +685,6 @@ class HomeWidget(QWidget):
             parts.append("scaricato" if is_model_available(key)
                          else f"da scaricare · {_gb_text(info['download_gb'])}")
         self._model_hint.setText("      ".join(parts))
-
-    def _update_preset_label(self):
-        """Riepilogo delle impostazioni correnti (sopra la stima)."""
-        parts = [self.lang_combo.currentText()]
-        model_key = self.model_combo.currentData()
-        if model_key:
-            parts.append(str(model_key))
-        parts.append(self.format_combo.currentText().split(" —")[0])
-        parts.append("VAD attivo" if self.vad_toggle.isChecked() else "VAD disattivo")
-        parts.append("alta precisione" if self.accuracy_toggle.isChecked() else "standard")
-        self._preset_lbl.setText("  ·  ".join(parts))
 
     # ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -831,7 +808,6 @@ class HomeWidget(QWidget):
         self.beam_spin.setValue(config.beam_size)
         self.glossary_edit.setText(", ".join(config.decoding.glossary))
         self._set_format(config.readability.subtitle_format)
-        self._update_preset_label()
         self._update_config_label()
 
     def current_config(self) -> TranscriptionConfig:

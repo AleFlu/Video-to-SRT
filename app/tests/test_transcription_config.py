@@ -650,7 +650,6 @@ def test_home_apply_config_shows_values_and_roundtrips(ui_env, monkeypatch):
     assert home.beam_spin.value() == 3
     assert home.glossary_edit.text() == "Kubernetes, PyTorch, Mario Rossi"
     assert home._config_lbl.full_text() == "Configurazione: podcast"
-    assert "Inglese" in home._preset_lbl.full_text()
     assert home.current_config() == cfg
     assert home._get_settings()["denoise"] is False
 
@@ -752,7 +751,6 @@ def test_home_format_menu_sets_preset(ui_env):
     home.format_combo.setCurrentIndex(home.format_combo.findData("reel"))
     r = home.current_config().readability
     assert (r.subtitle_format, r.max_lines, r.max_chars_per_line) == ("reel", 1, 32)
-    assert "Reel e social" in home._preset_lbl.text()
     # è un controllo della Home, non un parametro avanzato: l'intestazione non cambia
     assert home._config_lbl.full_text() == "Parametri predefiniti"
     home.format_combo.setCurrentIndex(home.format_combo.findData("film"))
