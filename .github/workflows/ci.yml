@@ -11,11 +11,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-        python-version: ["3.11"]
+        include:
+          # macOS e Windows: stessa versione di Python delle build distribuite
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+          # Linux (solo CI, non distribuito): con Python 3.11 PySide 6.12 toglie riferimenti
+          # a None quando Qt chiama le funzioni Python (enum convertiti) finché il processo si
+          # ferma con "deallocating None". Da Python 3.12 None è immortale: nessun crash.
+          - os: ubuntu-latest
+            python-version: "3.12"
     env:
       QT_QPA_PLATFORM: offscreen
-      VIDEOSRT_NONE_WATCH: "1"   # diagnosi temporanea (conftest.py)
     steps:
       - uses: actions/checkout@v4
 
@@ -35,16 +43,6 @@ jobs:
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 \
             libxcb-shape0 libxrender1 libxi6 libxcomposite1 libxdamage1 libxfixes3 libxtst6
 
-      # Il runner Linux non ha audio: il player (backend FFmpeg di Qt) riceve una scheda
-      # audio finta, come su un PC vero, invece di nessun dispositivo.
-      - name: Audio finto (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
-          pulseaudio -D --exit-idle-time=-1
-          pactl load-module module-null-sink sink_name=ci_null
-          pactl set-default-sink ci_null
-
       # faster-whisper non serve: i test non caricano il modello
       - name: Installa dipendenze
         run: python -m pip install --upgrade pip PySide6 numpy soundfile pytest ruff
@@ -52,25 +50,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app
 
-      # Diagnosi temporanea (Linux): quale funzione toglie riferimenti a None
-      - name: Profilo delle perdite di None (Linux)
-        if: runner.os == 'Linux'
-        env:
-          VIDEOSRT_NONE_PROFILE: "1"
-        run: |
-          python -m pytest -q app/tests/test_accessibility.py \
-            -k "focus_ring and (editor-light or dialog-dark)" || true
-
       # -v: in caso di crash nativo (segfault/abort) il log mostra quale test era in corso
       - name: Test (pytest)
-        run: python -X faulthandler -m pytest -v
+        run: python -m pytest -v
 
-      # Solo se i test vanno in crash su Linux: riesegue l'audit delle scorciatoie sotto gdb
-      # e stampa lo stack nativo di tutti i thread (il punto esatto del crash in Qt/FFmpeg).
-      - name: Stack nativo del crash (Linux)
-        if: failure() && runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends gdb
-          gdb -q -batch -ex run -ex "thread apply all bt 25" \
-            --args python -m pytest -s -v -p no:faulthandler \
-            app/tests/test_shortcuts_audit.py || true

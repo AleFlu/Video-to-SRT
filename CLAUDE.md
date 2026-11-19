@@ -78,7 +78,8 @@ Setup (dalla root): `python -m venv .venv && source .venv/bin/activate` (Windows
 | Build Windows | `python packaging\windows\build_windows.py` |
 
 Output build in `dist/`, `build/`; modello da includere in `_build_model/` (tutti nella root). Dettagli: `packaging/*/README.md`.
-CI: stessi `ruff check app` + `pytest` su macOS/Windows/Ubuntu (Python 3.11, senza faster-whisper).
+CI: stessi `ruff check app` + `pytest` su macOS/Windows (Python 3.11) e Ubuntu (Python 3.12: con
+3.11 PySide 6.12 su Linux esaurisce i riferimenti a None e il processo si ferma), senza faster-whisper.
 
 ## Shortcut (⌘ su macOS = Ctrl altrove; etichette via `platform_support.shortcut_label`)
 
