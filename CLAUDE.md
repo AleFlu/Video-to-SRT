@@ -113,8 +113,9 @@ cursore; doppio clic sullo sfondo = tutta la durata; clic = seek; tenere premuto
 scrub (il playhead segue il mouse e resta dove lo si lascia; oltre i bordi la vista scorre);
 ⌥/Alt + trascinamento = scorrimento della vista.
 
-Home: le impostazioni di trascrizione non scorrono mai; la finestra non scende sotto l'altezza
-che servono (`MainWindow._fit_min_height`). Il bordo tra Sorgente e Impostazioni si trascina
+Home: le impostazioni di trascrizione non scorrono; la finestra non scende sotto l'altezza che
+servono (`MainWindow._fit_min_height`). Solo su uno schermo più basso di così diventano
+scorrevoli come ultima risorsa (`HomeWidget.set_scroll_fallback`), invece di schiacciarsi. Il bordo tra Sorgente e Impostazioni si trascina
 (impostazioni 380–600 px, sorgente almeno 440 px; larghezza in `home/settings_width`); con la
 colonna stretta i formati della zona di rilascio vanno a capo per gruppi.
 

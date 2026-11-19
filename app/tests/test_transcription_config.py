@@ -781,12 +781,15 @@ def test_home_settings_never_scroll_and_never_overlap(window, qapp):
     """Le impostazioni non scorrono (richiesta dell'utente): la finestra non può diventare
     così bassa da schiacciarle. Alla dimensione minima ogni riga è intera, il menu del
     modello non tocca la riga sotto e il pulsante Avvia sta sotto l'ultima riga."""
-    from PySide6.QtWidgets import QScrollArea
+    from PySide6.QtCore import Qt
     home = window._active().home
-    assert home._settings_card.findChildren(QScrollArea) == []
+    window._available_height = lambda: 2000       # schermo abbastanza alto
+    window._fit_min_height()
     window.show()
     window.resize(window.minimumWidth(), window.minimumHeight())
     qapp.processEvents()
+    assert not home.scroll_fallback()
+    assert home._settings_scroll.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
 
     def rect(w):
         return w.rect().translated(w.mapTo(home, w.rect().topLeft()))
@@ -798,6 +801,27 @@ def test_home_settings_never_scroll_and_never_overlap(window, qapp):
     assert row.height() >= needed
     assert rect(row).bottom() < rect(home.start_btn).top()
     assert rect(home.start_btn).bottom() <= home.height()
+
+
+def test_home_settings_scroll_only_on_a_screen_too_short(window, qapp):
+    """Ultima risorsa: su uno schermo più basso delle impostazioni le righe scorrono, a
+    piena altezza, invece di schiacciarsi; su uno schermo alto si torna senza scorrimento."""
+    from PySide6.QtCore import Qt
+    home = window._active().home
+    window._available_height = lambda: 500
+    window._fit_min_height()
+    window.show()
+    window.resize(window.minimumWidth(), 500)
+    qapp.processEvents()
+    assert home.scroll_fallback()
+    assert home._settings_scroll.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    row = home.accuracy_toggle.parentWidget()
+    needed = (row.heightForWidth(row.width()) if row.hasHeightForWidth()
+              else row.sizeHint().height())
+    assert row.height() >= needed
+    window._available_height = lambda: 2000
+    window._fit_min_height()
+    assert not home.scroll_fallback()
 
 
 def test_home_border_between_source_and_settings_is_draggable_within_limits(window, qapp):

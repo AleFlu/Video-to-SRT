@@ -842,17 +842,27 @@ class MainWindow(QMainWindow):
             self.setMinimumSize(min(900, width), min(600, height))
         self.resize(width, height)
 
+    def _available_height(self) -> int:
+        screen = self.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry().height() if screen is not None else 0
+
     def _fit_min_height(self):
         """Altezza minima = quella che serve alla Home: le impostazioni di trascrizione non
-        scorrono, quindi la finestra non deve poterle schiacciare (entro lo schermo)."""
-        needed = QMainWindow.minimumSizeHint(self).height()
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
-            needed = min(needed, screen.availableGeometry().height())
+        scorrono, quindi la finestra non deve poterle schiacciare. Se lo schermo è più basso
+        di così, le impostazioni diventano scorrevoli (ultima risorsa) e la minima è lo
+        schermo."""
+        homes = [pw.home for pw in self._projects]
+        full = QMainWindow.minimumSizeHint(self).height() + max(
+            (h.hidden_settings_height() for h in homes), default=0)
+        avail = self._available_height()
+        fallback = 0 < avail < full
+        for h in homes:
+            h.set_scroll_fallback(fallback)
+        needed = min(full, avail) if fallback else full
         if needed > self.minimumHeight():
             self.setMinimumHeight(needed)
-            if self.height() < needed:
-                self.resize(self.width(), needed)
+        if self.height() < needed:
+            self.resize(self.width(), needed)
 
     def _restore_geometry(self):
         geom = QSettings("VideoSRT", "v2").value(_SETTINGS_GEOM)

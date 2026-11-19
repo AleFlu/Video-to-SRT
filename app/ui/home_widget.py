@@ -382,6 +382,38 @@ class HomeWidget(QWidget):
         lay.addLayout(h)
         return row
 
+    # ── Altezza delle impostazioni ────────────────────────────────────────────
+
+    def _rows_needed_height(self) -> int:
+        rows = self._settings_rows
+        return max(rows.minimumHeight(), rows.minimumSizeHint().height())
+
+    def _sync_scroll_min(self) -> None:
+        self._settings_scroll.setMinimumHeight(
+            0 if self._scroll_fallback else self._rows_needed_height())
+
+    def _on_rows_min_height_changed(self) -> None:
+        self._sync_scroll_min()
+        self.min_height_changed.emit()
+
+    def set_scroll_fallback(self, on: bool) -> None:
+        """Ultima risorsa per schermi troppo bassi: le righe scorrono invece di schiacciarsi."""
+        if on == self._scroll_fallback:
+            return
+        self._scroll_fallback = on
+        self._settings_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded if on else Qt.ScrollBarAlwaysOff)
+        self._sync_scroll_min()
+
+    def scroll_fallback(self) -> bool:
+        return self._scroll_fallback
+
+    def hidden_settings_height(self) -> int:
+        """Altezza delle righe non garantita dalla finestra (0 senza scorrimento)."""
+        if not self._scroll_fallback:
+            return 0
+        return self._rows_needed_height() - self._settings_scroll.minimumHeight()
+
     def _saved_settings_width(self) -> int:
         value = QSettings("VideoSRT", "v2").value(_SETTINGS_PANEL_W_KEY, _PANEL_W)
         try:
@@ -418,13 +450,27 @@ class HomeWidget(QWidget):
         lay.addLayout(head)
         lay.addSpacing(4)
 
-        # Righe delle impostazioni: mai a scorrimento; la finestra non scende sotto l'altezza
-        # che serve (MainWindow), così non si schiacciano. Riepilogo, stima e Avvia in fondo.
+        # Righe delle impostazioni: di norma non scorrono — l'area ha come altezza minima
+        # quella delle righe e la finestra non scende sotto (MainWindow._fit_min_height).
+        # Solo se lo schermo è troppo basso per contenerle (set_scroll_fallback) diventano
+        # scorrevoli, invece di schiacciarsi una sull'altra. Riepilogo, stima e Avvia in fondo.
         card_lay = lay
         rows = _SettingsRows()
-        rows.min_height_changed.connect(self.min_height_changed)
         rows.setObjectName("settingsRows")
         rows.setStyleSheet("QWidget#settingsRows { background: transparent; }")
+        self._settings_rows = rows
+        self._scroll_fallback = False
+        self._settings_scroll = QScrollArea()
+        self._settings_scroll.setWidgetResizable(True)
+        self._settings_scroll.setFrameShape(QFrame.NoFrame)
+        self._settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._settings_scroll.setFocusPolicy(Qt.NoFocus)   # Tab va ai controlli, non qui
+        self._settings_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }")
+        self._settings_scroll.setWidget(rows)
+        self._settings_scroll.viewport().setAutoFillBackground(False)
+        rows.min_height_changed.connect(self._on_rows_min_height_changed)
         lay = QVBoxLayout(rows)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -536,9 +582,10 @@ class HomeWidget(QWidget):
         self.beam_spin.setValue(5)
         self.beam_spin.hide()
 
-        lay = card_lay
-        lay.addWidget(rows)
         lay.addStretch(1)
+        lay = card_lay
+        lay.addWidget(self._settings_scroll, 1)
+        self._sync_scroll_min()
 
         # Parte bassa: riepilogo, stima, avvio, suggerimento
         bottom = QFrame()
