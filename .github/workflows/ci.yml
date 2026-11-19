@@ -54,3 +54,13 @@ jobs:
       # -v: in caso di crash nativo (segfault/abort) il log mostra quale test era in corso
       - name: Test (pytest)
         run: python -X faulthandler -m pytest -v
+
+      # Solo se i test vanno in crash su Linux: riesegue l'audit delle scorciatoie sotto gdb
+      # e stampa lo stack nativo di tutti i thread (il punto esatto del crash in Qt/FFmpeg).
+      - name: Stack nativo del crash (Linux)
+        if: failure() && runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends gdb
+          gdb -q -batch -ex run -ex "thread apply all bt 25" \
+            --args python -m pytest -s -v -p no:faulthandler \
+            app/tests/test_shortcuts_audit.py || true

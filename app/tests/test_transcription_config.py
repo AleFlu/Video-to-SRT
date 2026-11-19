@@ -789,8 +789,11 @@ def test_home_settings_scroll_instead_of_overlapping_in_a_short_window(window, q
         return w.rect().translated(w.mapTo(home, w.rect().topLeft()))
 
     assert not rect(home._model_hint).intersects(rect(home.model_combo))
-    assert home.accuracy_toggle.parentWidget().height() >= \
-        home.accuracy_toggle.parentWidget().sizeHint().height()
+    row = home.accuracy_toggle.parentWidget()
+    # testo che va a capo: l'altezza necessaria dipende dalla larghezza reale della riga
+    needed = (row.heightForWidth(row.width()) if row.hasHeightForWidth()
+              else row.sizeHint().height())
+    assert row.height() >= needed
     # il pulsante resta sempre visibile, sotto l'area che scorre
     viewport = home._settings_scroll.viewport()
     assert rect(viewport).bottom() < rect(home.start_btn).top()
