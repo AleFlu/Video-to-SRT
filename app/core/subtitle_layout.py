@@ -92,6 +92,9 @@ _MIN_START_STEP_S = 0.01   # distanza minima imposta tra inizi coincidenti (dati
 
 # Unione degli span VAD in find_uncovered_speech
 _SPEECH_MERGE_GAP_S = 0.3
+# Oltre questa durata una parola (non sintetica) ha tempi inattendibili: Whisper che perde il
+# filo stira una sillaba su molti secondi ("con" su 7 s) al posto del parlato vero.
+MAX_WORD_S = 3.0
 
 
 # ── Lessico ───────────────────────────────────────────────────────────────────
@@ -894,6 +897,12 @@ def layout(segments: Iterable[Any], rules: LayoutRules = LayoutRules(),
 
 # ── Parlato senza parole ──────────────────────────────────────────────────────
 
+def is_stretched(word: Word) -> bool:
+    """True per una parola con timestamp propri più lunga di ``MAX_WORD_S``: non dice dove
+    cada davvero il parlato (il testo sintetico di un segmento intero non conta)."""
+    return not word.synthetic and abs(word.end - word.start) > MAX_WORD_S
+
+
 def find_uncovered_speech(speech: Sequence[Tuple[float, float]], words: Sequence[Word],
                           min_len_s: float = 1.5) -> List[Tuple[float, float]]:
     """Tratti di parlato (VAD) lunghi almeno ``min_len_s`` in cui non cade nessuna parola.
@@ -902,7 +911,8 @@ def find_uncovered_speech(speech: Sequence[Tuple[float, float]], words: Sequence
     si tolgono gli intervalli coperti dalle parole (sovrapposizione, parole di durata nulla
     comprese): restano i buchi, cioè lo span intero se non contiene parole oppure il tratto
     scoperto di uno span lungo (caso reale: Whisper salta ~10 s in mezzo a 40 s di
-    parlato). Sono i tratti da ritrascrivere.
+    parlato). Le parole stirate (``is_stretched``) non coprono niente. Sono i tratti da
+    ritrascrivere.
     """
     spans = sorted((float(s), float(e)) for s, e in speech if float(e) > float(s))
     merged: List[List[float]] = []
@@ -911,7 +921,8 @@ def find_uncovered_speech(speech: Sequence[Tuple[float, float]], words: Sequence
             merged[-1][1] = max(merged[-1][1], e)
         else:
             merged.append([s, e])
-    covered = sorted((min(w.start, w.end), max(w.start, w.end)) for w in words)
+    covered = sorted((min(w.start, w.end), max(w.start, w.end))
+                     for w in words if not is_stretched(w))
     found: List[Tuple[float, float]] = []
     for s, e in merged:
         if e - s < min_len_s:

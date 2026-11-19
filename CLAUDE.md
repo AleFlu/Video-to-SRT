@@ -151,6 +151,10 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   (`engine.recommended_model`, da RAM/GPU) e quelli da scaricare; il download parte con la
   trascrizione dopo la conferma (`ProjectWidget._confirm_model_download`). Nei test la cache di
   Hugging Face è vuota e isolata e l'hardware è fisso (16 GB, niente GPU) — `conftest.py`.
+- **Parlato saltato da Whisper**: `engine._recover_skipped_speech` ritrascrive i tratti che il VAD
+  marca come parlato ma senza parole, **anche col filtro VAD spento** (il VAD serve solo a
+  trovarli). Le parole stirate oltre `subtitle_layout.MAX_WORD_S` (3 s: "con" su 16 s) non
+  coprono il parlato e, se il tratto viene recuperato, sono sostituite.
 - **Icona Dock macOS**: `setWindowIcon` non basta; `platform_support.set_dock_icon` usa pyobjc (Cocoa).
 
 ## Diagnostica

@@ -24,7 +24,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from core.constants import MAX_CHARS_PER_LINE  # noqa: F401 — riesportata per compatibilità
 from core.constants import normalize_language
 from core.subtitle_layout import (
-    LayoutRules, find_uncovered_speech, layout, light_punctuation, words_from_segments,
+    MAX_WORD_S, LayoutRules, find_uncovered_speech, is_stretched, layout,
+    light_punctuation, words_from_segments,
 )
 from core.transcription_config import ITALIAN_PROMPT  # noqa: F401 — riesportata per compatibilità
 from core.transcription_config import TranscriptionConfig, VadOptions
@@ -547,12 +548,19 @@ def _build_subtitles(raw_segments: Sequence[Any], rules: LayoutRules,
 # ============================================================
 # Recupero del parlato saltato con il filtro VAD
 # ============================================================
-# Con vad_filter=True Whisper a volte non trascrive un tratto che il VAD ha marcato come
-# parlato (caso reale: ~10 s in mezzo a un discorso). Questi tratti vengono ritrascritti
-# da soli, senza VAD, con gli stessi parametri di decodifica.
+# Whisper a volte non trascrive un tratto che il VAD marca come parlato (caso reale: ~10 s
+# in mezzo a un discorso con il filtro VAD; 24 s con il filtro spento, lasciando due sillabe
+# stirate su 7 s). Questi tratti vengono ritrascritti da soli, senza filtro VAD, con gli
+# stessi parametri di decodifica. Il VAD serve solo a trovarli: si fa anche a filtro spento.
 _SAMPLE_RATE = 16000
 _RECOVERY_MIN_HOLE_S = 1.5
 _RECOVERY_MARGIN_S = 0.3
+# Doppioni tra parole ritrascritte e già presenti: stesso testo e tempi che si sovrappongono
+# (o si toccano: parola di durata nulla), oppure la parola che segue è già un doppione di
+# quella che segue l'altra. Caso reale: " la democrazia" ritrascritta a 59,22–60,12 s,
+# " La democrazia" originale a 59,98–60,48 s con " La" di durata nulla.
+_DUPLICATE_TOL_S = 0.1
+_DUPLICATE_CHAIN_S = 1.0
 
 
 def _decode_pcm(audio_path: str):
@@ -592,9 +600,8 @@ def _transcribe_hole(model, audio_pcm, hole: Tuple[float, float], decode_kwargs:
     Si tengono le parole con il punto medio dopo l'inizio del tratto e l'inizio prima della
     sua fine: il tratto finisce dove comincia la parola già trascritta dopo, e una parola a
     cavallo della fine ("lusso" in "denim di lusso di altissima…") andrebbe persa con il
-    solo criterio del punto medio. Si scarta invece una parola che ripete una di
-    ``existing`` (parole già trascritte, con ``text/start/end``) con lo stesso testo e
-    tempi sovrapposti.
+    solo criterio del punto medio. Si scartano invece i doppioni di ``existing`` (parole già
+    trascritte, con ``text/start/end``): vedi ``_duplicate_flags``.
     """
     hole_start, hole_end = hole
     total_s = len(audio_pcm) / _SAMPLE_RATE
@@ -606,7 +613,7 @@ def _transcribe_hole(model, audio_pcm, hole: Tuple[float, float], decode_kwargs:
     kwargs.pop("vad_parameters", None)
     kwargs.update(vad_filter=False, word_timestamps=True)
     segments_iter, _info = model.transcribe(chunk, **kwargs)
-    out: List[Dict] = []
+    found: List[Tuple[Any, List[Dict]]] = []
     try:
         for seg in segments_iter:
             _check_cancel(cancel_event)
@@ -617,29 +624,63 @@ def _transcribe_hole(model, audio_pcm, hole: Tuple[float, float], decode_kwargs:
                 text = str(_field(w, "word", "") or "")
                 if not ((start + end) / 2 >= hole_start and start < hole_end) or not text.strip():
                     continue
-                if any(_norm_word(text) == _norm_word(x.text) and start < x.end and x.start < end
-                       for x in existing):
-                    continue
                 words.append({"word": text, "start": start, "end": end,
                               "probability": _field(w, "probability", 1.0)})
-            text = "".join(w["word"] for w in words)
-            seg_start = float(_field(seg, "start", 0.0)) + offset
-            seg_end = float(_field(seg, "end", 0.0)) + offset
-            if not words:
-                # segmento senza parole con tempi: si tiene solo se è dentro il tratto
-                text = str(_field(seg, "text", "") or "")
-                if not text.strip() or not hole_start <= (seg_start + seg_end) / 2 <= hole_end:
-                    continue
-            else:
-                seg_start, seg_end = words[0]["start"], words[-1]["end"]
-            out.append({
-                "start": seg_start, "end": seg_end, "text": text, "words": words,
-                "no_speech_prob": _field(seg, "no_speech_prob", 0.0),
-                "avg_logprob": _field(seg, "avg_logprob", 0.0),
-            })
+            found.append((seg, words))
     finally:
         _close_iter(segments_iter)
+
+    flags = iter(_duplicate_flags([w for _seg, ws in found for w in ws], existing))
+    out: List[Dict] = []
+    for seg, all_words in found:
+        words = [w for w in all_words if not next(flags)]
+        text = "".join(w["word"] for w in words)
+        seg_start = float(_field(seg, "start", 0.0)) + offset
+        seg_end = float(_field(seg, "end", 0.0)) + offset
+        if not words:
+            if all_words:
+                continue          # solo doppioni
+            # segmento senza parole con tempi: si tiene solo se è dentro il tratto
+            text = str(_field(seg, "text", "") or "")
+            if not text.strip() or not hole_start <= (seg_start + seg_end) / 2 <= hole_end:
+                continue
+        else:
+            seg_start, seg_end = words[0]["start"], words[-1]["end"]
+        out.append({
+            "start": seg_start, "end": seg_end, "text": text, "words": words,
+            "no_speech_prob": _field(seg, "no_speech_prob", 0.0),
+            "avg_logprob": _field(seg, "avg_logprob", 0.0),
+        })
     return out
+
+
+def _duplicate_flags(recovered: Sequence[Dict], existing: Sequence[Any]) -> List[bool]:
+    """Per ogni parola ritrascritta (in ordine di tempo): True se ripete una di
+    ``existing``.
+
+    Doppione = stesso testo e tempi sovrapposti (con ``_DUPLICATE_TOL_S`` di tolleranza),
+    oppure stesso testo della parola esistente subito prima di quella di cui è doppione la
+    parola ritrascritta successiva, entro ``_DUPLICATE_CHAIN_S``: i tempi originali sono
+    spesso sfasati di qualche decimo ("la democrazia" / "La democrazia"). Due parole uguali
+    vicine ma vere ("di lusso di") restano: la catena parte solo da una sovrapposizione.
+    """
+    ex = sorted(existing, key=lambda x: x.start)
+    flags = [False] * len(recovered)
+    chained: Optional[int] = None     # indice in ``ex`` del doppione della parola dopo
+    for i in range(len(recovered) - 1, -1, -1):
+        w = recovered[i]
+        text = _norm_word(w["word"])
+        match = next((j for j, x in enumerate(ex) if _norm_word(x.text) == text
+                      and w["start"] < x.end + _DUPLICATE_TOL_S
+                      and x.start - _DUPLICATE_TOL_S < w["end"]), None)
+        if match is None and chained:
+            prev = ex[chained - 1]
+            if (_norm_word(prev.text) == text
+                    and abs(prev.start - w["start"]) <= _DUPLICATE_CHAIN_S):
+                match = chained - 1
+        flags[i] = match is not None
+        chained = match
+    return flags
 
 
 def _recover_skipped_speech(
@@ -678,10 +719,12 @@ def _recover_skipped_speech(
         on_status(msg)
 
     recovered: List[Dict] = []
+    filled: List[Tuple[float, float]] = []
     for hole in holes:
         _check_cancel(cancel_event)
         try:
-            near = [w for w in words if w.end >= hole[0] - 1.0 and w.start <= hole[1] + 1.0]
+            near = [w for w in words if not is_stretched(w)
+                    and w.end >= hole[0] - 1.0 and w.start <= hole[1] + 1.0]
             found = _transcribe_hole(model, audio_pcm, hole, decode_kwargs, cancel_event, near)
         except TranscriptionCancelled:
             raise
@@ -692,14 +735,56 @@ def _recover_skipped_speech(
         text = " ".join(" ".join(str(seg["text"]).split()) for seg in found)
         if text:
             logger.info("Recuperato %.2f–%.2f s: %s", hole[0], hole[1], text)
+            filled.append(hole)
         else:
             logger.info("Nessuna parola recuperata in %.2f–%.2f s", hole[0], hole[1])
         recovered.extend(found)
 
     if not recovered:
         return segments
+    segments = _drop_stretched_words(segments, filled)
     # ordinamento stabile: a parità di inizio restano prima i segmenti originali
     return sorted(segments + recovered, key=lambda seg: float(_field(seg, "start", 0.0)))
+
+
+def _drop_stretched_words(segments: Sequence[Any],
+                          filled: Sequence[Tuple[float, float]]) -> List[Any]:
+    """Toglie le parole stirate (più lunghe di ``MAX_WORD_S``) che cadono in un tratto
+    ritrascritto: al loro posto ci sono ora le parole vere. Un segmento toccato diventa un
+    dict con le parole rimaste; se non ne resta nessuna sparisce."""
+    if not filled:
+        return list(segments)
+
+    def stretched_in_hole(w) -> bool:
+        start = float(_field(w, "start", 0.0))
+        end = float(_field(w, "end", 0.0))
+        return (end - start > MAX_WORD_S
+                and any(start < he and end > hs for hs, he in filled))
+
+    out: List[Any] = []
+    for seg in segments:
+        seg_words = list(_field(seg, "words", None) or [])
+        kept = [w for w in seg_words if not stretched_in_hole(w)]
+        if len(kept) == len(seg_words):
+            out.append(seg)
+            continue
+        for w in seg_words:
+            if w not in kept:
+                logger.info("Parola stirata sostituita: %r %.2f–%.2f s",
+                            str(_field(w, "word", "")), float(_field(w, "start", 0.0)),
+                            float(_field(w, "end", 0.0)))
+        if not kept:
+            continue
+        words = [{"word": str(_field(w, "word", "") or ""),
+                  "start": float(_field(w, "start", 0.0)), "end": float(_field(w, "end", 0.0)),
+                  "probability": _field(w, "probability", 1.0)} for w in kept]
+        out.append({
+            "start": words[0]["start"], "end": words[-1]["end"],
+            "text": "".join(w["word"] for w in words), "words": words,
+            "no_speech_prob": _field(seg, "no_speech_prob", 0.0),
+            "avg_logprob": _field(seg, "avg_logprob", 0.0),
+        })
+    return out
 
 
 # ============================================================
@@ -1009,22 +1094,21 @@ def transcribe(
         _close_iter(segments_iter)
         segments_iter = None
 
-        # Tratti di parlato che il filtro VAD ha fatto saltare a Whisper: ritrascritti
-        if vad_active:
-            _check_cancel(cancel_event)
-            try:
-                audio_pcm = _decode_pcm(audio_path)
-            except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
-                logger.warning("Audio per il recupero del parlato saltato non disponibile: %s",
-                               e)
-                audio_pcm = None
-            if audio_pcm is not None:
-                decode_kwargs = dict(transcribe_params, language=language or info.language)
-                raw_segments = _recover_skipped_speech(
-                    model, audio_pcm, raw_segments, config.vad.as_dict(), decode_kwargs,
-                    cancel_event=cancel_event, on_status=on_status,
-                )
-                del audio_pcm
+        # Tratti di parlato che Whisper ha saltato (con o senza filtro VAD): ritrascritti
+        _check_cancel(cancel_event)
+        try:
+            audio_pcm = _decode_pcm(audio_path)
+        except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
+            logger.warning("Audio per il recupero del parlato saltato non disponibile: %s",
+                           e)
+            audio_pcm = None
+        if audio_pcm is not None:
+            decode_kwargs = dict(transcribe_params, language=language or info.language)
+            raw_segments = _recover_skipped_speech(
+                model, audio_pcm, raw_segments, config.vad.as_dict(), decode_kwargs,
+                cancel_event=cancel_event, on_status=on_status,
+            )
+            del audio_pcm
 
         # Composizione dei sottotitoli: divisione, testo e tempi definitivi
         _check_cancel(cancel_event)

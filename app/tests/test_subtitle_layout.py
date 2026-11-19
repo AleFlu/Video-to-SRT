@@ -680,6 +680,23 @@ def test_uncovered_speech_hole_inside_long_span():
     assert found == [(pytest.approx(24.73), pytest.approx(34.75))]
 
 
+def test_uncovered_speech_ignores_stretched_words():
+    # Caso reale (Cappato reels 4, VAD spento): Whisper perde 32,5–56,6 s di parlato e
+    # lascia solo "con" e "l" stirate su 7 s ciascuna. Una parola così lunga non dice dove
+    # sia il parlato: il tratto resta scoperto e va ritrascritto.
+    speech = [(31.8, 61.6)]
+    words = _words([(" così", 31.9, 32.46), (" con", 32.54, 39.54), (" l", 48.96, 55.96),
+                    ("'orecchio.", 56.6, 57.2), (" La", 57.3, 57.5)])
+    words += _even_words("parola " * 13, start=57.6, step=0.3)
+    assert sl.find_uncovered_speech(speech, words) == [(pytest.approx(32.46),
+                                                        pytest.approx(56.6))]
+    # una parola allungata ma plausibile ("cooosì", 2 s) copre ancora il suo tratto
+    assert sl.find_uncovered_speech([(0.0, 3.0)], _words([(" cooosì", 0.2, 2.2)])) == []
+    # il testo di un segmento senza tempi per parola (sintetico) copre tutto il segmento
+    synth = [Word(" frase senza tempi", 0.0, 8.0, 0.8, synthetic=True)]
+    assert sl.find_uncovered_speech([(0.0, 8.0)], synth) == []
+
+
 def test_uncovered_speech_merges_close_spans_and_filters_short():
     speech = [(0.0, 0.8), (0.9, 1.7), (5.0, 6.0)]  # 0–1.7 unito (pausa 0.1 s); 5–6 corto
     assert sl.find_uncovered_speech(speech, []) == [(0.0, 1.7)]

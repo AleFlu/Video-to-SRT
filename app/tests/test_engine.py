@@ -241,6 +241,20 @@ def test_recover_skipped_speech_drops_duplicate_of_neighbour(monkeypatch):
     assert _merged_words(merged) == ["Prima.", "del", "denim", "di", "altissima"]
 
 
+def test_recover_skipped_speech_drops_duplicate_touching_zero_length_word(monkeypatch):
+    """Caso reale (Cappato reels 4, tempi −54 s): la parola dopo il buco ha durata nulla
+    e tempi sfasati (" La" 59,98–59,98), quella ritrascritta è a 59,22–59,64 s: "che se
+    la La democrazia"."""
+    before = _speech_seg(["Prima."], 0.0)
+    after = _seg([_w(" La", 5.98, 5.98, prob=0.014), _w(" democrazia", 5.98, 6.48)])
+    hole_words = [(" che", 4.94, 5.02), (" se", 5.02, 5.22), (" la", 5.22, 5.64),
+                  (" democrazia", 5.64, 6.12)]
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(0.0, 6.6)])
+    merged = engine._recover_skipped_speech(_SliceModel(hole_words), _Pcm(7.0),
+                                            [before, after], {}, {})
+    assert _merged_words(merged) == ["Prima.", "che", "se", "La", "democrazia"]
+
+
 def test_recover_skipped_speech_no_holes_returns_input(monkeypatch):
     seg = _speech_seg(["Tutto", "coperto."], 0.0)
     model = _SliceModel([])
@@ -310,12 +324,67 @@ def test_transcribe_end_to_end_with_recovered_hole(monkeypatch):
     assert any("Recupero di 1 tratto" in m for m in statuses)
 
 
-def test_transcribe_without_vad_skips_recovery(monkeypatch):
-    called = []
-    monkeypatch.setattr(engine, "_recover_skipped_speech",
-                        lambda *a, **k: called.append(1) or a[2])
-    _transcribe_with(monkeypatch, [_speech_seg(["Ciao."], 0.0)], vad_filter=False)
-    assert not called
+def test_recover_skipped_speech_replaces_stretched_words(monkeypatch):
+    """Caso reale (Cappato reels 4, VAD spento): Whisper ripete "facendo così con
+    l'orecchio" e stira le ultime parole su 27 s ("con" 32,54–48,96, "l" 48,96–56,6,
+    "'orecchio." 56,6–59,94) al posto del parlato vero. Il tratto viene ritrascritto e le
+    parole stirate lasciano il posto a quelle ritrascritte."""
+    seg = _seg([_w(" facendo", 31.78, 32.4), _w(" così", 32.4, 32.54),
+                _w(" con", 32.54, 48.96), _w(" l", 48.96, 56.6),
+                _w("'orecchio.", 56.6, 59.94)])
+    after = _seg([_w(" La", 59.98, 59.98), _w(" democrazia", 59.98, 60.48)])
+    hole_words = [(" con", 32.6, 32.8), (" l'orecchio.", 32.8, 33.4), (" Se", 33.5, 33.7),
+                  (" tu", 33.7, 33.9), (" devi", 33.9, 34.2), (" pagare", 34.2, 34.7),
+                  (" firmare", 40.1, 40.6), (" una", 40.6, 40.8), (" proposta,", 40.8, 41.4),
+                  (" chiedere", 55.5, 55.9), (" il", 55.9, 56.0), (" permesso.", 56.0, 56.5),
+                  (" Quindi", 57.4, 57.7), (" è", 57.7, 57.8), (" chiaro", 57.8, 58.2)]
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(29.9, 61.0)])
+    merged = engine._recover_skipped_speech(_SliceModel(hole_words), _Pcm(62.0),
+                                            [seg, after], {}, {})
+    assert _merged_words(merged) == [
+        "facendo", "così", "con", "l'orecchio.", "Se", "tu", "devi", "pagare", "firmare",
+        "una", "proposta,", "chiedere", "il", "permesso.", "Quindi", "è", "chiaro", "La",
+        "democrazia"]
+    for s in merged:
+        for w in (s.words if hasattr(s, "words") else s["words"]):
+            start = w.start if hasattr(w, "start") else w["start"]
+            end = w.end if hasattr(w, "end") else w["end"]
+            assert end - start < 3.0
+
+
+def test_recover_keeps_stretched_words_when_nothing_is_recovered(monkeypatch):
+    """Se la ritrascrizione non trova niente, le parole stirate restano: meglio un
+    sottotitolo con tempi larghi che nessun sottotitolo."""
+    seg = _seg([_w(" con", 2.0, 9.0)])
+    monkeypatch.setattr(engine, "_vad_speech_spans", lambda pcm, opts: [(1.0, 10.0)])
+    merged = engine._recover_skipped_speech(_SliceModel([]), _Pcm(11.0), [seg], {}, {})
+    assert _merged_words(merged) == ["con"]
+
+
+def test_transcribe_without_vad_still_recovers_skipped_speech(monkeypatch):
+    """Con il filtro VAD spento Whisper salta ancora più spesso pezzi di parlato: il
+    recupero (che usa il VAD solo per trovare i buchi) gira lo stesso."""
+    first = _speech_seg(["Prima", "parte."], 0.0)
+    last = _speech_seg(["Grazie."], 12.0)
+    hole = [(" In", 4.0, 4.3), (" questo", 4.4, 4.8), (" caso.", 4.9, 5.5)]
+    captured = []
+
+    class Model:
+        def transcribe(self, audio, **kwargs):
+            captured.append(kwargs)
+            if isinstance(audio, _Pcm):
+                return _SliceModel(hole).transcribe(audio, **kwargs)
+            return iter([first, last]), SimpleNamespace(duration=14.0, language="it",
+                                                        language_probability=0.9)
+
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_get_or_load_model", lambda *a, **k: Model())
+    monkeypatch.setattr(engine, "_decode_pcm", lambda path: _Pcm(14.0))
+    monkeypatch.setattr(engine, "_vad_speech_spans",
+                        lambda pcm, opts: [(0.0, 0.8), (3.8, 6.0), (12.0, 12.5)])
+    out = engine.transcribe("x.wav", denoise=False, vad_filter=False)
+    assert [s["text"] for s in out] == ["Prima parte.", "In questo caso.", "Grazie."]
+    assert captured[0]["vad_filter"] is False and "vad_parameters" not in captured[0]
 
 
 # ── Cache modello thread-safe ─────────────────────────────────────────────────
