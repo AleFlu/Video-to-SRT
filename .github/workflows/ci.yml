@@ -15,6 +15,7 @@ jobs:
         python-version: ["3.11"]
     env:
       QT_QPA_PLATFORM: offscreen
+      VIDEOSRT_NONE_WATCH: "1"   # diagnosi temporanea (conftest.py)
     steps:
       - uses: actions/checkout@v4
 

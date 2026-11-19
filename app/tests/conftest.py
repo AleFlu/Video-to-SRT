@@ -105,3 +105,23 @@ def _cleanup_top_level_widgets():
             pass
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     qapp.processEvents()
+
+
+# ── Diagnosi: perdite di riferimenti a None (solo con VIDEOSRT_NONE_WATCH=1) ──────────────
+# Su Linux una chiamata a PySide toglie un riferimento a None a ogni uso: dopo migliaia di
+# chiamate Python si ferma con "deallocating None" in un test qualunque. Con la variabile
+# d'ambiente ogni test che fa calare il conteggio di None viene scritto subito nel log.
+
+if os.environ.get("VIDEOSRT_NONE_WATCH") == "1":
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_protocol(item, nextitem):
+        before = sys.getrefcount(None)
+        yield
+        drop = before - sys.getrefcount(None)
+        if drop > 200:
+            reporter = item.config.pluginmanager.get_plugin("terminalreporter")
+            line = f"[none-watch] -{drop} (ora {sys.getrefcount(None)}) {item.nodeid}"
+            if reporter is not None:
+                reporter.write_line(line)
+            else:
+                print(line, file=sys.__stderr__, flush=True)
