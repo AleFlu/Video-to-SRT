@@ -83,8 +83,9 @@ The **Build app** GitHub workflow (`.github/workflows/build.yml`: manual, on `v*
 weekly) builds macOS (Apple Silicon) and Windows on clean runners, runs the same checks and
 uploads the apps as artifacts.
 
-## Signing and notarization
+## Signing and notarization (optional, not used by the project)
 
+The project does not use a paid certificate: the steps below are only for someone who has one.
 Without a Developer ID the app is only ad-hoc signed: downloaded on another Mac, Gatekeeper
 blocks it ("damaged" / "unidentified developer"; workaround: right-click → Open, or
 `xattr -dr com.apple.quarantine Video-to-SRT.app`). For a clean install you need an

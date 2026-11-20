@@ -116,6 +116,14 @@ python app/main.py
 
 FFmpeg must be on `PATH` (macOS: `brew install ffmpeg`). The model downloads at the first transcription.
 
+**About the built app.** The project is free and the app is **not signed** with a paid Apple
+Developer ID or a Windows code-signing certificate. An app you build yourself opens normally. A
+copy built elsewhere (for example the *Build app* artifacts on GitHub Actions) is blocked the
+first time: on macOS right-click the app → **Open** (or run
+`xattr -dr com.apple.quarantine Video-to-SRT.app`); on Windows SmartScreen → **More info** →
+**Run anyway**. Every build runs a self-test (`--self-test`) of the finished app; you can run it
+yourself on any copy: `Video-to-SRT.app/Contents/MacOS/Video-to-SRT --self-test`.
+
 ---
 
 ## Keyboard shortcuts
