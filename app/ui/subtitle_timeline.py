@@ -230,14 +230,47 @@ class _SearchField(QLineEdit):
         self._hint_lbl.setObjectName("tbSearchHint")
         self._hint_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.textChanged.connect(self._sync_hint)
+        self._watched: set = set()      # pulsantini interni già sorvegliati
+        self._centering = False
 
     def _sync_hint(self, text: str) -> None:
         self._hint_lbl.setVisible(not text)
+
+    def _center_side_buttons(self) -> None:
+        """Centra in verticale i pulsantini interni di Qt (lente, cancella): Qt li mette
+        qualche px sotto il centro nei campi più bassi del suo pulsante (26–28 px) e li
+        riposiziona da sé (testo, compattazione della toolbar): li si ricentra a ogni
+        spostamento."""
+        if self._centering:
+            return
+        self._centering = True
+        try:
+            for b in self.findChildren(QToolButton, options=Qt.FindDirectChildrenOnly):
+                if b not in self._watched:
+                    self._watched.add(b)
+                    b.installEventFilter(self)
+                h = min(b.height(), self.height())
+                y = (self.height() - h) // 2
+                if (b.y(), b.height()) != (y, h):
+                    b.setGeometry(b.x(), y, b.width(), h)
+        finally:
+            self._centering = False
+
+    def eventFilter(self, obj, event):  # noqa: N802 (override Qt)
+        if obj in self._watched and event.type() in (QEvent.Move, QEvent.Resize,
+                                                     QEvent.Show):
+            self._center_side_buttons()
+        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):  # noqa: N802 (override Qt)
         super().resizeEvent(event)
         w = self._hint_lbl.sizeHint().width()
         self._hint_lbl.setGeometry(self.width() - w - 8, 0, w, self.height())
+        self._center_side_buttons()
+
+    def actionEvent(self, event):  # noqa: N802 (override Qt)
+        super().actionEvent(event)
+        self._center_side_buttons()
 
     def sizeHint(self):  # noqa: N802 (override Qt)
         return QSize(_SEARCH_WIDTH, _BTN_HEIGHT)

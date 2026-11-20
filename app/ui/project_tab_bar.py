@@ -125,6 +125,8 @@ class _TabButton(QWidget):
             "  border: none;"
             "  padding: 0;"
             "  border-radius: 4px;"
+            # l'altezza minima globale dei pulsanti (28 px) lo allungherebbe verso il basso
+            "  min-height: 20px; max-height: 20px;"
             "}"
             "QPushButton#tabClose:hover {"
             f"  color: {c('err')};"
