@@ -884,7 +884,7 @@ class HomeWidget(QWidget):
             model_key = self.model_combo.currentData() or "large-v3"
             factor = {
                 "tiny": 0.15, "base": 0.25, "small": 0.4,
-                "medium": 0.65, "large-v3-turbo": 0.5, "large-v3": 1.0,
+                "medium": 0.65, "large-v3-turbo": 0.3, "large-v3": 1.0,
             }.get(model_key, 1.0)
             mins = max(1, int(size_mb * factor / 100 * 1.5))
             srt_kb = max(1, int(size_mb * 0.05))
