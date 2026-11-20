@@ -95,6 +95,7 @@ class TransportBar(QWidget):
 
     loop_toggled = Signal(bool)
     fullscreen_requested = Signal()
+    tall_timeline_toggled = Signal(bool)   # timeline grande per regolare i tempi
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -248,6 +249,20 @@ class TransportBar(QWidget):
         self.btn_fullscreen.clicked.connect(self.fullscreen_requested)
         layout.addWidget(self.btn_fullscreen)
 
+        # --- Timeline grande (monitor sopra, forma d'onda a tutta larghezza) ---
+        self.btn_tall = QToolButton()
+        self.btn_tall.setObjectName("transportTall")
+        self._tall_icon = icons.bind_icon(self.btn_tall, "timeline", "dim")
+        tip = ("Timeline grande: forma d'onda a tutta larghezza per regolare i tempi "
+               f"({platform_support.shortcut_label('Ctrl+Shift+E')})")
+        self.btn_tall.setToolTip(tip)
+        self.btn_tall.setAccessibleName("Timeline grande")
+        self.btn_tall.setCheckable(True)
+        self.btn_tall.setFixedSize(32, 28)
+        self.btn_tall.toggled.connect(self.tall_timeline_toggled)
+        self.btn_tall.toggled.connect(self._on_tall_toggled)
+        layout.addWidget(self.btn_tall)
+
         # --- Indicatore JKL ---
         self._jkl_lbl = QLabel(_JKL_IDLE)
         self._jkl_lbl.setObjectName("jklIndicator")
@@ -268,7 +283,7 @@ class TransportBar(QWidget):
     def focus_chain(self) -> list:
         """Controlli nell'ordine di Tab (sinistra → destra)."""
         return [self.btn_play, self.btn_stop, self.seek_slider, self.volume_slider,
-                self.rate_combo, self.btn_loop, self.btn_fullscreen]
+                self.rate_combo, self.btn_loop, self.btn_fullscreen, self.btn_tall]
 
     # ----------------------------------------------------------------
     # Tema
@@ -323,6 +338,13 @@ class TransportBar(QWidget):
             " border: 1px solid transparent; border-radius: 4px; padding: 0; }"
             + f"QToolButton#transportFullscreen:hover {{ background: {c('raise')}; }}"
             + theme.focus_rule("QToolButton#transportFullscreen", 4)
+            # timeline grande: come il loop (attiva = sfondo rialzato e bordo in accento)
+            + "QToolButton#transportTall { background: transparent;"
+            " border: 1px solid transparent; border-radius: 4px; padding: 0; }"
+            + f"QToolButton#transportTall:hover {{ background: {c('raise')}; }}"
+            + f"QToolButton#transportTall:checked {{ background: {c('raise')};"
+            f" border: 1px solid {c('acc')}; }}"
+            + theme.focus_rule("QToolButton#transportTall", 4)
             # velocità: mono, bordo di 1 px
             + f"QComboBox#rateCombo {{ background: transparent; color: {c('text')};"
             f" border: 1px solid {c('line')}; border-radius: 4px; padding: 0 4px 0 9px;"
@@ -469,6 +491,17 @@ class TransportBar(QWidget):
     def _set_enabled(self, enabled: bool):
         for w in (self.btn_play, self.btn_stop, self.seek_slider, self.btn_loop):
             w.setEnabled(enabled)
+
+    def set_tall_checked(self, on: bool) -> None:
+        """Allinea il pulsante alla modalità (cambiata dal menu o ripristinata)."""
+        if self.btn_tall.isChecked() != on:
+            self.btn_tall.blockSignals(True)
+            self.btn_tall.setChecked(on)
+            self.btn_tall.blockSignals(False)
+            self._on_tall_toggled(on)
+
+    def _on_tall_toggled(self, checked: bool) -> None:
+        self._tall_icon.set_icon("timeline", "text" if checked else "dim")
 
     def _on_loop_toggled(self, checked: bool) -> None:
         """Il loop attivo si vede: icona piena di contrasto + sfondo rialzato e bordo."""

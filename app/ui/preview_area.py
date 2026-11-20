@@ -2,7 +2,9 @@
 preview_area.py — Zona alta dell'editor: monitor video + forma d'onda + trasporto.
 
 Il monitor (sinistra, 452 px all'inizio) e la forma d'onda (destra) sono affiancati
-quando il file è un video, separati da un bordo trascinabile (la larghezza si ricorda);
+quando il file è un video, separati da un bordo trascinabile (la larghezza si ricorda).
+Con la timeline grande (``set_tall_timeline``) il monitor sta sopra e la forma d'onda
+sotto, a tutta larghezza, per regolare i tempi con più precisione;
 per un file solo audio il monitor si chiude e la forma d'onda occupa tutta la larghezza.
 Senza media il monitor mostra "Nessun file caricato". Il video va a schermo intero con
 i sottotitoli dal pulsante del trasporto o con un doppio clic (Esc, F o doppio clic per
@@ -53,6 +55,8 @@ MONITOR_WIDTH = 452
 MONITOR_MIN_WIDTH = 240
 _SETTINGS_MONITOR_W = "workspace/monitor_width"
 TOP_ZONE_HEIGHT = 286
+# Timeline grande: percentuale dell'altezza per il monitor (il resto alla forma d'onda)
+TALL_MONITOR_SHARE = 40
 _INFO_LINE_HEIGHT = 26
 
 # Modalità del monitor
@@ -173,12 +177,7 @@ class PreviewArea(QWidget):
         top.addWidget(right)
         top.setStretchFactor(0, 0)
         top.setStretchFactor(1, 1)
-        width = QSettings("VideoSRT", "v2").value(_SETTINGS_MONITOR_W, MONITOR_WIDTH)
-        try:
-            width = max(MONITOR_MIN_WIDTH, int(width))
-        except (TypeError, ValueError):
-            width = MONITOR_WIDTH
-        top.setSizes([width, 10_000])
+        top.setSizes([self._saved_monitor_width(), 10_000])
         top.splitterMoved.connect(self._on_monitor_resized)
 
         layout.addWidget(top, 1)
@@ -394,8 +393,40 @@ class PreviewArea(QWidget):
 
     # ── Monitor: larghezza e schermo intero ────────────────────────────────────
 
+    @staticmethod
+    def _saved_monitor_width() -> int:
+        width = QSettings("VideoSRT", "v2").value(_SETTINGS_MONITOR_W, MONITOR_WIDTH)
+        try:
+            return max(MONITOR_MIN_WIDTH, int(width))
+        except (TypeError, ValueError):
+            return MONITOR_WIDTH
+
     def _on_monitor_resized(self, *_):
-        QSettings("VideoSRT", "v2").setValue(_SETTINGS_MONITOR_W, self._monitor.width())
+        if not self.is_tall_timeline():      # in verticale le misure sono altezze
+            QSettings("VideoSRT", "v2").setValue(_SETTINGS_MONITOR_W, self._monitor.width())
+
+    # ── Timeline grande ────────────────────────────────────────────────────────
+
+    def is_tall_timeline(self) -> bool:
+        return self._top_split.orientation() == Qt.Vertical
+
+    def set_tall_timeline(self, on: bool) -> None:
+        """Monitor sopra e forma d'onda a tutta larghezza sotto (come la pagina di
+        montaggio di un programma video), oppure affiancati (normale)."""
+        if bool(on) == self.is_tall_timeline():
+            return
+        top = self._top_split
+        if on:
+            top.setOrientation(Qt.Vertical)
+            top.setStretchFactor(0, 2)
+            top.setStretchFactor(1, 3)
+            top.setSizes([TALL_MONITOR_SHARE, 100 - TALL_MONITOR_SHARE])  # proporzioni
+        else:
+            top.setOrientation(Qt.Horizontal)
+            top.setStretchFactor(0, 0)
+            top.setStretchFactor(1, 1)
+            top.setSizes([self._saved_monitor_width(), 10_000])
+        self.transport.set_tall_checked(bool(on))
 
     def is_fullscreen(self) -> bool:
         return self._fullscreen is not None

@@ -30,6 +30,7 @@ app/                          # tutta l'applicazione
 │   ├── whisper_models.py     # catalogo modelli, modello consigliato (RAM/GPU), cache HF, download
 │   ├── burn_in.py            # video MP4 con i sottotitoli impressi (Qt disegna, ffmpeg overlay)
 │   ├── spelling.py           # ortografia italiana (pyspellchecker) e parole incerte di Whisper
+│   ├── timing_edit.py        # regole per cambiare i tempi a mano (trascinamento, tasti I/O)
 │   ├── audio_player.py       # player/anteprima audio
 │   └── constants.py
 ├── ui/                       # interfaccia
@@ -100,6 +101,7 @@ testo dell'Inspector, forma d'onda, Home/risultato ed Esportazione).
 | Canc / ⌫ (focus sulla tabella) | Elimina selezionati |
 | Ctrl+F / Ctrl+Alt+F | Trova (ricerca inline) / Trova e sostituisci (Windows/Linux anche Ctrl+H) |
 | Ctrl+I | Mostra/nascondi Inspector (solo Editor) |
+| Ctrl+Shift+E | Timeline grande: monitor sopra, forma d'onda a tutta larghezza, zoom 15 s (solo Editor; anche dal pulsante del trasporto) |
 | Ctrl+Invio (testo dell'Inspector) | Applica il testo |
 | Ctrl+O / Ctrl+N | Apri file / nuova trascrizione |
 | Ctrl+S / Ctrl+E | Esporta SRT / apri tab Esportazione |
@@ -111,13 +113,17 @@ testo dell'Inspector, forma d'onda, Home/risultato ed Esportazione).
 | Space / K / J / L | Play-Pausa / pausa / seek −2 s / play (solo con l'Editor visibile; mai mentre si scrive; Spazio su un pulsante lo preme) |
 | ← / → | Seek ±1 s (sullo slider del volume lo regolano) |
 | Shift+← / Shift+→ | Sottotitolo precedente / successivo |
+| I / O | Inizio / fine del sottotitolo al playhead (il selezionato; in una pausa: il prossimo per I, il precedente per O — `core.timing_edit.mark_target`) |
 | Forma d'onda col focus | ←/→ ±1 s, Home/Fine inizio/fine, +/− zoom, 0 tutta la durata |
 
 Forma d'onda col mouse/trackpad: rotella o due dita (verticale e orizzontale) = scorrimento
 (solo con zoom, il playhead non si muove); Ctrl/⌘ o Alt + rotella e pizzico = zoom attorno al
 cursore; doppio clic sullo sfondo = tutta la durata; clic = seek; tenere premuto e trascinare =
 scrub (il playhead segue il mouse e resta dove lo si lascia; oltre i bordi la vista scorre);
-⌥/Alt + trascinamento = scorrimento della vista.
+⌥/Alt + trascinamento = scorrimento della vista. Nella corsia dei sottotitoli: trascinare un
+bordo di un blocco = inizio o fine, trascinarne il centro = spostarlo (aggancio a playhead e
+vicini entro 8 px, Maiusc lo toglie, Esc annulla; mai oltre i vicini né sotto 0,2 s: regole
+in `core.timing_edit`); al rilascio un solo passo di annullamento (`SubtitleTimeline.set_timing`).
 
 Home: le impostazioni di trascrizione non scorrono; la finestra non scende sotto l'altezza che
 servono (`MainWindow._fit_min_height`). Solo su uno schermo più basso di così diventano

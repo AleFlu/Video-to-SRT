@@ -521,6 +521,11 @@ class MainWindow(QMainWindow):
                             editor_only=True),
             "Ctrl+I")
         m_view.insertAction(self._act_theme, self.act_toggle_insp)
+        self.act_tall_timeline = self._add_action(
+            None, "Timeline grande",
+            self._on_active(lambda pw: pw.workspace.toggle_tall_timeline(), editor_only=True),
+            "Ctrl+Shift+E")
+        m_view.insertAction(self._act_theme, self.act_tall_timeline)
         m_view.insertSeparator(self._act_theme)
 
         self._menu_view = m_view

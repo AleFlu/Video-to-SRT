@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QMenu, QLineEdit, QFileDialog, QLabel, QStackedLayout,
 )
 
+from core import timing_edit
 from core.subtitle_model import Subtitle
 from core.subtitle_table_model import (
     SubtitleTableModel, COL_INDEX, COL_START, COL_END, COL_DUR, COL_CPS, COL_TEXT,
@@ -85,6 +86,9 @@ PLAYBACK_KEYS = (
     ("seek_forward", "Right", "_seek_forward"),
     ("prev_subtitle", "Shift+Left", "_go_prev_sub"),
     ("next_subtitle", "Shift+Right", "_go_next_sub"),
+    # Inizio / fine del sottotitolo al cursore di riproduzione (come i punti In/Out)
+    ("mark_in", "I", "_mark_in"),
+    ("mark_out", "O", "_mark_out"),
 )
 
 # Nome colore del modello → token del tema
@@ -1121,6 +1125,57 @@ class SubtitleTimeline(QWidget):
         self.undo_stack.push(EditFieldCommand(self.model, row, COL_START, f"{sub.start:.3f}", f"{new_start:.3f}", "Sposta inizio"))
         self.undo_stack.push(EditFieldCommand(self.model, row, COL_END,   f"{sub.end:.3f}",   f"{new_end:.3f}",   "Sposta fine"))
         self.undo_stack.endMacro()
+
+    def set_timing(self, row: int, start: float, end: float) -> None:
+        """Nuovi inizio e fine di un sottotitolo (trascinamento sulla forma d'onda, tasti
+        I/O): un solo passo di annullamento, e la riga diventa quella selezionata."""
+        sub = self.model.subtitle_at(row)
+        if sub is None:
+            return
+        edits = [(col, old, new) for col, old, new in ((COL_START, sub.start, start),
+                                                       (COL_END, sub.end, end))
+                 if abs(new - old) >= 0.0005]
+        if not edits:
+            return
+        if len(edits) == 2:
+            label = "Sposta sottotitolo"
+        else:
+            label = "Modifica inizio" if edits[0][0] == COL_START else "Modifica fine"
+        self.undo_stack.beginMacro(label)
+        for col, old, new in edits:
+            self.undo_stack.push(EditFieldCommand(self.model, row, col, f"{old:.3f}",
+                                                  f"{new:.3f}", label))
+        self.undo_stack.endMacro()
+        if row != self._current_row():
+            self.view.selectRow(row)
+            self.view.scrollTo(self.model.index(row, COL_TEXT),
+                               QAbstractItemView.EnsureVisible)
+
+    def _mark_in(self):
+        """I: l'inizio del sottotitolo va al cursore di riproduzione."""
+        self._mark_at_playhead("start")
+
+    def _mark_out(self):
+        """O: la fine del sottotitolo va al cursore di riproduzione."""
+        self._mark_at_playhead("end")
+
+    def _mark_at_playhead(self, edge: str) -> None:
+        if self.player is None or self.model.rowCount() == 0:
+            return
+        pos = self.player.position() / 1000.0
+        media_end = (self.player.duration() / 1000.0) or None
+        times = [(sub.start, sub.end) for sub in self.model.subtitles()]
+        row = timing_edit.mark_target(times, self._current_row(), pos, edge)
+        if row < 0:
+            return
+        start, end = times[row]
+        if edge == "start":
+            start = timing_edit.trim_start(times, row, pos, timing_edit.MIN_DURATION_S,
+                                           media_end)
+        else:
+            end = timing_edit.trim_end(times, row, pos, timing_edit.MIN_DURATION_S,
+                                       media_end)
+        self.set_timing(row, start, end)
 
     # ---- Toolbar actions ----
 

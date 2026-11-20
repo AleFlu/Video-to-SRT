@@ -12,6 +12,9 @@ Layout (misure del mockup):
   │                                           │  (324 px)       │
   └───────────────────────────────────────────┴─────────────────┘
 
+- Timeline grande (pulsante del trasporto, Ctrl+Shift+E): la preview prende quasi
+  tutta l'altezza, il monitor va sopra e la forma d'onda sotto a tutta larghezza, con
+  zoom su TALL_VIEW_MS attorno al playhead; tabella e inspector restano sotto, bassi
 - Preview e area di lavoro sono divisi da un QSplitter verticale, tabella e
   inspector da uno orizzontale: i valori predefiniti sono quelli del mockup,
   l'utente può ridimensionarli
@@ -37,6 +40,11 @@ from ui.prefs import read_list
 # solo accanto alla tabella) e le vecchie proporzioni non vanno più bene.
 _SETTINGS_HSPLIT = "workspace/hsplit_sizes_v2"   # [tabella, inspector]
 _SETTINGS_VSPLIT = "workspace/vsplit_sizes_v2"   # [preview + trasporto, area di lavoro]
+_SETTINGS_TALL = "workspace/tall_timeline"
+
+# Timeline grande: altezza dell'area di lavoro (toolbar + qualche riga) e vista iniziale
+TALL_LOWER_HEIGHT = 230
+TALL_VIEW_MS = 15_000
 
 INSPECTOR_WIDTH = 324
 _TRANSPORT_HEIGHT = 46
@@ -118,6 +126,8 @@ class WorkspaceWidget(QWidget):
         self._vsplit.setStretchFactor(0, 0)
         self._vsplit.setStretchFactor(1, 1)
         self._vsplit.setSizes([TOP_ZONE_HEIGHT + _TRANSPORT_HEIGHT, 560])
+        self._tall = False
+        self._normal_vsizes = self._vsplit.sizes()   # misure da ripristinare uscendo
 
         # ── Unifica player ─────────────────────────────────────────────────────
         self.timeline.set_player(self.preview.player)
@@ -145,6 +155,43 @@ class WorkspaceWidget(QWidget):
 
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
+        if QSettings("VideoSRT", "v2").value(_SETTINGS_TALL, False) in (True, "true"):
+            self.set_tall_timeline(True)
+
+    # ── Timeline grande ────────────────────────────────────────────────────────
+
+    def is_tall_timeline(self) -> bool:
+        return self._tall
+
+    def toggle_tall_timeline(self) -> None:
+        self.set_tall_timeline(not self._tall)
+
+    def set_tall_timeline(self, on: bool) -> None:
+        """Timeline grande per regolare i tempi (vedi il docstring del modulo)."""
+        on = bool(on)
+        if on == self._tall:
+            self.preview.transport.set_tall_checked(on)
+            return
+        total = sum(self._vsplit.sizes()) or self.height()
+        if on:
+            self._normal_vsizes = self._vsplit.sizes()
+            self._vsplit.setStretchFactor(0, 1)
+            self._vsplit.setStretchFactor(1, 0)
+            lower = min(TALL_LOWER_HEIGHT, max(1, total // 3))
+            self._vsplit.setSizes([max(1, total - lower), lower])
+        else:
+            self._vsplit.setStretchFactor(0, 0)
+            self._vsplit.setStretchFactor(1, 1)
+            self._vsplit.setSizes(self._normal_vsizes)
+        self._tall = on
+        self.preview.set_tall_timeline(on)
+        QSettings("VideoSRT", "v2").setValue(_SETTINGS_TALL, on)
+        self._zoom_if_tall()
+
+    def _zoom_if_tall(self, *_):
+        if self._tall:
+            self.preview.waveform.zoom_around_playhead(TALL_VIEW_MS)
+
     def _on_toggle_inspector(self, checked: bool):
         self.inspector.setVisible(bool(checked))
 
@@ -169,6 +216,10 @@ class WorkspaceWidget(QWidget):
         )
 
         self.preview.waveform.subtitle_clicked.connect(self._on_waveform_click)
+        self.preview.waveform.timing_edited.connect(self.timeline.set_timing)
+        self.preview.transport.tall_timeline_toggled.connect(self.set_tall_timeline)
+        # durata nota dopo l'attivazione (progetto aperto in timeline grande): zoom ora
+        self.preview.player.duration_changed.connect(self._zoom_if_tall)
         # position_changed → timeline._on_player_pos è collegato da set_player()
         self.timeline.jkl_pressed.connect(self.preview.transport.set_jkl_key)
         self.preview.transport.loop_toggled.connect(self.timeline.set_loop)
@@ -242,7 +293,9 @@ class WorkspaceWidget(QWidget):
     def _save_geometry(self):
         s = QSettings("VideoSRT", "v2")
         s.setValue(_SETTINGS_HSPLIT, self._hsplit.sizes())
-        s.setValue(_SETTINGS_VSPLIT, self._vsplit.sizes())
+        # in timeline grande si ricordano le misure normali, a cui si torna uscendo
+        s.setValue(_SETTINGS_VSPLIT, self._normal_vsizes if self._tall
+                   else self._vsplit.sizes())
 
     def _restore_geometry(self):
         s = QSettings("VideoSRT", "v2")
@@ -256,3 +309,4 @@ class WorkspaceWidget(QWidget):
             # valori incompleti o nulli (es. chiavi di una versione precedente): si ignorano
             if len(sizes) == split.count() and all(x > 0 for x in sizes):
                 split.setSizes(sizes)
+        self._normal_vsizes = self._vsplit.sizes()

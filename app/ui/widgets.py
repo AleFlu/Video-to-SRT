@@ -37,8 +37,8 @@ def is_text_input(widget) -> bool:
 def focus_owns_key(widget, seq: str) -> bool:
     """
     True se il widget col focus usa da sé il tasto `seq` (una delle scorciatoie di
-    riproduzione senza Ctrl: "Space", "J", "K", "L", "Left", "Right", "Shift+Left",
-    "Shift+Right"). In quel caso la scorciatoia non deve rubargli il tasto:
+    riproduzione senza Ctrl: "Space", "J", "K", "L", "I", "O", "Left", "Right",
+    "Shift+Left", "Shift+Right"). In quel caso la scorciatoia non deve rubargli il tasto:
       - nei campi di testo si scrive (tutti i tasti);
       - Spazio preme pulsanti, interruttori, tab e apre le combo;
       - ←/→ muovono gli slider (volume), salvo quelli marcati `arrowsSeek`.
