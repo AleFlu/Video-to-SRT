@@ -111,4 +111,6 @@ way, to check locally that the hardened-runtime app still starts.
 
 ## Notes
 
-- Without `app/assets/app.icns` the build uses the default icon.
+- Without `app/assets/app.icns` the build uses the default icon. The icons are drawn in
+  `app/ui/brand.py`; after changing the design run `python app/assets/make_icon.py` to
+  regenerate `app.icns`, `app.ico` and `app_512.png`.

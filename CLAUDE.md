@@ -19,7 +19,7 @@ app/                          # tutta l'applicazione
 ├── platform_support.py       # UNICO punto dipendente dal sistema operativo
 ├── pyi_rth_threads.py        # runtime hook PyInstaller (thread OMP/CT2)
 ├── requirements.txt          # dipendenze runtime
-├── assets/                   # app.icns, app_512.png, make_icon.py (app.ico non presente)
+├── assets/                   # app.icns, app.ico, app_512.png: rigenerati da make_icon.py
 ├── core/                     # logica senza UI
 │   ├── subtitle_model.py     # Subtitle / SubtitleProject
 │   ├── subtitle_table_model.py  # QAbstractTableModel, parse/format timestamp, issues
@@ -33,6 +33,7 @@ app/                          # tutta l'applicazione
 │   └── constants.py
 ├── ui/                       # interfaccia
 │   ├── theme.py              # token colore, stylesheet, MANAGER (tema chiaro/scuro)
+│   ├── brand.py              # marchio: icona dell'app e splash di avvio (un solo disegno)
 │   ├── main_window.py, workspace.py, project_widget.py
 │   ├── project_tab_bar.py, tab_bar.py
 │   ├── home_widget.py, progress_widget.py, result_widget.py, widgets.py, prefs.py
