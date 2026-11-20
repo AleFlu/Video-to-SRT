@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import platform_support
+from core.burn_in import BurnInWorker
 from core.subtitle_model import SubtitleProject
 from core.v2srt_io import load_project, is_v2srt, save_project, EXTENSION as V2SRT_EXT
 from ui.home_widget import HomeWidget
@@ -135,6 +136,8 @@ class ProjectWidget(QWidget):
         self._source_path: str  = ""
         self.project = SubtitleProject()
         self._editor_loaded: bool = False
+        self._burn_worker = None          # esportazione del video con i sottotitoli
+        self._burn_dialog = None
 
         # Export panel (finestra di dialogo figlia del progetto: chiusa con il progetto)
         self._export_panel = ExportPanel(get_project_callable=self._current_project,
@@ -233,6 +236,7 @@ class ProjectWidget(QWidget):
         self.export_tab.export_txt_requested.connect(self._on_tab_export_txt)
         self.export_tab.export_ass_requested.connect(self._on_tab_export_ass)
         self.export_tab.save_v2srt_requested.connect(self._export_tab_v2srt)
+        self.export_tab.export_video_requested.connect(self._on_tab_export_video)
 
     # ── Tab switching ──────────────────────────────────────────────────────────
 
@@ -499,6 +503,99 @@ class ProjectWidget(QWidget):
 
     def _on_tab_export_ass(self, *_a) -> None:
         self._export_tab_format(".ass")
+
+    # ── Video con i sottotitoli impressi ───────────────────────────────────────
+
+    def _on_tab_export_video(self, *_a) -> None:
+        """Esporta un MP4 con i sottotitoli della tab Esportazione impressi nell'immagine,
+        con avanzamento e Annulla (lavoro in ``core.burn_in``, in un thread)."""
+        from PySide6.QtWidgets import QFileDialog, QProgressDialog
+        from core import burn_in
+
+        if self._burn_worker is not None:
+            return
+        cues = [(s.start, s.end, s.text) for s in self.export_tab.current_subtitles()
+                if s.text.strip()]
+        if not cues:
+            QMessageBox.warning(self, "Nessun sottotitolo",
+                                "Non ci sono sottotitoli da imprimere nel video.")
+            return
+        src = self._source_path
+        if not src or not os.path.isfile(src):
+            QMessageBox.warning(self, "Video non trovato",
+                                "Il video originale non si trova più: riaprilo e riprova.")
+            return
+        if not burn_in.ffmpeg_path():
+            QMessageBox.warning(self, "ffmpeg mancante",
+                                "Per esportare il video serve ffmpeg, che non è stato trovato.")
+            return
+
+        initial = str(Path(src).with_name(f"{Path(src).stem} sottotitolato.mp4"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Esporta video con sottotitoli", initial, "Video MP4 (*.mp4)")
+        if not path:
+            return
+        if not path.lower().endswith(".mp4"):
+            path += ".mp4"
+        if os.path.abspath(path) == os.path.abspath(src):
+            QMessageBox.warning(self, "Scegli un altro nome",
+                                "Il video esportato non può sostituire quello originale.")
+            return
+
+        dlg = QProgressDialog("Esportazione del video con i sottotitoli…", "Annulla",
+                              0, 1000, self)
+        dlg.setWindowTitle("Video con sottotitoli")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumDuration(0)
+        dlg.setValue(0)
+        worker = BurnInWorker(src, cues, path)
+        self._burn_worker, self._burn_dialog = worker, dlg
+        worker.progress.connect(lambda v: dlg.setValue(int(v * 1000)))
+        worker.done.connect(self._on_burn_done)
+        worker.failed.connect(self._on_burn_failed)
+        worker.cancelled.connect(self._finish_burn)
+        dlg.canceled.connect(worker.request_cancel)
+        dlg.show()
+        worker.start()
+
+    def _finish_burn(self) -> None:
+        """Chiude l'avanzamento e libera il thread (che ha già finito)."""
+        worker, dlg = self._burn_worker, self._burn_dialog
+        self._burn_worker = self._burn_dialog = None
+        if dlg is not None:
+            try:
+                dlg.canceled.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            dlg.close()
+            dlg.deleteLater()
+        if worker is not None:
+            worker.wait(5000)
+            if hasattr(worker, "deleteLater"):
+                worker.deleteLater()
+
+    def _on_burn_done(self, path: str) -> None:
+        self._finish_burn()
+        box = QMessageBox(QMessageBox.Information, "Video esportato",
+                          f"Video con i sottotitoli salvato in:\n{path}", QMessageBox.Ok, self)
+        reveal = box.addButton("Mostra nella cartella", QMessageBox.ActionRole)
+        box.exec()
+        if box.clickedButton() is reveal:
+            platform_support.reveal_in_file_manager(path)
+
+    def _on_burn_failed(self, message: str) -> None:
+        self._finish_burn()
+        QMessageBox.critical(self, "Esportazione del video non riuscita", message)
+
+    def _stop_burn(self) -> None:
+        """Annulla un'esportazione video in corso e aspetta il thread (chiusura progetto)."""
+        worker = self._burn_worker
+        if worker is not None:
+            worker.request_cancel()
+            worker.wait(10000)
+        self._finish_burn()
 
     def _do_export_format(self, ext: str):
         from PySide6.QtWidgets import QFileDialog
@@ -783,6 +880,7 @@ class ProjectWidget(QWidget):
         self._autosave_timer.stop()
         # Sgancia il QThread dal widget: distruggerlo mentre gira = crash Qt
         self.progress.detach_and_stop()
+        self._stop_burn()
         self._export_panel.close()
         self._delete_autosave()
 

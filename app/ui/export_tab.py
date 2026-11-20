@@ -23,12 +23,16 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QScrollArea, QStackedWidget, QPlainTextEdit,
 )
 
+from core.constants import SUPPORTED_VIDEO_EXTS
 from core.subtitle_model import Subtitle
 from ui.widgets import ElidedLabel
 from ui import icons, theme
 import platform_support
 
 _sl = platform_support.shortcut_label
+
+_VIDEO_DESC = "MP4 con i sottotitoli impressi nell'immagine — per reel e social"
+_VIDEO_NEEDS_SOURCE = "Serve un file video come sorgente: con un audio non c'è un'immagine"
 
 # Misure del mockup
 _INFO_HEIGHT = 56
@@ -111,6 +115,7 @@ class _ExportButton(QPushButton):
             # il QSS globale dei QPushButton impone min-height: 28 px; qui 55 + 1 di bordo
             f" min-height: {_ROW_HEIGHT - 1}px; }}"
             f"QPushButton#exportRow:hover {{ background: {c('raise')}; }}"
+            f"QPushButton#exportRow:disabled QLabel#exportTitle {{ color: {c('dim')}; }}"
             + theme.focus_rule("QPushButton#exportRow", 0)
             + "QLabel { background: transparent; border: none; }"
             f"QLabel#exportTitle {{ color: {c('text')}; font-size: 13px; font-weight: 600; }}"
@@ -167,6 +172,7 @@ class ExportTab(QWidget):
     export_txt_requested  = Signal()
     export_ass_requested  = Signal()
     save_v2srt_requested  = Signal()
+    export_video_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -196,6 +202,7 @@ class ExportTab(QWidget):
         self._panel.btn_txt.clicked.connect(self.export_txt_requested)
         self._panel.btn_ass.clicked.connect(self.export_ass_requested)
         self._panel.btn_v2srt.clicked.connect(self.save_v2srt_requested)
+        self._panel.btn_video.clicked.connect(self.export_video_requested)
 
         self._stack.setCurrentIndex(0)
 
@@ -378,6 +385,11 @@ class _ExportPanel(QWidget):
         root.addLayout(self._section(
             "Salva file", [self.btn_srt, self.btn_vtt, self.btn_txt, self.btn_ass,
                            self.btn_v2srt]))
+
+        # ── Sezione: Video ─────────────────────────────────────────────────────
+        self.btn_video = self._row(
+            "Video con sottotitoli", _VIDEO_DESC, tag="MP4", icon_name="download")
+        root.addLayout(self._section("Video", [self.btn_video]))
 
         # ── Sezione: Pubblica direttamente ────────────────────────────────────
         self._btn_youtube = self._row(
@@ -581,6 +593,12 @@ class _ExportPanel(QWidget):
             else "Trascrizione originale"
         )
         self._badge_modified.setVisible(has_editor_subs and is_modified)
+        is_video = Path(source_path).suffix.lower() in SUPPORTED_VIDEO_EXTS
+        self.btn_video.setEnabled(is_video)
+        desc = _VIDEO_DESC if is_video else _VIDEO_NEEDS_SOURCE
+        self.btn_video.sub_lbl.setText(desc)
+        self.btn_video.setToolTip(desc)
+        self.btn_video.setAccessibleDescription(desc)
 
         preview_subs = subtitles[:self._PREVIEW_BLOCKS]
         preview_text = subtitles_to_srt(preview_subs)

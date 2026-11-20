@@ -29,6 +29,8 @@ computer**: no file is uploaded anywhere and, after the first setup, the app wor
 
 **Export**
 - SRT, WebVTT, TXT, ASS and the `.v2srt` project format (reopen and keep editing)
+- **Video with burned-in subtitles** (MP4): ready for reels and social, placed above the
+  on-screen buttons on vertical videos; hardware encoding on Mac
 - One-click copy for YouTube Studio, Vimeo, Premiere Pro / DaVinci Resolve
 
 **Also**
@@ -53,7 +55,7 @@ faster-whisper large-v3 (Italian, beam search, prompt + glossary)
 recover skipped speech ──► subtitle layout (lines, duration, reading speed)
    │
    ▼
-editor ──► export SRT / VTT / TXT / ASS
+editor ──► export SRT / VTT / TXT / ASS / MP4 with subtitles
 ```
 
 | Component | Technology |

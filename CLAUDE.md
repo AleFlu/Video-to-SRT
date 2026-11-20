@@ -27,6 +27,7 @@ app/                          # tutta l'applicazione
 │   ├── transcription_worker.py  # QThread che chiama engine
 │   ├── transcription_config.py  # configurazione .vsrtconfig (decodifica, glossario, VAD, leggibilità)
 │   ├── whisper_models.py     # catalogo modelli, modello consigliato (RAM/GPU), cache HF, download
+│   ├── burn_in.py            # video MP4 con i sottotitoli impressi (Qt disegna, ffmpeg overlay)
 │   ├── audio_player.py       # player/anteprima audio
 │   └── constants.py
 ├── ui/                       # interfaccia
@@ -155,6 +156,10 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   marca come parlato ma senza parole, **anche col filtro VAD spento** (il VAD serve solo a
   trovarli). Le parole stirate oltre `subtitle_layout.MAX_WORD_S` (3 s: "con" su 16 s) non
   coprono il parlato e, se il tratto viene recuperato, sono sostituite.
+- **Video con sottotitoli** (`core.burn_in`): i sottotitoli sono PNG trasparenti disegnati con Qt e
+  sovrapposti da ffmpeg (`overlay` + concat demuxer), perché l'ffmpeg di Homebrew non ha libass né
+  freetype (niente filtri `subtitles`/`drawtext`). Encoder: VideoToolbox al bitrate della sorgente,
+  poi libx264 `veryfast`, `h264_mf`, `mpeg4`: se uno fallisce si prova il successivo.
 - **Icona Dock macOS**: `setWindowIcon` non basta; `platform_support.set_dock_icon` usa pyobjc (Cocoa).
 
 ## Diagnostica
