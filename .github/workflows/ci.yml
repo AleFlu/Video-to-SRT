@@ -45,7 +45,7 @@ jobs:
 
       # faster-whisper non serve: i test non caricano il modello
       - name: Installa dipendenze
-        run: python -m pip install --upgrade pip PySide6 numpy soundfile pytest ruff
+        run: python -m pip install --upgrade pip PySide6 numpy soundfile pyspellchecker pytest ruff
 
       - name: Lint (ruff)
         run: ruff check app

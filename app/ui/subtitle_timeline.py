@@ -23,7 +23,8 @@ import logging
 from typing import List, Optional
 
 from PySide6.QtCore import (
-    Qt, Signal, QByteArray, QEvent, QModelIndex, QObject, QRect, QSettings, QSize, QTimer,
+    Qt, Signal, QByteArray, QEvent, QModelIndex, QObject, QRect, QRectF, QSettings, QSize,
+    QTimer,
 )
 from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QUndoStack, QShortcut,
@@ -45,8 +46,10 @@ from core.undo_commands import (
     SplitSubtitleCommand, MergeWithNextCommand, ReplaceAllCommand
 )
 from core.audio_player import AudioPlayer
+from core.spelling import SPELLER
 
 from ui.inspector_widget import InspectorWidget
+from ui.review_marks import hint_word, marks_for, paint_wavy, uncertain_fill, visible_spans
 from ui.find_replace_dialog import FindReplaceDialog
 from ui.transport_bar import RATE_STEPS
 from ui.widgets import focus_owns_key, forward_key, protect_extension_buttons
@@ -339,11 +342,12 @@ class _TableDelegate(QStyledItemDelegate):
     def _paint_text_cell(self, painter, inner, index, text, selected):
         model = index.model()
         word = None
+        sub = None
         try:
             sub = model.subtitle_at(index.row())
             cps = (len(sub.text.strip()) / sub.duration
                    if sub is not None and sub.duration > 0 and sub.text.strip() else None)
-            word = issue_word(model.row_issue_codes(index.row()), cps)
+            word = issue_word(model.row_issue_codes(index.row()), cps) or hint_word(sub)
         except AttributeError:   # modello diverso da SubtitleTableModel: nessuna parola
             pass
 
@@ -363,9 +367,20 @@ class _TableDelegate(QStyledItemDelegate):
         else:
             painter.setPen(theme.qcolor("dim" if selected else "label"))
             shown = "Testo vuoto"
-        elided = painter.fontMetrics().elidedText(shown, Qt.ElideRight, text_w)
+        fm = painter.fontMetrics()
+        elided = fm.elidedText(shown, Qt.ElideRight, text_w)
+        uncertain, wrong = marks_for(flat, sub) if flat.strip() else ([], ())
+        top = inner.y() + (inner.height() - fm.height()) / 2
+        for s, e in visible_spans(uncertain, elided, shown):
+            x0 = inner.x() + fm.horizontalAdvance(elided[:s])
+            painter.fillRect(QRectF(x0 - 1, top, fm.horizontalAdvance(elided[s:e]) + 2,
+                                    fm.height()), uncertain_fill())
         painter.drawText(QRect(inner.x(), inner.y(), text_w, inner.height()),
                          Qt.AlignLeft | Qt.AlignVCenter, elided)
+        for s, e in visible_spans(wrong, elided, shown):
+            x0 = inner.x() + fm.horizontalAdvance(elided[:s])
+            paint_wavy(painter, x0, x0 + fm.horizontalAdvance(elided[s:e]),
+                       top + fm.ascent() + 3, theme.qcolor("err"))
 
 
 class SubtitleTimeline(QWidget):
@@ -433,6 +448,8 @@ class SubtitleTimeline(QWidget):
         self.view.setAlternatingRowColors(False)
         self.view.setShowGrid(False)
         self.view.setItemDelegate(_TableDelegate(self.view))
+        # Parola aggiunta al dizionario: via le sottolineature dalla tabella
+        SPELLER.notifier.changed.connect(self._on_spelling_changed)
         self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.view.setEditTriggers(
@@ -958,6 +975,9 @@ class SubtitleTimeline(QWidget):
             self._playback_shortcuts[sc.objectName()] = (seq, method)
 
     # ---- API pubblica ----
+
+    def _on_spelling_changed(self) -> None:
+        self.view.viewport().update()
 
     def load_subtitles(self, subtitles: List[Subtitle]):
         self.undo_stack.clear()

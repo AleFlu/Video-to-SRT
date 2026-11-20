@@ -70,6 +70,19 @@ DIST_DIR        = REPO_ROOT / "dist"
 BUILD_DIR       = REPO_ROOT / "build"
 
 
+
+def italian_dictionary() -> Path:
+    """Dizionario italiano del controllo ortografico (``pyspellchecker``): solo quello,
+    non le altre 11 lingue (~7 MB)."""
+    import importlib.util
+    spec = importlib.util.find_spec("spellchecker")
+    if spec is None or not spec.origin:
+        raise SystemExit("❌  pyspellchecker non installato: pip install -r app/requirements.txt")
+    path = Path(spec.origin).parent / "resources" / "it.json.gz"
+    if not path.is_file():
+        raise SystemExit(f"❌  Dizionario italiano mancante: {path}")
+    return path
+
 def find_ffmpeg() -> str | None:
     """Cerca ffmpeg: prima quello statico in packaging/macos/intel/bin/ (solo x86_64), poi PATH/Homebrew."""
     if platform.machine() == "x86_64" and BUNDLED_FFMPEG.exists():
@@ -164,6 +177,9 @@ def build(sign_id: str | None = None, with_model: bool = False):
         "--add-data", f"{APP_DIR / 'ui'}{os.pathsep}ui",
         "--add-data", f"{APP_DIR / 'core'}{os.pathsep}core",
         "--add-data", f"{ASSETS_DIR}{os.pathsep}assets",
+        # Controllo ortografico: modulo e solo il dizionario italiano
+        "--hidden-import", "spellchecker",
+        "--add-data", f"{italian_dictionary()}{os.pathsep}spellchecker/resources",
         # Solo i moduli Qt che l'app usa (gli hook di PyInstaller aggiungono i plugin:
         # piattaforma, stili, multimedia, svg). Con --collect-all PySide6 entravano anche
         # WebEngine (~650 MB), QML/Quick, 3D, PDF... mai usati.

@@ -29,6 +29,7 @@ app/                          # tutta l'applicazione
 │   ├── transcription_config.py  # configurazione .vsrtconfig (decodifica, glossario, VAD, leggibilità)
 │   ├── whisper_models.py     # catalogo modelli, modello consigliato (RAM/GPU), cache HF, download
 │   ├── burn_in.py            # video MP4 con i sottotitoli impressi (Qt disegna, ffmpeg overlay)
+│   ├── spelling.py           # ortografia italiana (pyspellchecker) e parole incerte di Whisper
 │   ├── audio_player.py       # player/anteprima audio
 │   └── constants.py
 ├── ui/                       # interfaccia
@@ -38,6 +39,7 @@ app/                          # tutta l'applicazione
 │   ├── project_tab_bar.py, tab_bar.py
 │   ├── home_widget.py, progress_widget.py, result_widget.py, widgets.py, prefs.py
 │   ├── editor_tab.py, subtitle_timeline.py, inspector_widget.py, find_replace_dialog.py
+│   ├── review_marks.py       # disegno di parole incerte ed errori (tabella e Inspector)
 │   ├── preview_area.py, transport_bar.py, waveform_widget.py
 │   └── export_tab.py, export_panel.py, placeholder_widget.py
 └── tests/                    # pytest (UI offscreen)
@@ -163,6 +165,12 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   sovrapposti da ffmpeg (`overlay` + concat demuxer), perché l'ffmpeg di Homebrew non ha libass né
   freetype (niente filtri `subtitles`/`drawtext`). Encoder: VideoToolbox al bitrate della sorgente,
   poi libx264 `veryfast`, `h264_mf`, `mpeg4`: se uno fallisce si prova il successivo.
+- **Parole incerte e ortografia** (`core.spelling`): ogni sottotitolo trascritto porta
+  `asr_text` (testo di Whisper) e `uncertain` (parole con probabilità < `UNCERTAIN_PROB` 0,5).
+  Le incerte si evidenziano solo finché `text == asr_text` (nessuno stato da azzerare: l'undo
+  le riporta); dividi/unisci conservano `asr_text`. Il dizionario di pyspellchecker non ha
+  morfologia: le parole di `asr_text` sono considerate giuste, quindi l'ortografia segnala
+  soprattutto i refusi scritti a mano. Nel build entra solo `it.json.gz`.
 - **Build e firma macOS**: dopo ogni build `build_mac.py` controlla le librerie fuori dal bundle
   (`packaging/macos/check_bundle.py`) e lancia `--self-test` sull'app compilata (PATH senza
   Homebrew). Con l'hardened runtime anche gli eseguibili di supporto (ffmpeg) vanno firmati con

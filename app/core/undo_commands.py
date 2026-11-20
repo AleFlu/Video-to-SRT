@@ -141,10 +141,17 @@ class SplitSubtitleCommand(QUndoCommand):
         duration = orig.end - orig.start
         mid_time = orig.start + duration * ratio
 
+        # Testo non ancora modificato: ogni metà resta "di Whisper" (parole incerte
+        # evidenziate); altrimenti entrambe tengono la trascrizione intera (ortografia).
+        fresh = orig.unedited
         left = Subtitle(start=orig.start, end=mid_time, text=left_text,
-                        confidence=orig.confidence)
+                        confidence=orig.confidence,
+                        asr_text=left_text if fresh else orig.asr_text,
+                        uncertain=orig.uncertain)
         right = Subtitle(start=mid_time, end=orig.end, text=right_text,
-                         confidence=orig.confidence)
+                         confidence=orig.confidence,
+                         asr_text=right_text if fresh else orig.asr_text,
+                         uncertain=orig.uncertain)
 
         self.model.replace_subtitle(self.row, left)
         self.model.insert_subtitle(self.row + 1, right)
@@ -178,6 +185,9 @@ class MergeWithNextCommand(QUndoCommand):
             end=self._next.end,
             text=merged_text,
             confidence=min(self._current.confidence, self._next.confidence),
+            asr_text=" ".join(t for t in (self._current.asr_text, self._next.asr_text) if t),
+            uncertain=self._current.uncertain + tuple(
+                w for w in self._next.uncertain if w not in self._current.uncertain),
         )
         self.model.remove_subtitle(self.row + 1)
         self.model.replace_subtitle(self.row, merged)

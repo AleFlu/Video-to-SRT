@@ -128,6 +128,16 @@ def check_export_and_preprocess() -> str:
         return f"audio pre-elaborato; video esportato in {time.time() - t:.1f} s"
 
 
+def check_spelling() -> str:
+    from core.spelling import Speller
+    sp = Speller(user_words=[])
+    if not sp.available:
+        raise RuntimeError("dizionario italiano non caricato")
+    if not sp.is_known("cittadino") or sp.is_known("cittadinno"):
+        raise RuntimeError("il dizionario italiano non riconosce le parole")
+    return "dizionario italiano"
+
+
 def check_model() -> Optional[str]:
     """Solo informativo: il modello si scarica alla prima trascrizione."""
     import engine
@@ -144,6 +154,7 @@ CHECKS: List[Tuple[str, Callable[[], Optional[str]], bool]] = [
     ("VAD", check_vad, True),
     ("Qt", check_qt, True),
     ("esportazione", check_export_and_preprocess, True),
+    ("ortografia", check_spelling, True),
     ("modello", check_model, False),
 ]
 

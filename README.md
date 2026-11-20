@@ -24,6 +24,7 @@ computer**: no file is uploaded anywhere and, after the first setup, the app wor
 - Editable table and an Inspector with millisecond timing; unlimited undo/redo
 - Split, merge, delete, find and replace
 - Live checks: overlaps, subtitles that are too fast, too short or too long
+- Review aids: words Whisper was unsure about are highlighted (until you edit the line), and an Italian spell checker underlines typos, with suggestions and "Aggiungi al dizionario" on right-click
 - Video preview with subtitles on top, and an interactive waveform: click to seek, scroll wheel or two fingers to pan, ⌘ + wheel or pinch to zoom
 - Editor-style shortcuts (Space, J/K/L, arrows); everything is keyboard-reachable with a visible focus ring
 

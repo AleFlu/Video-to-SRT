@@ -7,7 +7,12 @@ In Step 2 diventerà la base del QAbstractTableModel per l'editor.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
+
+
+def is_unedited(text: str, asr_text: str) -> bool:
+    """True se il testo è ancora quello della trascrizione (a meno degli spazi)."""
+    return bool(asr_text) and " ".join(text.split()) == " ".join(asr_text.split())
 
 
 @dataclass
@@ -18,6 +23,16 @@ class Subtitle:
     text: str
     # Metadati opzionali dal motore di trascrizione
     confidence: float = 1.0
+    # Testo scritto da Whisper e sue parole incerte (``core.spelling``): le parole incerte
+    # si evidenziano finché ``text`` è ancora ``asr_text``; le parole di ``asr_text`` non
+    # sono segnalate dal controllo ortografico. Vuoti per sottotitoli importati.
+    asr_text: str = ""
+    uncertain: Tuple[str, ...] = ()
+
+    @property
+    def unedited(self) -> bool:
+        """True se il testo è ancora quello scritto da Whisper."""
+        return is_unedited(self.text, self.asr_text)
 
     @property
     def duration(self) -> float:
@@ -27,6 +42,10 @@ class Subtitle:
         d = {"start": self.start, "end": self.end, "text": self.text}
         if self.confidence != 1.0:
             d["confidence"] = self.confidence
+        if self.asr_text:
+            d["asr_text"] = self.asr_text
+        if self.uncertain:
+            d["uncertain"] = list(self.uncertain)
         return d
 
     @classmethod
@@ -46,7 +65,13 @@ class Subtitle:
             confidence = float(d.get("confidence", 1.0))
         except (TypeError, ValueError):
             confidence = 1.0
-        return cls(start=start, end=end, text=text, confidence=confidence)
+        raw_asr = d.get("asr_text")
+        asr_text = raw_asr.strip() if isinstance(raw_asr, str) else ""
+        raw_unc = d.get("uncertain")
+        uncertain = (tuple(str(w) for w in raw_unc if isinstance(w, str))
+                     if isinstance(raw_unc, (list, tuple)) else ())
+        return cls(start=start, end=end, text=text, confidence=confidence,
+                   asr_text=asr_text, uncertain=uncertain)
 
 
 @dataclass

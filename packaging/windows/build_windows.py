@@ -35,6 +35,19 @@ dist_dir = repo_root / "dist"
 build_dir = repo_root / "build"
 
 
+
+def italian_dictionary() -> Path:
+    """Dizionario italiano del controllo ortografico (``pyspellchecker``): solo quello,
+    non le altre 11 lingue (~7 MB)."""
+    import importlib.util
+    spec = importlib.util.find_spec("spellchecker")
+    if spec is None or not spec.origin:
+        raise SystemExit("❌  pyspellchecker non installato: pip install -r app/requirements.txt")
+    path = Path(spec.origin).parent / "resources" / "it.json.gz"
+    if not path.is_file():
+        raise SystemExit(f"❌  Dizionario italiano mancante: {path}")
+    return path
+
 def find_ffmpeg() -> str | None:
     """Cerca ffmpeg.exe: prima accanto a questo script (packaging/windows/, un build statico
     scelto apposta), poi nel PATH (attenzione ai "shim" di Chocolatey/Scoop: sono piccoli
@@ -106,6 +119,9 @@ def build(onefile: bool = False, clean: bool = False):
         "--runtime-hook", str(app_dir / "pyi_rth_threads.py"),
         # Assets
         "--add-data", f"{assets_dir}{os.pathsep}assets",
+        # Controllo ortografico: modulo e solo il dizionario italiano
+        "--hidden-import", "spellchecker",
+        "--add-data", f"{italian_dictionary()}{os.pathsep}spellchecker/resources",
     ]
 
     if ffmpeg_path:

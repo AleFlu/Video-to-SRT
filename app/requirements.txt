@@ -9,6 +9,7 @@ faster-whisper>=1.0.0
 onnxruntime>=1.17.0
 soundfile>=0.12.1    # lettura WAV per waveform (installato da faster-whisper come dep)
 numpy>=1.24.0        # pre-calcolo peak waveform (installato da faster-whisper come dep)
+pyspellchecker>=0.8.0   # controllo ortografico italiano nell'editor
 
 # macOS: icona Dock a livello di processo (sostituisce icona Python in modalità sviluppo)
 pyobjc-framework-Cocoa; sys_platform == "darwin"

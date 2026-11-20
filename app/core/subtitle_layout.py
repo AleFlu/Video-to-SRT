@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -66,6 +67,30 @@ class LayoutRules:
     end_pad_s: float = 0.2          # coda dopo l'ultima parola quando nient'altro serve
     keep_low_confidence_words: bool = True
     min_word_prob: float = 0.35     # usata solo se keep_low_confidence_words è False
+
+
+# Parole sotto questa probabilità sono "incerte" e l'editor le evidenzia (non si scartano).
+# Misurato su un reel di 88 s (large-v3): 6 parole su 193, proprio quelle su cui
+# large-v3 e large-v3-turbo non concordano ("e"/"è", "no?").
+UNCERTAIN_PROB = 0.5
+_LETTERS_RE = re.compile(r"[^\W\d_]+")
+
+
+def fold_word(word: str) -> str:
+    """Minuscola senza accenti: "E'" di Whisper diventa "È" con la tipografia."""
+    nfd = unicodedata.normalize("NFD", word.lower())
+    return "".join(c for c in nfd if not unicodedata.combining(c))
+
+
+def uncertain_tokens(words: Iterable[str]) -> Tuple[str, ...]:
+    """Parole incerte di Whisper → forme confrontabili (minuscole, senza accenti, uniche)."""
+    out: List[str] = []
+    for w in words:
+        for m in _LETTERS_RE.finditer(str(w)):
+            tok = fold_word(m.group())
+            if tok not in out:
+                out.append(tok)
+    return tuple(out)
 
 
 @dataclass
@@ -809,12 +834,17 @@ def segment(words: Sequence[Word], boundaries: Set[int],
                 continue
             if prev_word is not None and _ends_sentence(prev_word.text):
                 text = _capitalize_first(text)
-            subs.append({
+            sub = {
                 "start": part[0].start,
                 "end": max(w.end for w in part),
                 "text": text,
                 "confidence": min(w.probability for w in part),
-            })
+            }
+            uncertain = uncertain_tokens(
+                w.text for w in part if not w.synthetic and w.probability < UNCERTAIN_PROB)
+            if uncertain:
+                sub["uncertain"] = uncertain
+            subs.append(sub)
             prev_word = part[-1]
     return subs
 

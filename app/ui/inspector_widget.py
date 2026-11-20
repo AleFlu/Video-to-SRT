@@ -14,16 +14,39 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QEvent
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFontMetrics, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QDoubleSpinBox,
     QPlainTextEdit, QFrame, QPushButton, QScrollArea
 )
 
+from core.spelling import SPELLER
 from core.subtitle_table_model import SubtitleTableModel
 from core.transcription_config import active_readability
 from ui import icons, theme
+from ui.review_marks import ReviewHighlighter, marks_for
 import platform_support
+
+
+
+def _quote(words) -> str:
+    return ", ".join(f"«{w}»" for w in words)
+
+
+def review_notes(sub) -> list:
+    """Righe della Diagnostica per parole incerte ed errori di ortografia."""
+    if sub is None:
+        return []
+    uncertain, wrong = marks_for(sub.text, sub)
+    notes = []
+    if wrong:
+        words = list(dict.fromkeys(sub.text[s:e] for s, e in wrong))
+        notes.append((f"Ortografia da controllare: {_quote(words)}", "warn"))
+    if uncertain:
+        words = list(dict.fromkeys(sub.text[s:e] for s, e in uncertain))
+        notes.append((f"Parole incerte, da riascoltare: {_quote(words)}", "dim"))
+    return notes
+
 
 # Larghezza della colonna delle etichette Inizio / Fine / Durata (mockup)
 _LABEL_COL = 52
@@ -170,6 +193,11 @@ class InspectorWidget(QWidget):
         self.text_edit.textChanged.connect(self._on_text_changed_live)
         # Uscendo dal campo il testo viene confermato (mai perso in silenzio)
         self.text_edit.installEventFilter(self)
+        # Parole incerte evidenziate, errori di ortografia sottolineati; tasto destro su
+        # una parola sottolineata: correzioni e "Aggiungi al dizionario"
+        self._highlighter = ReviewHighlighter(self.text_edit.document())
+        self.text_edit.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.text_edit.customContextMenuRequested.connect(self._on_text_menu)
         text_box.addWidget(self.text_edit)
 
         # Stats testo
@@ -215,6 +243,7 @@ class InspectorWidget(QWidget):
         self._apply_palette()
         # Metodo bound (non lambda): si auto-disconnette quando il widget viene distrutto
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
+        SPELLER.notifier.changed.connect(self._update_issues)
 
     def focus_chain(self) -> list:
         """Campi nell'ordine di Tab: Inizio → Fine → spostamenti → Testo."""
@@ -298,6 +327,7 @@ class InspectorWidget(QWidget):
             self._updating = True
             self.start_spin.setValue(0)
             self.end_spin.setValue(0)
+            self._highlighter.set_subtitle(None)
             self.text_edit.setPlainText("")
             self._updating = False
             self.dur_label.setText("—")
@@ -320,6 +350,7 @@ class InspectorWidget(QWidget):
         self._updating = True
         self.start_spin.setValue(sub.start)
         self.end_spin.setValue(sub.end)
+        self._highlighter.set_subtitle(sub)
         # Evita di spaccare il cursore se l'utente sta scrivendo
         if self.text_edit.toPlainText() != sub.text:
             cur_pos = self.text_edit.textCursor().position()
@@ -378,17 +409,58 @@ class InspectorWidget(QWidget):
             return
         self._clear_issue_rows()
         issues = self._model.row_issues(self._current_row)
-        if not issues:
+        sev = self._model.row_severity(self._current_row)
+        rows = [(i, "err" if sev == "error" else "warn") for i in issues]
+        rows += review_notes(self._model.subtitle_at(self._current_row))
+        if not rows:
             self.issues_label.setText("Nessun problema rilevato")
             self.issues_label.setStyleSheet(f"color: {theme.c('dim')};")
             self.issues_label.setVisible(True)
         else:
-            self.issues_label.setText("\n".join(issues))
+            self.issues_label.setText("\n".join(text for text, _ in rows))
             self.issues_label.setVisible(False)
-            sev = self._model.row_severity(self._current_row)
-            token = "err" if sev == "error" else "warn"
-            for i in issues:
-                self._add_issue_row(i, token)
+            for text, token in rows:
+                self._add_issue_row(text, token)
+
+    # ---- Ortografia: menu del tasto destro ----
+    def _misspelled_at(self, pos: int):
+        """(inizio, fine) della parola sottolineata che contiene ``pos``, o None."""
+        for s, e in self._highlighter.current_spans()[1]:
+            if s <= pos <= e:
+                return s, e
+        return None
+
+    def _on_text_menu(self, point) -> None:
+        menu = self.text_edit.createStandardContextMenu(point)
+        span = self._misspelled_at(self.text_edit.cursorForPosition(point).position())
+        if span is not None:
+            word = self.text_edit.toPlainText()[span[0]:span[1]]
+            first = menu.actions()[0] if menu.actions() else None
+            fixes = SPELLER.suggestions(word)
+            for fix in fixes:
+                act = menu.addAction(fix)
+                act.triggered.connect(
+                    lambda _=False, f=fix, sp=span: self._replace_word(sp, f))
+                menu.insertAction(first, act)
+            if not fixes:
+                none = menu.addAction("Nessun suggerimento")
+                none.setEnabled(False)
+                menu.insertAction(first, none)
+            add = menu.addAction(f"Aggiungi «{word}» al dizionario")
+            add.triggered.connect(lambda _=False, w=word: SPELLER.add_user_word(w))
+            menu.insertAction(first, add)
+            if first is not None:
+                menu.insertSeparator(first)
+        menu.exec(self.text_edit.mapToGlobal(point))
+        menu.deleteLater()
+
+    def _replace_word(self, span, word: str) -> None:
+        """Sostituisce la parola sbagliata e conferma il testo (un passo di annullamento)."""
+        cur = self.text_edit.textCursor()
+        cur.setPosition(span[0])
+        cur.setPosition(span[1], QTextCursor.KeepAnchor)
+        cur.insertText(word)
+        self._commit_text()
 
     # ---- Event handlers ----
     def _on_start_changed(self):

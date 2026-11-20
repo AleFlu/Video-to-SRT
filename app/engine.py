@@ -535,7 +535,8 @@ def preload_model(model_size: str = DEFAULT_MODEL,
 def _build_subtitles(raw_segments: Sequence[Any], rules: LayoutRules,
                      audio_end: Optional[float], italian: bool,
                      light_punct: bool = False) -> List[Dict]:
-    """Segmenti Whisper → sottotitoli definitivi ``{"start", "end", "text", "confidence"}``.
+    """Segmenti Whisper → sottotitoli definitivi ``{"start", "end", "text", "confidence",
+    "uncertain", "asr_text"}``.
 
     ``core.subtitle_layout.layout`` decide divisione, testo e tempi (regole Netflix
     italiane); qui si aggiunge solo la correzione del code-switching se la lingua
@@ -549,6 +550,7 @@ def _build_subtitles(raw_segments: Sequence[Any], rules: LayoutRules,
             sub["text"] = _postprocess_codeswitching(sub["text"])
         if light_punct:
             sub["text"] = light_punctuation(sub["text"])
+        sub["asr_text"] = sub["text"]    # testo di Whisper: base di parole incerte e ortografia
     return subs
 
 
