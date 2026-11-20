@@ -52,3 +52,5 @@ packaging/macos/intel/bin/
 
 # Cache tool
 .ruff_cache/
+# ffmpeg statico per la build Windows (scaricato dalla CI o a mano, non ridistribuito)
+packaging/windows/ffmpeg.exe

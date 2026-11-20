@@ -361,6 +361,11 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()
 
+    # Autotest dell'app (anche compilata): niente finestre, esito nel codice di uscita
+    if "--self-test" in sys.argv:
+        import self_test
+        sys.exit(self_test.main(sys.argv))
+
     log_path = platform_support.configure_logging()
     logger.info("Avvio Video → SRT (log: %s)", log_path)
 

@@ -48,7 +48,13 @@ python packaging\windows\build_windows.py
 ```
 
 Output: `dist\VideoSRT\VideoSRT.exe`. The build uses `app\assets\app.ico` if present and
-bundles `ffmpeg.exe` if it is in `PATH` or in `packaging\windows\`.
+bundles `ffmpeg.exe` from `packaging\windows\` (preferred: put a static build there, e.g. the
+"essentials" build from gyan.dev) or from `PATH` (not a Chocolatey/Scoop shim).
+
+After the build the app runs its self-test (`VideoSRT.exe --self-test --self-test-report
+dist\autotest.txt`: FFmpeg, encoders, VAD, Qt, a small video export); the build fails if it
+does not pass (`--skip-checks` to skip). The **Build app** GitHub workflow builds and checks it
+on a clean Windows runner.
 
 Single-file build (slower to start):
 

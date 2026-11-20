@@ -19,7 +19,7 @@ import warnings
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QPainter, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy,
@@ -103,6 +103,56 @@ def phase_for_status(msg: str) -> Optional[int]:
             or "allineamento" in m or "trascrizione" in m):
         return 2
     return None
+
+
+# ── Tempo rimanente ──────────────────────────────────────────────────────────
+# Il motore riporta l'avanzamento così: 0–15 % download, audio e modello; 15–90 % la
+# trascrizione vera (in proporzione all'audio già trascritto); poi recupero e segmentazione.
+_ETA_START = 0.15
+_ETA_END = 0.90
+_ETA_MIN_SPAN = 0.05      # avanzamento minimo prima di stimare
+_ETA_MIN_S = 5.0          # e tempo minimo
+
+
+def remaining_text(seconds: float) -> str:
+    """Testo del tempo rimanente ("Circa 3 min rimanenti", "Meno di un minuto"…)."""
+    if seconds < 10:
+        return "Quasi finito"
+    if seconds < 45:
+        return "Meno di un minuto"
+    if seconds < 90:
+        return "Circa un minuto rimanente"
+    return f"Circa {round(seconds / 60)} min rimanenti"
+
+
+class RemainingEstimate:
+    """Stima del tempo rimanente dalla velocità della trascrizione vera e propria."""
+
+    def __init__(self):
+        self._start: Optional[tuple] = None     # (istante, avanzamento) a inizio trascrizione
+        self._estimate: Optional[tuple] = None  # (istante, secondi rimanenti)
+
+    def update(self, pct: float, now: float) -> Optional[float]:
+        """Nuovo avanzamento; restituisce i secondi rimanenti o None se è presto."""
+        if pct < _ETA_START:
+            return None
+        if self._start is None:
+            self._start = (now, pct)
+            return None
+        t0, p0 = self._start
+        done, elapsed = pct - p0, now - t0
+        if done < _ETA_MIN_SPAN or elapsed < _ETA_MIN_S:
+            return None
+        left = max(0.0, (_ETA_END - min(pct, _ETA_END)) * elapsed / done)
+        self._estimate = (now, left)
+        return left
+
+    def remaining(self, now: float) -> Optional[float]:
+        """Ultima stima, scalata del tempo passato da allora (mai negativa)."""
+        if self._estimate is None:
+            return None
+        t, left = self._estimate
+        return max(0.0, left - (now - t))
 
 
 def _clock() -> str:
@@ -284,6 +334,13 @@ class ProgressWidget(QWidget):
         self.status_lbl = QLabel("")
         self.status_lbl.setWordWrap(True)
         title_col.addWidget(self.status_lbl)
+        self.eta_lbl = QLabel("")
+        self.eta_lbl.setObjectName("etaLabel")
+        title_col.addWidget(self.eta_lbl)
+        self._eta = RemainingEstimate()
+        self._eta_timer = QTimer(self)          # conto alla rovescia tra un segmento e l'altro
+        self._eta_timer.setInterval(1000)
+        self._eta_timer.timeout.connect(self._show_eta)
         pct_row.addLayout(title_col, 1)
         root.addLayout(pct_row)
         root.addSpacing(22)
@@ -485,6 +542,7 @@ class ProgressWidget(QWidget):
         self._set_pct(0)
         self._reset_phases()
         self.status_lbl.setText("")
+        self._reset_eta()
         self._stop_kbd.setVisible(True)
         self.stop_btn.setEnabled(True)
         self.stop_btn.setText("Interrompi")
@@ -571,6 +629,19 @@ class ProgressWidget(QWidget):
     def _on_progress(self, pct: float):
         self.progress.setValue(int(pct * 1000))
         self._set_pct(int(pct * 100))
+        if self._eta.update(pct, time.monotonic()) is not None:
+            self._show_eta()
+            if not self._eta_timer.isActive():
+                self._eta_timer.start()
+
+    def _show_eta(self):
+        left = self._eta.remaining(time.monotonic())
+        self.eta_lbl.setText("" if left is None else remaining_text(left))
+
+    def _reset_eta(self):
+        self._eta = RemainingEstimate()
+        self._eta_timer.stop()
+        self.eta_lbl.setText("")
 
     def _on_finished(self, segments: list):
         self.progress.setValue(1000)
@@ -579,6 +650,7 @@ class ProgressWidget(QWidget):
         n = len(segments)
         self.title_lbl.setText(f"Completato — {n} sottotitoli trovati")
         self.status_lbl.setText("Trascrizione completata")
+        self._reset_eta()
         self._append_log(f"--- Completato: {n} sottotitoli ---")
         self.stop_btn.setEnabled(False)
         self.transcription_done.emit(segments, self._source_path)
@@ -587,6 +659,7 @@ class ProgressWidget(QWidget):
         self._freeze_phases()
         self.title_lbl.setText("Errore trascrizione")
         self.status_lbl.setText(f"Errore: {err}")
+        self._reset_eta()
         self._append_log(f"ERRORE: {err}")
         self._stop_kbd.setVisible(False)
         self.stop_btn.setText("Torna alla Home")
@@ -603,6 +676,7 @@ class ProgressWidget(QWidget):
         self._set_pct(0)
         self.title_lbl.setText("Trascrizione annullata")
         self.status_lbl.setText("Annullata")
+        self._reset_eta()
         self._append_log("--- Annullata ---")
         self.transcription_cancelled.emit()
 
@@ -662,6 +736,9 @@ class ProgressWidget(QWidget):
         self.status_lbl.setStyleSheet(
             f"font-size: 13px; color: {c('dim')}; background: transparent;"
         )
+        self.eta_lbl.setStyleSheet(
+            f"font-size: 13px; color: {c('dim')}; background: transparent;"
+            f" font-family: {theme.FONT_MONO};")
         self.progress.setStyleSheet(
             f"QProgressBar {{ background: {c('line')}; border: none; border-radius: 0; }}"
             f"QProgressBar::chunk {{ background: {c('acc')}; border-radius: 0; }}"

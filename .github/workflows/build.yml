@@ -1,0 +1,64 @@
+name: Build app
+
+# Compila l'app per macOS (Apple Silicon) e Windows e ne lancia l'autotest
+# (`--self-test`: ffmpeg, encoder, VAD, Qt, piccola esportazione video). Su macOS controlla
+# anche che non ci siano librerie caricate da fuori dal bundle. Gli artefatti si scaricano
+# dalla pagina dell'esecuzione. Manuale, sui tag v* e una volta a settimana.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "0 5 * * 1"
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ffmpeg
+        run: brew install ffmpeg
+      - name: Ambiente
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r app/requirements.txt pyinstaller
+      - name: Build, controllo librerie e autotest
+        run: .venv/bin/python packaging/macos/build_mac.py --clean --no-dmg
+      - name: Pacchetto
+        run: ditto -c -k --keepParent dist/Video-to-SRT.app Video-to-SRT-macOS-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Video-to-SRT-macOS-arm64
+          path: Video-to-SRT-macOS-arm64.zip
+          retention-days: 14
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # ffmpeg statico (build "essentials" di gyan.dev): un solo .exe da includere
+      - name: ffmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp
+          $exe = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $exe.FullName packaging/windows/ffmpeg.exe
+      - name: Dipendenze
+        run: python -m pip install --upgrade pip && python -m pip install -r app/requirements.txt pyinstaller
+      - name: Build e autotest
+        run: python packaging/windows/build_windows.py --clean
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Video-to-SRT-Windows
+          path: dist/VideoSRT
+          retention-days: 14

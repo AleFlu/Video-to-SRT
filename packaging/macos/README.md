@@ -67,8 +67,48 @@ bash packaging/macos/intel/build.sh
 
 The script checks the venv and FFmpeg, and stops with an explanation if something is missing.
 
+## Checks after every build
+
+The build stops with an error if either check fails (`--skip-checks` to skip them):
+
+1. **Libraries outside the bundle** (`check_bundle.py`): every Mach-O file is read with
+   `otool -L`; a reference to `/opt/homebrew` or `/usr/local` means the app would not start on
+   a Mac without Homebrew. Run it alone with `python3 packaging/macos/check_bundle.py`.
+2. **Self-test of the built app**: `Video-to-SRT.app/Contents/MacOS/Video-to-SRT --self-test`,
+   run with a `PATH` without Homebrew. It checks the bundled FFmpeg (filters and encoders),
+   CTranslate2, the Silero VAD, Qt Multimedia/SVG and the fonts, and exports a small video with
+   burned-in subtitles. Exit code 0 = passed. Any copy of the app can be checked the same way.
+
+The **Build app** GitHub workflow (`.github/workflows/build.yml`: manual, on `v*` tags and
+weekly) builds macOS (Apple Silicon) and Windows on clean runners, runs the same checks and
+uploads the apps as artifacts.
+
+## Signing and notarization
+
+Without a Developer ID the app is only ad-hoc signed: downloaded on another Mac, Gatekeeper
+blocks it ("damaged" / "unidentified developer"; workaround: right-click → Open, or
+`xattr -dr com.apple.quarantine Video-to-SRT.app`). For a clean install you need an
+**Apple Developer Program** membership and a *Developer ID Application* certificate in the
+keychain (`security find-identity -v -p codesigning` lists it). Then, once:
+
+```bash
+# Apple ID, team ID and an app-specific password (appleid.apple.com): saved in the keychain
+xcrun notarytool store-credentials videosrt-notary
+```
+
+and every release:
+
+```bash
+bash packaging/macos/apple-silicon/build.sh \
+    --sign "Developer ID Application: Name (TEAMID)" --notarize videosrt-notary
+```
+
+The script signs every library and executable inside the app, then the bundle, with hardened
+runtime, timestamp and `entitlements.plist` (Python and CTranslate2 need executable memory and
+the bundled libraries); then it runs the self-test on the **signed** app, signs the DMG, sends
+it to Apple, and staples the ticket to the DMG and the app. `--sign -` signs ad-hoc the same
+way, to check locally that the hardened-runtime app still starts.
+
 ## Notes
 
 - Without `app/assets/app.icns` the build uses the default icon.
-- Signing and notarization are optional (`--sign`); unsigned apps trigger the Gatekeeper warning
-  on first launch (right-click → Open).

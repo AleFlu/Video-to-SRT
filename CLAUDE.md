@@ -13,7 +13,8 @@ Lingua: UI, docstring e commenti in **italiano**; nomi di variabili/funzioni/cla
 
 ```
 app/                          # tutta l'applicazione
-├── main.py                   # entry point, splash, avvio robusto
+├── main.py                   # entry point, splash, avvio robusto (--self-test)
+├── self_test.py              # autotest dell'app compilata (ffmpeg, VAD, Qt, export)
 ├── engine.py                 # pipeline di trascrizione (ffmpeg, VAD, faster-whisper)
 ├── platform_support.py       # UNICO punto dipendente dal sistema operativo
 ├── pyi_rth_threads.py        # runtime hook PyInstaller (thread OMP/CT2)
@@ -48,6 +49,7 @@ docs/                         # specifiche, piani, riferimenti di design, media 
 pyproject.toml                # solo config pytest + ruff (non è un pacchetto installabile)
 requirements-dev.txt          # pytest, ruff
 .github/workflows/ci.yml      # lint + test su macOS, Windows, Linux
+.github/workflows/build.yml   # build macOS/Windows + autotest (manuale, tag, settimanale)
 ```
 
 ## Regole di architettura
@@ -160,6 +162,10 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   sovrapposti da ffmpeg (`overlay` + concat demuxer), perché l'ffmpeg di Homebrew non ha libass né
   freetype (niente filtri `subtitles`/`drawtext`). Encoder: VideoToolbox al bitrate della sorgente,
   poi libx264 `veryfast`, `h264_mf`, `mpeg4`: se uno fallisce si prova il successivo.
+- **Build e firma macOS**: dopo ogni build `build_mac.py` controlla le librerie fuori dal bundle
+  (`packaging/macos/check_bundle.py`) e lancia `--self-test` sull'app compilata (PATH senza
+  Homebrew). Con l'hardened runtime anche gli eseguibili di supporto (ffmpeg) vanno firmati con
+  `entitlements.plist`, altrimenti non caricano le librerie del bundle.
 - **Icona Dock macOS**: `setWindowIcon` non basta; `platform_support.set_dock_icon` usa pyobjc (Cocoa).
 
 ## Diagnostica

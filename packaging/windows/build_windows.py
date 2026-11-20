@@ -2,7 +2,7 @@
 build_windows.py — Build PyInstaller per Windows (.exe + cartella dist/).
 
 Uso (da qualsiasi cartella; i percorsi sono risolti dalla posizione dello script):
-    python packaging\\windows\\build_windows.py [--onefile] [--clean]
+    python packaging\\windows\\build_windows.py [--onefile] [--clean] [--skip-checks]
 
 Output (nella root del repository):
     dist/VideoSRT/VideoSRT.exe         (default: cartella)
@@ -36,18 +36,18 @@ build_dir = repo_root / "build"
 
 
 def find_ffmpeg() -> str | None:
-    """Cerca ffmpeg.exe sul sistema."""
-    # Cerca nel PATH
+    """Cerca ffmpeg.exe: prima accanto a questo script (packaging/windows/, un build statico
+    scelto apposta), poi nel PATH (attenzione ai "shim" di Chocolatey/Scoop: sono piccoli
+    lanciatori, non ffmpeg vero, e nell'app non funzionerebbero)."""
+    local = script_dir / "ffmpeg.exe"
+    if local.exists():
+        print(f"[build] ffmpeg locale trovato: {local}")
+        return str(local)
     for path_dir in os.environ.get("PATH", "").split(os.pathsep):
         candidate = Path(path_dir) / "ffmpeg.exe"
         if candidate.exists():
             print(f"[build] ffmpeg trovato: {candidate}")
             return str(candidate)
-    # Cerca accanto a questo script (packaging/windows/)
-    local = script_dir / "ffmpeg.exe"
-    if local.exists():
-        print(f"[build] ffmpeg locale trovato: {local}")
-        return str(local)
     print("[build] AVVISO: ffmpeg.exe non trovato. "
           "L'app richiederà ffmpeg installato separatamente dall'utente.")
     return None
@@ -135,11 +135,32 @@ def build(onefile: bool = False, clean: bool = False):
         print(f"[build] Eseguibile: {exe}")
     else:
         exe_dir = dist_dir / "VideoSRT"
+        exe = exe_dir / "VideoSRT.exe"
         print(f"[build] Cartella output: {exe_dir}")
-        print(f"[build] Eseguibile:      {exe_dir / 'VideoSRT.exe'}")
+        print(f"[build] Eseguibile:      {exe}")
+    return exe
+
+
+def self_test(exe: Path) -> None:
+    """Autotest dell'app compilata (ffmpeg, encoder, VAD, Qt, piccola esportazione video).
+
+    L'eseguibile non ha console: l'esito arriva da un file di report e dal codice di uscita.
+    """
+    report = dist_dir / "autotest.txt"
+    report.unlink(missing_ok=True)
+    print("[build] autotest dell'app compilata...")
+    result = subprocess.run([str(exe), "--self-test", "--self-test-report", str(report)],
+                            timeout=600)
+    if report.exists():
+        print(report.read_text(encoding="utf-8"))
+    if result.returncode != 0 or not report.exists():
+        print(f"[build] ERRORE: autotest non superato (codice {result.returncode})")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     onefile = "--onefile" in sys.argv
     clean   = "--clean" in sys.argv
-    build(onefile=onefile, clean=clean)
+    exe = build(onefile=onefile, clean=clean)
+    if "--skip-checks" not in sys.argv:
+        self_test(exe)

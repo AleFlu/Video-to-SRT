@@ -63,7 +63,7 @@ ENTRY_POINT     = APP_DIR / "main.py"
 ASSETS_DIR      = APP_DIR / "assets"
 ICON_FILE       = ASSETS_DIR / "app.icns"
 RUNTIME_HOOK    = APP_DIR / "pyi_rth_threads.py"
-ENTITLEMENTS    = ASSETS_DIR / "entitlements.plist"      # opzionale
+ENTITLEMENTS    = HERE / "entitlements.plist"            # hardened runtime
 MODEL_SRC_DIR   = REPO_ROOT / "_build_model"             # modello scaricato (ignorato da git)
 BUNDLED_FFMPEG  = HERE / "intel" / "bin" / "ffmpeg"                # ffmpeg statico x86_64 (build Intel)
 DIST_DIR        = REPO_ROOT / "dist"
@@ -270,30 +270,94 @@ def _patch_info_plist(app_path: Path):
     print("✅  Info.plist aggiornato.")
 
 
+def _macho_files(app_path: Path) -> list[Path]:
+    """File Mach-O dentro l'app (librerie, plugin, eseguibili), escluso l'eseguibile
+    principale: vanno firmati uno per uno, dall'interno verso l'esterno."""
+    sys.path.insert(0, str(HERE))
+    from check_bundle import is_macho
+    main_exe = app_path / "Contents" / "MacOS" / APP_NAME
+    files = [f for f in app_path.rglob("*")
+             if f.is_file() and not f.is_symlink() and f != main_exe and is_macho(f)]
+    # prima i più annidati
+    return sorted(files, key=lambda f: len(f.parts), reverse=True)
+
+
 def _sign(app_path: Path, sign_id: str):
-    """Firma l'app con codesign (richiede Developer ID)."""
+    """Firma l'app per la distribuzione: ogni libreria, poi il bundle, con hardened
+    runtime, marca temporale ed entitlements (requisiti della notarizzazione Apple).
+
+    ``sign_id`` = "Developer ID Application: Nome (TEAMID)"; "-" = firma ad-hoc (solo per
+    provare in locale che l'app firmata così parta ancora: Apple non la accetta).
+    """
     if not shutil.which("codesign"):
-        print("⚠️   codesign non trovato — firma saltata.")
-        return
-
-    entitlements = ENTITLEMENTS
-    sign_cmd = [
-        "codesign", "--deep", "--force", "--verbose",
-        "--sign", sign_id,
-    ]
-    if entitlements.exists():
-        sign_cmd += ["--entitlements", str(entitlements)]
-    sign_cmd.append(str(app_path))
-
-    run(sign_cmd)
+        sys.exit("❌  codesign non trovato (installa gli strumenti da riga di comando di Xcode).")
+    base = ["codesign", "--force", "--options", "runtime", "--sign", sign_id]
+    if sign_id != "-":
+        base.insert(2, "--timestamp")
+    files = _macho_files(app_path)
+    print(f"🔏  Firma di {len(files)} librerie ed eseguibili...")
+    for f in files:
+        # Gli eseguibili di supporto (ffmpeg) girano in un processo loro: senza gli
+        # entitlements l'hardened runtime gli vieta di caricare le librerie del bundle.
+        extra = [] if f.suffix in (".dylib", ".so") or not os.access(f, os.X_OK) else [
+            "--entitlements", str(ENTITLEMENTS)]
+        subprocess.run(base + extra + [str(f)], check=True, capture_output=True)
+    run(base + ["--entitlements", str(ENTITLEMENTS), str(app_path)])
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(app_path)])
     print(f"✅  App firmata con: {sign_id}")
+
+
+def notarize(path: Path, profile: str):
+    """Invia ``path`` (.app o .dmg) alla notarizzazione Apple e ci "pinza" il risultato.
+
+    ``profile`` è un profilo del portachiavi creato una volta sola dall'utente con
+    ``xcrun notarytool store-credentials <profilo>`` (Apple ID, team e password per app):
+    le credenziali non passano mai da questo script.
+    """
+    target = path
+    if path.suffix == ".app":
+        target = path.with_suffix(".zip")
+        if target.exists():
+            target.unlink()
+        run(["ditto", "-c", "-k", "--keepParent", str(path), str(target)])
+    print(f"📨  Notarizzazione di {target.name} (alcuni minuti)...")
+    run(["xcrun", "notarytool", "submit", str(target), "--keychain-profile", profile,
+         "--wait"])
+    run(["xcrun", "stapler", "staple", str(path)])
+    if target != path:
+        target.unlink()
+    print(f"✅  Notarizzata: {path.name}")
+
+
+def verify(app_path: Path) -> None:
+    """Controlli dopo la build: nessuna libreria fuori dal bundle e autotest dell'app
+    compilata (ffmpeg, encoder, VAD, Qt, una piccola esportazione video)."""
+    sys.path.insert(0, str(HERE))
+    from check_bundle import scan
+    problems = scan(app_path)
+    if problems:
+        for name, deps in problems.items():
+            print(f"   {name} → {', '.join(deps)}")
+        sys.exit("❌  L'app usa librerie fuori dal bundle: su un Mac pulito non partirebbe.")
+    print("✅  Nessuna libreria fuori dal bundle.")
+    exe = app_path / "Contents" / "MacOS" / APP_NAME
+    # PATH minimo: l'app deve usare il suo ffmpeg, non quello di Homebrew
+    env = {"HOME": os.environ.get("HOME", ""), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+           "TMPDIR": os.environ.get("TMPDIR", "/tmp")}
+    print("🩺  Autotest dell'app compilata...")
+    result = subprocess.run([str(exe), "--self-test"], env=env, capture_output=True,
+                            text=True, timeout=600)
+    print(result.stdout.rstrip())
+    if result.returncode != 0:
+        print(result.stderr[-2000:])
+        sys.exit("❌  Autotest dell'app compilata non superato.")
 
 
 def make_dmg(app_path: Path):
     """Crea un DMG drag-to-Applications usando create-dmg (brew install create-dmg)."""
     if not shutil.which("create-dmg"):
         print("⚠️   create-dmg non trovato (brew install create-dmg) — DMG saltato.")
-        return
+        return None
 
     arch = "intel" if platform.machine() == "x86_64" else "arm64"
     dmg_path = DIST_DIR / f"{APP_NAME}-{APP_VERSION}-macOS-{arch}.dmg"
@@ -318,8 +382,10 @@ def make_dmg(app_path: Path):
     try:
         run(cmd)
         print(f"\n✅  DMG creato: {dmg_path}")
+        return dmg_path
     except subprocess.CalledProcessError:
         print("⚠️   Creazione DMG fallita — verifica i log sopra.")
+        return None
 
 
 # ============================================================
@@ -335,8 +401,16 @@ def main():
     parser.add_argument("--with-model", action="store_true",
                         help="Includi il modello large-v3 (~3 GB) per l'uso senza internet")
     parser.add_argument("--sign",    metavar="DEVELOPER_ID", default=None,
-                        help='Firma con: "Developer ID Application: Nome (XXXXXXXXXX)"')
+                        help='Firma con: "Developer ID Application: Nome (XXXXXXXXXX)" '
+                             '("-" = ad-hoc, solo per prove locali)')
+    parser.add_argument("--notarize", metavar="PROFILO", default=None,
+                        help="Notarizza con il profilo creato da "
+                             "'xcrun notarytool store-credentials PROFILO' (serve --sign)")
+    parser.add_argument("--skip-checks", action="store_true",
+                        help="Salta i controlli dopo la build (librerie e autotest)")
     args = parser.parse_args()
+    if args.notarize and (not args.sign or args.sign == "-"):
+        parser.error("--notarize richiede --sign con un certificato Developer ID")
 
     print("=" * 60)
     print(f"  Video → SRT v{APP_VERSION} — Build macOS")
@@ -348,9 +422,21 @@ def main():
 
     app_path = build(sign_id=args.sign, with_model=args.with_model)
 
+    if not args.skip_checks:
+        verify(app_path)
+
+    dmg = None
     if not args.no_dmg:
         print("\n📦  Creazione DMG...")
-        make_dmg(app_path)
+        dmg = make_dmg(app_path)
+        if dmg and args.sign:
+            run(["codesign", "--force", "--sign", args.sign]
+                + (["--timestamp"] if args.sign != "-" else []) + [str(dmg)])
+
+    if args.notarize:
+        notarize(dmg or app_path, args.notarize)
+        if dmg:
+            subprocess.run(["xcrun", "stapler", "staple", str(app_path)])
 
     print("\n" + "=" * 60)
     print(f"  Build completata → {DIST_DIR}/")
