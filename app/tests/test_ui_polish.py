@@ -882,13 +882,18 @@ def test_extension_buttons_use_painted_icon_and_survive_style_change(app):
 
 # ── "Alta precisione": mai un'opzione che non fa nulla ───────────────────────
 
-def test_accuracy_toggle_disabled_when_whisperx_missing(app, monkeypatch):
+def test_accuracy_toggle_hidden_when_whisperx_missing(app, monkeypatch):
+    """Senza WhisperX (sempre, nell'app compilata) la riga non si vede proprio: un
+    interruttore "Non disponibile" sembrava una funzione rotta."""
     import engine
     from ui.home_widget import HomeWidget
     monkeypatch.setattr(engine, "high_accuracy_unavailable_reason",
                         lambda: "WhisperX non è installato (pip install whisperx)")
     home = HomeWidget()
+    home.show()
     tog = home.accuracy_toggle
+    assert tog.parentWidget().isHidden() and not tog.isVisible()
+    assert home.vad_toggle.isVisible()
     assert not tog.isEnabled()
     assert not tog.isChecked()
     assert "WhisperX" in tog.toolTip()
@@ -902,7 +907,8 @@ def test_accuracy_toggle_enabled_when_whisperx_present(app, monkeypatch):
     from ui.home_widget import HomeWidget
     monkeypatch.setattr(engine, "high_accuracy_unavailable_reason", lambda: "")
     home = HomeWidget()
-    assert home.accuracy_toggle.isEnabled()
+    home.show()
+    assert home.accuracy_toggle.isEnabled() and home.accuracy_toggle.isVisible()
     home.accuracy_toggle._toggle()
     assert home._get_settings()["high_accuracy"] is True
 

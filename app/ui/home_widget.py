@@ -565,9 +565,12 @@ class HomeWidget(QWidget):
             "Allineamento fonetico delle parole con WhisperX: tempi più precisi, più lento."
         )
         self._apply_accuracy_availability()
-        lay.addWidget(self._toggle_row(self._acc_title, self._acc_desc, self.accuracy_toggle))
-        # descrizione visibile solo quando l'opzione non è disponibile (dice perché)
-        self._acc_desc.setVisible(self._acc_desc.property("unavailable") is True)
+        acc_row = self._toggle_row(self._acc_title, self._acc_desc, self.accuracy_toggle)
+        lay.addWidget(acc_row)
+        self._acc_desc.hide()   # spiegazione nel tooltip
+        # Senza WhisperX (sempre nell'app compilata) la riga non si mostra: un interruttore
+        # "Non disponibile" sembrava una funzione rotta.
+        acc_row.setVisible(self.accuracy_toggle.isEnabled())
 
 
         # beam_spin non visibile: valore di default letto da _get_settings()

@@ -793,7 +793,7 @@ def test_home_settings_never_scroll_and_never_overlap(window, qapp):
         return w.rect().translated(w.mapTo(home, w.rect().topLeft()))
 
     assert not rect(home._model_hint).intersects(rect(home.model_combo))
-    row = home.accuracy_toggle.parentWidget()
+    row = home.vad_toggle.parentWidget()      # ultima riga visibile
     needed = (row.heightForWidth(row.width()) if row.hasHeightForWidth()
               else row.sizeHint().height())
     assert row.height() >= needed
@@ -813,7 +813,7 @@ def test_home_settings_scroll_only_on_a_screen_too_short(window, qapp):
     qapp.processEvents()
     assert home.scroll_fallback()
     assert home._settings_scroll.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
-    row = home.accuracy_toggle.parentWidget()
+    row = home.vad_toggle.parentWidget()      # ultima riga visibile
     needed = (row.heightForWidth(row.width()) if row.hasHeightForWidth()
               else row.sizeHint().height())
     assert row.height() >= needed
