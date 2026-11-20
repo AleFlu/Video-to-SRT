@@ -166,6 +166,10 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   (`packaging/macos/check_bundle.py`) e lancia `--self-test` sull'app compilata (PATH senza
   Homebrew). Con l'hardened runtime anche gli eseguibili di supporto (ffmpeg) vanno firmati con
   `entitlements.plist`, altrimenti non caricano le librerie del bundle.
+- **ffmpeg nell'app macOS**: sta in `Contents/Frameworks/ffmpeg-bin/` con le sue librerie
+  (`build_mac.bundle_ffmpeg`, riferimenti `@loader_path`), mai con `--add-binary`: Qt Multimedia
+  include librerie FFmpeg con gli stessi nomi (libavcodec.62…) di un'altra versione e su un Mac
+  pulito ffmpeg non partiva.
 - **Icona Dock macOS**: `setWindowIcon` non basta; `platform_support.set_dock_icon` usa pyobjc (Cocoa).
 
 ## Diagnostica

@@ -756,3 +756,18 @@ def test_codeswitching_leaves_everyday_italian_unchanged(sentence):
 ])
 def test_codeswitching_intended_fixes_still_work(raw, fixed):
     assert engine._postprocess_codeswitching(raw) == fixed
+
+
+def test_bundled_ffmpeg_prefers_its_own_folder(tmp_path, monkeypatch):
+    """App macOS: ffmpeg sta in ffmpeg-bin/ con le sue librerie, separato dalle librerie
+    FFmpeg di Qt Multimedia (stessi nomi, altra versione: su un Mac pulito non partiva)."""
+    from platform_support import ffmpeg_executable_name
+    name = ffmpeg_executable_name()
+    monkeypatch.setattr(engine, "_is_frozen", lambda: True)
+    monkeypatch.setattr(engine.sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert engine.get_bundled_ffmpeg() is None
+    (tmp_path / name).write_bytes(b"x")                 # Windows: accanto alle librerie
+    assert engine.get_bundled_ffmpeg() == str(tmp_path / name)
+    (tmp_path / "ffmpeg-bin").mkdir()
+    (tmp_path / "ffmpeg-bin" / name).write_bytes(b"x")
+    assert engine.get_bundled_ffmpeg() == str(tmp_path / "ffmpeg-bin" / name)

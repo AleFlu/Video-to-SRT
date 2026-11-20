@@ -207,10 +207,17 @@ def _is_frozen() -> bool:
 
 
 def get_bundled_ffmpeg() -> Optional[str]:
-    """Percorso dell'ffmpeg incluso nel bundle PyInstaller, se presente."""
+    """Percorso dell'ffmpeg incluso nell'app compilata, se presente.
+
+    macOS: nella cartella ``ffmpeg-bin`` con le sue librerie (separate da quelle FFmpeg di
+    Qt Multimedia, che hanno gli stessi nomi); Windows: accanto alle altre librerie.
+    """
     if _is_frozen():
-        p = Path(sys._MEIPASS) / ffmpeg_executable_name()
-        return str(p) if p.exists() else None
+        base = Path(sys._MEIPASS)
+        for p in (base / "ffmpeg-bin" / ffmpeg_executable_name(),
+                  base / ffmpeg_executable_name()):
+            if p.exists():
+                return str(p)
     return None
 
 

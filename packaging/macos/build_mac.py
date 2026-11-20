@@ -205,9 +205,7 @@ def build(sign_id: str | None = None, with_model: bool = False):
     else:
         print(f"⚠️   Icona non trovata ({ICON_FILE}) — verrà usata l'icona di default.")
 
-    # ffmpeg bundled
-    if ffmpeg:
-        cmd += ["--add-binary", f"{ffmpeg}{os.pathsep}."]
+    # ffmpeg: NON passa da PyInstaller (vedi bundle_ffmpeg, dopo la build)
 
     # Modello Whisper bundled
     if model_dir:
@@ -223,6 +221,10 @@ def build(sign_id: str | None = None, with_model: bool = False):
 
     print(f"\n✅  App costruita: {app_path}")
 
+    # ---- ffmpeg nella sua cartella, con le sue librerie ----
+    if ffmpeg:
+        bundle_ffmpeg(ffmpeg, app_path / "Contents" / "Frameworks" / FFMPEG_DIR_NAME)
+
     # ---- Info.plist ----
     _patch_info_plist(app_path)
 
@@ -233,6 +235,74 @@ def build(sign_id: str | None = None, with_model: bool = False):
         print("ℹ️   Code signing saltato (usa --sign per firmare).")
 
     return app_path
+
+
+FFMPEG_DIR_NAME = "ffmpeg-bin"     # cercata da engine.get_bundled_ffmpeg
+
+
+def bundle_ffmpeg(ffmpeg: str, dest: Path) -> None:
+    """Copia ffmpeg e tutte le sue librerie non di sistema in ``dest`` e riscrive i
+    riferimenti in ``@loader_path``.
+
+    Una cartella a parte perché Qt Multimedia include librerie FFmpeg proprie con gli
+    stessi nomi (libavcodec.62.dylib…) ma di un'altra versione: messe insieme da
+    PyInstaller in Frameworks/, l'ffmpeg di Homebrew caricava quelle di Qt (sul Mac della
+    build funzionava per caso; su un Mac pulito mancava libavfilter e ffmpeg non partiva).
+    Con un ffmpeg statico (build Intel) non c'è niente da copiare oltre all'eseguibile.
+    """
+    sys.path.insert(0, str(HERE))
+    from check_bundle import dependencies, resolve, rpaths
+
+    def deps_of(f: Path):
+        out = subprocess.run(["otool", "-L", str(f)], capture_output=True, text=True).stdout
+        own = subprocess.run(["otool", "-D", str(f)], capture_output=True,
+                             text=True).stdout.strip().splitlines()
+        own_id = own[1].strip() if len(own) > 1 else ""
+        load = subprocess.run(["otool", "-l", str(f)], capture_output=True, text=True).stdout
+        return dependencies(out, own_id), rpaths(load)
+
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    exe = Path(ffmpeg).resolve()
+    names = {exe: "ffmpeg"}                # file reale → nome nella cartella
+    changes: dict = {}                     # file reale → [(riferimento, nuovo)]
+    old_rpaths: dict = {}
+    queue = [exe]
+    while queue:
+        f = queue.pop()
+        deps, rp = deps_of(f)
+        old_rpaths[f] = rp
+        changes[f] = []
+        for dep in deps:
+            if dep.startswith(("/System/", "/usr/lib/")):
+                continue
+            real = resolve(dep, f, rp, exe.parent)
+            if real is None:
+                sys.exit(f"❌  Libreria di ffmpeg non trovata: {dep} (da {f})")
+            real = real.resolve()
+            if real not in names:
+                names[real] = Path(dep).name
+                queue.append(real)
+            changes[f].append((dep, f"@loader_path/{names[real]}"))
+
+    for real, name in names.items():
+        target = dest / name
+        shutil.copy2(real, target)
+        target.chmod(0o755)
+        cmd = ["install_name_tool"]
+        if real != exe:
+            cmd += ["-id", f"@loader_path/{name}"]
+        for old, new in changes[real]:
+            cmd += ["-change", old, new]
+        for r in old_rpaths[real]:
+            cmd += ["-delete_rpath", r]
+        if len(cmd) > 1:
+            subprocess.run(cmd + [str(target)], check=True, capture_output=True)
+        # le modifiche invalidano la firma: su Apple Silicon un binario non firmato non parte
+        subprocess.run(["codesign", "--force", "--sign", "-", str(target)], check=True,
+                       capture_output=True)
+    print(f"✅  ffmpeg incluso con {len(names) - 1} librerie in {dest.relative_to(DIST_DIR)}")
 
 
 def _patch_info_plist(app_path: Path):
