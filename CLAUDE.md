@@ -135,6 +135,9 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
 - **Seek in pausa**: `AudioPlayer.seek` emette subito `seeked` e poi `position_changed` (in pausa
   il backend non notifica; prima del caricamento il seek resta in sospeso). `seeked` sposta la
   selezione della tabella anche dove il follow della riproduzione (`_follow_blocked`) è sospeso.
+- **Uscita audio**: `QAudioOutput` resta sul dispositivo che era di sistema quando è stato creato.
+  `AudioPlayer` segue `QMediaDevices.audioOutputsChanged` e ricontrolla a ogni `play()` (cuffie
+  Bluetooth collegate dopo l'apertura del progetto: in cuffia non si sentiva nulla).
 - **Tasti di riproduzione**: sono QShortcut della timeline (contesto finestra). Se il widget col
   focus usa quel tasto (campo di testo, Spazio su pulsanti/interruttori, frecce sul volume) il
   tasto gli viene restituito (`ui.widgets.focus_owns_key`); widget custom attivabili con Spazio:

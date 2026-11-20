@@ -25,7 +25,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Signal, Slot, QTimer
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 
 import platform_support
 
@@ -52,6 +52,10 @@ class AudioPlayer(QObject):
         self._player = QMediaPlayer(self)
         self._audio_out = QAudioOutput(self)
         self._player.setAudioOutput(self._audio_out)
+        # QAudioOutput resta sull'uscita che era di sistema quando è stato creato: cuffie
+        # collegate dopo (AirPods) o un cambio dal Centro di controllo non si sentivano.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._follow_system_output)
 
         # Stato interno
         self._source_path: str = ""
@@ -100,6 +104,7 @@ class AudioPlayer(QObject):
 
     def play(self) -> None:
         if self._is_ready:
+            self._follow_system_output()
             self._player.play()
 
     def pause(self) -> None:
@@ -187,6 +192,14 @@ class AudioPlayer(QObject):
     # ----------------------------------------------------------------
     # Slot interni
     # ----------------------------------------------------------------
+
+    def _follow_system_output(self) -> None:
+        """Usa l'uscita audio di sistema attuale (se è cambiata e ne esiste una)."""
+        default = QMediaDevices.defaultAudioOutput()
+        if default.isNull() or default == self._audio_out.device():
+            return
+        logger.info("Uscita audio: %s", default.description())
+        self._audio_out.setDevice(default)
 
     @Slot(int)
     def _on_duration_changed(self, duration_ms: int):
