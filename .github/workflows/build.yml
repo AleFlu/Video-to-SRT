@@ -3,13 +3,11 @@ name: Build app
 # Compila l'app per macOS (Apple Silicon) e Windows e ne lancia l'autotest
 # (`--self-test`: ffmpeg, encoder, VAD, Qt, piccola esportazione video). Su macOS controlla
 # anche che non ci siano librerie caricate da fuori dal bundle. Gli artefatti si scaricano
-# dalla pagina dell'esecuzione. Manuale, sui tag v* e una volta a settimana.
+# dalla pagina dell'esecuzione. Solo a mano o sui tag v* (niente esecuzioni programmate).
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
-  schedule:
-    - cron: "0 5 * * 1"
 
 jobs:
   macos:

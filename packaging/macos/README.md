@@ -79,8 +79,8 @@ The build stops with an error if either check fails (`--skip-checks` to skip the
    CTranslate2, the Silero VAD, Qt Multimedia/SVG and the fonts, and exports a small video with
    burned-in subtitles. Exit code 0 = passed. Any copy of the app can be checked the same way.
 
-The **Build app** GitHub workflow (`.github/workflows/build.yml`: manual, on `v*` tags and
-weekly) builds macOS (Apple Silicon) and Windows on clean runners, runs the same checks and
+The **Build app** GitHub workflow (`.github/workflows/build.yml`: manual or on `v*` tags)
+builds macOS (Apple Silicon) and Windows on clean runners, runs the same checks and
 uploads the apps as artifacts.
 
 ## Signing and notarization (optional, not used by the project)

@@ -53,7 +53,7 @@ docs/                         # specifiche, piani, riferimenti di design, media 
 pyproject.toml                # solo config pytest + ruff (non è un pacchetto installabile)
 requirements-dev.txt          # pytest, ruff
 .github/workflows/ci.yml      # lint + test su macOS, Windows, Linux
-.github/workflows/build.yml   # build macOS/Windows + autotest (manuale, tag, settimanale)
+.github/workflows/build.yml   # build macOS/Windows + autotest (a mano o sui tag v*)
 ```
 
 ## Regole di architettura
