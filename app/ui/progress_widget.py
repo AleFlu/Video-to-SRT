@@ -155,6 +155,63 @@ class RemainingEstimate:
         return max(0.0, left - (now - t))
 
 
+def elapsed_text(seconds: float, prefix: str = "In corso da") -> str:
+    """Tempo trascorso: "In corso da 0:42", "Completata in 1:05:30"."""
+    total = int(max(0.0, seconds))
+    h, rest = divmod(total, 3600)
+    m, sec = divmod(rest, 60)
+    clock = f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+    return f"{prefix} {clock}"
+
+
+def audio_clock(seconds: float) -> str:
+    """Posizione nell'audio per le frasi nel log: "01:23" o "1:02:03"."""
+    total = int(max(0.0, seconds))
+    h, rest = divmod(total, 3600)
+    m, sec = divmod(rest, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
+
+class SmoothProgress:
+    """Percentuale che sale anche tra un aggiornamento del motore e l'altro.
+
+    Whisper riporta l'avanzamento solo a fine di ogni blocco di 30 s di audio: su file
+    lunghi la percentuale restava ferma minuti interi. Tra due aggiornamenti la si fa
+    salire alla velocità misurata, ma al massimo di quanto è salito il salto più grande
+    visto finora (circa un blocco) e mai oltre il 90 %: se il blocco tarda, si ferma lì
+    e aspetta il valore vero. Non scende mai.
+    """
+
+    def __init__(self):
+        self._start: Optional[tuple] = None     # (istante, avanzamento) a inizio trascrizione
+        self._real: Optional[tuple] = None      # (istante, ultimo avanzamento vero)
+        self._step = 0.0                        # salto vero più grande nella trascrizione
+        self._shown = 0.0
+
+    def real(self, pct: float, now: float) -> float:
+        """Nuovo avanzamento dal motore; restituisce la percentuale da mostrare."""
+        if self._real is not None and _ETA_START <= self._real[1] < pct <= _ETA_END:
+            self._step = max(self._step, pct - self._real[1])
+        if pct >= _ETA_START and self._start is None:
+            self._start = (now, pct)
+        self._real = (now, pct)
+        return self.shown(now)
+
+    def shown(self, now: float) -> float:
+        if self._real is None:
+            return self._shown
+        t, pct = self._real
+        value = pct
+        if self._start is not None and self._step > 0 and _ETA_START <= pct < _ETA_END:
+            t0, p0 = self._start
+            if t > t0 and pct > p0:
+                rate = (pct - p0) / (t - t0)
+                cap = min(pct + self._step, _ETA_END - 0.005)
+                value = min(pct + rate * (now - t), cap)
+        self._shown = max(self._shown, value)
+        return self._shown
+
+
 def _clock() -> str:
     """Orario locale HH:MM:SS per le righe del log."""
     return time.strftime("%H:%M:%S")
@@ -334,13 +391,22 @@ class ProgressWidget(QWidget):
         self.status_lbl = QLabel("")
         self.status_lbl.setWordWrap(True)
         title_col.addWidget(self.status_lbl)
+        time_row = QHBoxLayout()
+        time_row.setSpacing(16)
+        self.elapsed_lbl = QLabel("")           # "In corso da 2:15": scorre ogni secondo
+        time_row.addWidget(self.elapsed_lbl)
         self.eta_lbl = QLabel("")
         self.eta_lbl.setObjectName("etaLabel")
-        title_col.addWidget(self.eta_lbl)
+        time_row.addWidget(self.eta_lbl)
+        time_row.addStretch(1)
+        title_col.addLayout(time_row)
         self._eta = RemainingEstimate()
-        self._eta_timer = QTimer(self)          # conto alla rovescia tra un segmento e l'altro
+        self._smooth = SmoothProgress()
+        self._t_start: Optional[float] = None
+        # Ogni secondo: tempo trascorso, percentuale tra un blocco e l'altro, stima
+        self._eta_timer = QTimer(self)
         self._eta_timer.setInterval(1000)
-        self._eta_timer.timeout.connect(self._show_eta)
+        self._eta_timer.timeout.connect(self._tick)
         pct_row.addLayout(title_col, 1)
         root.addLayout(pct_row)
         root.addSpacing(22)
@@ -490,7 +556,7 @@ class ProgressWidget(QWidget):
             if row.state() == _PH_ACTIVE:
                 row.set_state(_PH_PENDING)
 
-    def _append_log(self, msg: str):
+    def _append_log(self, msg: str, color: str = "dim"):
         """Aggiunge una riga "HH:MM:SS  messaggio" (orario in colore etichetta)."""
         cur = QTextCursor(self.log.document())
         cur.movePosition(QTextCursor.End)
@@ -499,7 +565,7 @@ class ProgressWidget(QWidget):
         t_fmt = QTextCharFormat()
         t_fmt.setForeground(theme.qcolor("label"))
         m_fmt = QTextCharFormat()
-        m_fmt.setForeground(theme.qcolor("dim"))
+        m_fmt.setForeground(theme.qcolor(color))
         cur.insertText(_clock() + "  ", t_fmt)
         cur.insertText(msg, m_fmt)
         self.log.setTextCursor(cur)
@@ -543,6 +609,9 @@ class ProgressWidget(QWidget):
         self._reset_phases()
         self.status_lbl.setText("")
         self._reset_eta()
+        self._t_start = time.monotonic()
+        self._tick()
+        self._eta_timer.start()
         self._stop_kbd.setVisible(True)
         self.stop_btn.setEnabled(True)
         self.stop_btn.setText("Interrompi")
@@ -565,6 +634,7 @@ class ProgressWidget(QWidget):
         self._thread.started.connect(self._worker.run)
         self._worker.status.connect(self._on_status)
         self._worker.progress.connect(self._on_progress)
+        self._worker.text.connect(self._on_text)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -595,6 +665,7 @@ class ProgressWidget(QWidget):
         # Un segnale tardivo del worker non deve più raggiungere questo widget
         # (es. transcription_done su un progetto già chiuso).
         pairs = ((w.status, self._on_status), (w.progress, self._on_progress),
+                 (w.text, self._on_text),
                  (w.finished, self._on_finished), (w.failed, self._on_failed),
                  (w.cancelled, self._on_cancelled), (w.finished, self._cleanup),
                  (w.failed, self._cleanup), (w.cancelled, self._cleanup))
@@ -627,19 +698,42 @@ class ProgressWidget(QWidget):
         self._advance_phase(msg)
 
     def _on_progress(self, pct: float):
+        now = time.monotonic()
+        self._show_progress(self._smooth.real(pct, now))
+        if self._eta.update(pct, now) is not None:
+            self._show_eta(now)
+
+    def _on_text(self, start: float, text: str):
+        """Frase appena trascritta: nel log, col punto dell'audio (si vede che lavora)."""
+        self._append_log(f"{audio_clock(start)}  {text}", "text")
+
+    def _show_progress(self, pct: float):
         self.progress.setValue(int(pct * 1000))
         self._set_pct(int(pct * 100))
-        if self._eta.update(pct, time.monotonic()) is not None:
-            self._show_eta()
-            if not self._eta_timer.isActive():
-                self._eta_timer.start()
 
-    def _show_eta(self):
-        left = self._eta.remaining(time.monotonic())
+    def _tick(self):
+        now = time.monotonic()
+        if self._t_start is not None:
+            self.elapsed_lbl.setText(elapsed_text(now - self._t_start))
+        self._show_progress(self._smooth.shown(now))
+        self._show_eta(now)
+
+    def _stop_clock(self, prefix: Optional[str] = None):
+        """Ferma il tempo trascorso: con ``prefix`` resta la durata, altrimenti sparisce."""
+        if self._t_start is not None and prefix:
+            self.elapsed_lbl.setText(elapsed_text(time.monotonic() - self._t_start, prefix))
+        else:
+            self.elapsed_lbl.setText("")
+        self._t_start = None
+
+    def _show_eta(self, now: Optional[float] = None):
+        left = self._eta.remaining(time.monotonic() if now is None else now)
         self.eta_lbl.setText("" if left is None else remaining_text(left))
 
     def _reset_eta(self):
+        """Ferma il conteggio (fine, errore, annullamento o nuova trascrizione)."""
         self._eta = RemainingEstimate()
+        self._smooth = SmoothProgress()
         self._eta_timer.stop()
         self.eta_lbl.setText("")
 
@@ -650,6 +744,7 @@ class ProgressWidget(QWidget):
         n = len(segments)
         self.title_lbl.setText(f"Completato — {n} sottotitoli trovati")
         self.status_lbl.setText("Trascrizione completata")
+        self._stop_clock("Completata in")
         self._reset_eta()
         self._append_log(f"--- Completato: {n} sottotitoli ---")
         self.stop_btn.setEnabled(False)
@@ -659,6 +754,7 @@ class ProgressWidget(QWidget):
         self._freeze_phases()
         self.title_lbl.setText("Errore trascrizione")
         self.status_lbl.setText(f"Errore: {err}")
+        self._stop_clock()
         self._reset_eta()
         self._append_log(f"ERRORE: {err}")
         self._stop_kbd.setVisible(False)
@@ -676,6 +772,7 @@ class ProgressWidget(QWidget):
         self._set_pct(0)
         self.title_lbl.setText("Trascrizione annullata")
         self.status_lbl.setText("Annullata")
+        self._stop_clock()
         self._reset_eta()
         self._append_log("--- Annullata ---")
         self.transcription_cancelled.emit()
@@ -736,9 +833,10 @@ class ProgressWidget(QWidget):
         self.status_lbl.setStyleSheet(
             f"font-size: 13px; color: {c('dim')}; background: transparent;"
         )
-        self.eta_lbl.setStyleSheet(
-            f"font-size: 13px; color: {c('dim')}; background: transparent;"
-            f" font-family: {theme.FONT_MONO};")
+        for lbl in (self.eta_lbl, self.elapsed_lbl):
+            lbl.setStyleSheet(
+                f"font-size: 13px; color: {c('dim')}; background: transparent;"
+                f" font-family: {theme.FONT_MONO};")
         self.progress.setStyleSheet(
             f"QProgressBar {{ background: {c('line')}; border: none; border-radius: 0; }}"
             f"QProgressBar::chunk {{ background: {c('acc')}; border-radius: 0; }}"

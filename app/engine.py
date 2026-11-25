@@ -954,6 +954,7 @@ def transcribe(
     cancel_event: Optional[threading.Event] = None,
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
+    on_text: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict]:
     """Trascrive ``input_path`` e restituisce i sottotitoli come dict start/end/text.
 
@@ -962,6 +963,8 @@ def transcribe(
     ``hotwords``, temperature, soglie) e VAD Silero (None = predefiniti). Modello,
     lingua, beam, filtro VAD, riduzione rumore e alta precisione restano gli argomenti
     espliciti.
+    ``on_text(inizio, testo)`` riceve ogni frase appena Whisper la scrive (per il log):
+    l'avanzamento arriva a blocchi di 30 s di audio, il testo mostra che sta lavorando.
     """
     language = normalize_language(language)
     config = config or TranscriptionConfig()
@@ -1091,6 +1094,9 @@ def transcribe(
         def collect_segment(seg):
             _check_cancel(cancel_event)
             raw_segments.append(seg)
+            text = (seg.text or "").strip()
+            if on_text and text:
+                on_text(float(seg.start), text)
             if duration > 0:
                 progress(min(0.15 + (seg.end / duration) * 0.75, 0.90))
                 status(f"Trascrizione in corso... {int(seg.end / duration * 100)}%")

@@ -144,6 +144,12 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
 - **Uscita audio**: `QAudioOutput` resta sul dispositivo che era di sistema quando è stato creato.
   `AudioPlayer` segue `QMediaDevices.audioOutputsChanged` e ricontrolla a ogni `play()` (cuffie
   Bluetooth collegate dopo l'apertura del progetto: in cuffia non si sentiva nulla).
+- **Avanzamento a blocchi**: faster-whisper restituisce i segmenti solo a fine di ogni finestra
+  di 30 s, quindi `on_progress` arriva a scatti (su file lunghi minuti senza aggiornamenti).
+  La schermata Progress mostra il tempo trascorso (timer da 1 s), fa salire la percentuale
+  con `SmoothProgress` (velocità misurata, al massimo un blocco, mai oltre il 90 %, mai
+  indietro) e scrive nel log ogni frase appena trascritta (`on_text` → `worker.text`). I worker
+  finti nei test devono avere anche il segnale `text`.
 - **Tasti di riproduzione**: sono QShortcut della timeline (contesto finestra). Se il widget col
   focus usa quel tasto (campo di testo, Spazio su pulsanti/interruttori, frecce sul volume) il
   tasto gli viene restituito (`ui.widgets.focus_owns_key`); widget custom attivabili con Spazio:

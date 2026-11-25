@@ -72,6 +72,7 @@ class TranscriptionWorker(QObject):
     Segnali:
       - status(str)      : messaggio da mostrare in UI
       - progress(float)  : 0.0 .. 1.0
+      - text(float, str) : frase appena trascritta (inizio in secondi, testo)
       - finished(list)   : lista di dict {start,end,text,confidence}
       - failed(str)      : errore
       - cancelled()      : annullato dall'utente
@@ -79,6 +80,7 @@ class TranscriptionWorker(QObject):
 
     status = Signal(str)
     progress = Signal(float)
+    text = Signal(float, str)
     finished = Signal(list)
     failed = Signal(str)
     cancelled = Signal()
@@ -116,6 +118,7 @@ class TranscriptionWorker(QObject):
                 cancel_event=self._cancel_event,
                 on_status=lambda m: self.status.emit(m),
                 on_progress=lambda v: self.progress.emit(float(v)),
+                on_text=lambda start, t: self.text.emit(float(start), t),
             )
 
             if self._cancel_event.is_set():

@@ -252,7 +252,7 @@ def test_exported_config_reproduces_same_worker_and_engine_params(tmp_path, monk
                                      TranscriptionCancelled=RuntimeError)
         monkeypatch.setitem(sys.modules, "engine", fake)
         TranscriptionWorker(TranscriptionParams.from_config("in.mp4", config)).run()
-        for key in ("cancel_event", "on_status", "on_progress"):
+        for key in ("cancel_event", "on_status", "on_progress", "on_text"):
             seen["transcribe"].pop(key)
         return seen
 

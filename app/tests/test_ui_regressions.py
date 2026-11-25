@@ -441,6 +441,7 @@ def test_export_badge_attribute(app):
 class _FakeWorker(QObject):
     status = Signal(str)
     progress = Signal(float)
+    text = Signal(float, str)
     finished = Signal(list)
     failed = Signal(str)
     cancelled = Signal()
