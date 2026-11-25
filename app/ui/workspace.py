@@ -222,6 +222,9 @@ class WorkspaceWidget(QWidget):
 
         self.preview.waveform.subtitle_clicked.connect(self._on_waveform_click)
         self.preview.waveform.timing_edited.connect(self.timeline.set_timing)
+        self.preview.waveform.subtitles_swapped.connect(self.timeline.swap_texts)
+        self.preview.waveform.subtitle_moved.connect(self.timeline.move_subtitle)
+        self.preview.waveform.subtitle_created.connect(self._on_subtitle_created)
         self.preview.transport.tall_timeline_toggled.connect(self.set_tall_timeline)
         # durata nota dopo l'attivazione (progetto aperto in timeline grande): zoom ora
         self.preview.player.duration_changed.connect(self._zoom_if_tall)
@@ -251,6 +254,13 @@ class WorkspaceWidget(QWidget):
             for r in range(self.timeline.model.rowCount())
         ]
         self.preview.set_subtitles(subs, severity)
+
+    def _on_subtitle_created(self, start: float, end: float):
+        """Sottotitolo nuovo dalla forma d'onda: selezionato, e si scrive subito il testo."""
+        if self.timeline.create_subtitle(start, end) < 0:
+            return
+        if self.inspector.isVisible():
+            self.inspector.text_edit.setFocus()
 
     def _on_waveform_click(self, row: int):
         self.timeline.view.selectRow(row)

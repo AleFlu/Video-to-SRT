@@ -15,12 +15,16 @@ waveform_widget.py — Widget forma d'onda audio con overlay dei sottotitoli.
       · trascinando il bordo di un blocco se ne cambia l'inizio o la fine, trascinandone
         il centro lo si sposta tutto (regole in ``core.timing_edit``: niente
         sovrapposizioni con i vicini). Il bordo si aggancia al playhead e ai sottotitoli
-        vicini (Maiusc lo sgancia), Esc annulla; al rilascio ``timing_edited``;
+        vicini (Maiusc lo sgancia), Esc annulla; al rilascio ``timing_edited``.
+        Portato oltre i vicini: sopra un altro blocco i due si scambiano il testo
+        (``subtitles_swapped``), in una pausa ci entra se c'è posto (``subtitle_moved``);
+      · trascinando nella corsia vuota, o con un doppio clic lì, si crea un sottotitolo
+        nuovo dentro quella pausa (``subtitle_created``);
       · rotella verticale/orizzontale o due dita sul trackpad → scorrimento della
         finestra visibile (solo se c'è zoom; `pixelDelta` per lo scorrimento fluido,
         verso "naturale" del sistema così come lo consegna Qt);
       · Ctrl/⌘ o Alt + rotella, oppure pizzico sul trackpad → zoom attorno al cursore;
-      · doppio clic sullo sfondo (non su un blocco) → zoom su tutta la durata;
+      · doppio clic sulla forma d'onda (non nella corsia) → zoom su tutta la durata;
       · tastiera (con il focus): ←/→ ±1 s, Home/Fine, +/− zoom, 0 tutta la durata.
   - Auto-scroll del playhead: dopo uno scorrimento/zoom manuale è sospeso per
     FOLLOW_HOLD_S secondi dall'ultimo gesto (regola a tempo: semplice e senza stati
@@ -63,6 +67,7 @@ _CLICK_SLOP = 5
 # Geometria (mockup): righello 22 px in alto, corsia dei blocchi 52 px in basso
 _RULER_H = 22
 _LANE_H = 52
+NEW_BLOCK_S = 2.0          # doppio clic nella corsia: durata del sottotitolo nuovo
 # Barre della forma d'onda: 2 px di larghezza ogni 3
 _BAR_PITCH = 3
 _BAR_W = 2
@@ -337,6 +342,16 @@ class _GestureFilter(QObject):
 # -----------------------------------------------------------------------
 
 @dataclass
+class _CreateDrag:
+    """Sottotitolo nuovo disegnato nella corsia vuota (ms)."""
+
+    press_ms: float
+    times: list
+    block: Optional[Tuple[float, float]] = None
+    active: bool = False
+
+
+@dataclass
 class _TimingDrag:
     """Trascinamento di un blocco: tempi in ms (originali e nuovi)."""
 
@@ -348,6 +363,8 @@ class _TimingDrag:
     new_end: float
     active: bool = False     # oltre la soglia del click
     snap_ms: Optional[float] = None
+    target: Optional[str] = None   # oltre i vicini: "swap" | "slot" | "none"
+    target_row: int = -1           # con "swap": il blocco sotto il mouse
 
     @property
     def start(self) -> float:
@@ -366,11 +383,17 @@ class WaveformWidget(QWidget):
         seek_requested(ms: int)     — l'utente ha cliccato per spostare il playhead
         subtitle_clicked(row: int)  — l'utente ha cliccato un blocco sottotitolo
         timing_edited(row, start_s, end_s) — l'utente ha trascinato un blocco o un bordo
+        subtitles_swapped(row, other)      — blocco lasciato sopra un altro: scambio testi
+        subtitle_moved(row, start_s, end_s) — blocco portato in un'altra pausa
+        subtitle_created(start_s, end_s)   — sottotitolo nuovo disegnato nella corsia
     """
 
     seek_requested    = Signal(int)
     subtitle_clicked  = Signal(int)
     timing_edited     = Signal(int, float, float)   # riga, inizio, fine (s)
+    subtitles_swapped = Signal(int, int)
+    subtitle_moved    = Signal(int, float, float)
+    subtitle_created  = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -420,6 +443,7 @@ class WaveformWidget(QWidget):
         self._drag_start_view: float = 0.0
         self._scrubbing: bool = False
         self._timing: Optional[_TimingDrag] = None   # blocco afferrato
+        self._creating: Optional[_CreateDrag] = None   # blocco nuovo in disegno
 
         # Auto-scroll sospeso fino a questo istante (orologio monotòno, s)
         self._clock = time.monotonic
@@ -732,7 +756,7 @@ class WaveformWidget(QWidget):
         painter.fillRect(0, lane_y - 1, w, 1, theme.qcolor("line"))
 
     def _draw_subtitle_blocks(self, painter: QPainter, w: int, h: int):
-        if not self._sub_index or self._duration_ms == 0:
+        if self._duration_ms == 0 or (not self._sub_index and self._creating is None):
             return
         view_start, view_end = self._view_start_ms, self._view_end_ms
         if view_end <= view_start:
@@ -752,20 +776,28 @@ class WaveformWidget(QWidget):
         text_sel = theme.qcolor("text")
         drag = self._timing if self._timing is not None and self._timing.active else None
 
-        def draw_block(start: float, end: float, row: int) -> None:
+        swap_row = drag.target_row if drag is not None and drag.target == "swap" else -1
+
+        def draw_block(start: float, end: float, row: int, pen: Optional[QPen] = None,
+                       label: Optional[str] = None) -> None:
             x1 = max(0, int((start - view_start) / span * w))
             x2 = min(w, int((end - view_start) / span * w))
             if x2 - x1 < 1:
                 return
-            selected = row == self._selected_row or (drag is not None and row == drag.row)
-            sev = self._severity[row] if row < len(self._severity) else "ok"
+            selected = (row == self._selected_row or row == swap_row
+                        or (drag is not None and row == drag.row))
+            sev = self._severity[row] if 0 <= row < len(self._severity) else "ok"
             rect = QRect(x1, block_y, max(1, x2 - x1 - 1), block_h - 1)
             painter.fillRect(rect, sel_fill if selected else fill)
-            painter.setPen(QPen(sel_border if selected else border.get(sev, border["ok"]), 1))
+            if pen is None:
+                pen = QPen(sel_border if selected else border.get(sev, border["ok"]),
+                           2 if row == swap_row else 1)
+            painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
             if x2 - x1 > 20:
-                label = self._subtitles[row].text.replace("\n", " ")
+                if label is None:
+                    label = self._subtitles[row].text.replace("\n", " ")
                 elided = fm.elidedText(label, Qt.ElideRight, x2 - x1 - 14)
                 painter.setPen(text_sel if selected else text_dim)
                 painter.drawText(QRect(x1 + 6, block_y, x2 - x1 - 12, block_h - 1),
@@ -775,8 +807,19 @@ class WaveformWidget(QWidget):
             if drag is None or row != drag.row:
                 draw_block(start, end, row)
         if drag is not None:
-            draw_block(drag.new_start, drag.new_end, drag.row)
+            # dove non si può lasciare: bordo tratteggiato nel colore d'errore
+            if drag.target == "swap":
+                draw_block(drag.start, drag.end, drag.row, QPen(sel_border, 1, Qt.DashLine))
+            else:
+                pen = QPen(theme.qcolor("err"), 1, Qt.DashLine) if drag.target == "none" \
+                    else None
+                draw_block(drag.new_start, drag.new_end, drag.row, pen)
             self._draw_drag_marks(painter, w, h, drag)
+        create = self._creating if self._creating is not None and self._creating.active \
+            else None
+        if create is not None and create.block is not None:
+            draw_block(create.block[0], create.block[1], -1,
+                       QPen(theme.qcolor("acc"), 1, Qt.DashLine), "Nuovo sottotitolo")
 
     def _draw_drag_marks(self, painter: QPainter, w: int, h: int, drag: _TimingDrag) -> None:
         """Bordo trascinato in accento, linea dell'aggancio e tempi sopra il blocco."""
@@ -789,6 +832,8 @@ class WaveformWidget(QWidget):
                 painter.drawLine(x, 0, x, h)
         edges = {"start": [drag.new_start], "end": [drag.new_end],
                  "move": [drag.new_start, drag.new_end]}[drag.mode]
+        if drag.target in ("swap", "none"):
+            edges = []                       # il blocco non va lì: niente tempi
         for ms in edges:
             x = self._ms_to_x(ms)
             if x is not None:
@@ -797,6 +842,10 @@ class WaveformWidget(QWidget):
         shown = drag.new_end if drag.mode == "end" else drag.new_start
         duration = f"{(drag.new_end - drag.new_start) / 1000:.2f}".replace(".", ",")
         text = f"{_ms_to_label(int(round(shown)))} · {duration} s"
+        if drag.target == "swap":
+            text = f"Scambia il testo con il n. {drag.target_row + 1}"
+        elif drag.target == "none":
+            text = "Qui non c'è spazio"
         font = self._font(11, mono=True)
         painter.setFont(font)
         fm = QFontMetrics(font)
@@ -900,15 +949,16 @@ class WaveformWidget(QWidget):
             self._press_y = int(event.position().y())
             self._drag_start_view = self._view_start_ms
             self._timing = None
+            self._creating = None
             if not event.modifiers() & Qt.AltModifier:
                 row, mode = self._hit_block(event.position().x(), event.position().y())
                 if row >= 0:
-                    times = [(0.0, 0.0)] * len(self._subtitles)
-                    for start, end, r in self._sub_index:
-                        times[r] = (start, end)
+                    times = self._times()
                     start, end = times[row]
                     self._timing = _TimingDrag(row, mode, times, self._x_to_ms(self._press_x),
                                                start, end)
+                elif self._in_lane(event.position().y()) and self._duration_ms > 0:
+                    self._creating = _CreateDrag(self._x_to_ms(self._press_x), self._times())
 
     def mouseMoveEvent(self, event):
         x = event.position().x()
@@ -917,6 +967,14 @@ class WaveformWidget(QWidget):
                 self._update_hover_cursor(x, event.position().y())
             return
         dx = int(x) - self._press_x
+        if self._creating is not None:
+            if not self._creating.active:
+                if abs(dx) < _CLICK_SLOP:
+                    return
+                self._creating.active = True
+                self.setCursor(Qt.SplitHCursor)
+            self._drag_create(x)
+            return
         if self._timing is not None:
             if not self._timing.active:
                 if abs(dx) < _CLICK_SLOP:
@@ -962,6 +1020,14 @@ class WaveformWidget(QWidget):
             return
         self._pressed = False
         drag, self._timing = self._timing, None
+        create, self._creating = self._creating, None
+        if create is not None and create.active:
+            self.unsetCursor()
+            self._invalidate()
+            if create.block is not None:
+                s, e = create.block
+                self.subtitle_created.emit(s / 1000.0, e / 1000.0)
+            return
         if drag is not None and drag.active:
             self._finish_timing(drag)
             self._update_hover_cursor(event.position().x(), event.position().y())
@@ -982,11 +1048,20 @@ class WaveformWidget(QWidget):
             self.seek_requested.emit(int(ms))
 
     def mouseDoubleClickEvent(self, event):
-        """Doppio clic sullo sfondo: zoom su tutta la durata. Su un blocco: come un click."""
+        """Doppio clic: nella corsia vuota crea un sottotitolo (``NEW_BLOCK_S``), sulla forma
+        d'onda torna a tutta la durata. Su un blocco: come un click."""
         pos = event.position()
         if event.button() == Qt.LeftButton and self._row_at(pos.x(), pos.y()) < 0:
             self._pressed = False      # il rilascio che segue non è un secondo click
-            self.reset_zoom()
+            self._creating = None
+            if self._in_lane(pos.y()) and self._duration_ms > 0:
+                block = timing_edit.default_block(
+                    self._times(), self._x_to_ms(pos.x()), NEW_BLOCK_S * 1000.0,
+                    timing_edit.MIN_DURATION_S * 1000.0, self._duration_ms)
+                if block is not None:
+                    self.subtitle_created.emit(block[0] / 1000.0, block[1] / 1000.0)
+            else:
+                self.reset_zoom()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
@@ -1042,9 +1117,10 @@ class WaveformWidget(QWidget):
     def keyPressEvent(self, event):
         """←/→ ±1 s, Home/Fine, +/− zoom attorno al playhead, 0 tutta la durata."""
         key = event.key()
-        if key == Qt.Key_Escape and self._timing is not None:
+        if key == Qt.Key_Escape and (self._timing is not None or self._creating is not None):
             # annulla il trascinamento in corso: il blocco torna dov'era
             self._timing = None
+            self._creating = None
             self._pressed = False
             self.unsetCursor()
             self._invalidate()
@@ -1118,6 +1194,8 @@ class WaveformWidget(QWidget):
             self.setCursor(Qt.SplitHCursor)
         elif mode == "move":
             self.setCursor(Qt.OpenHandCursor)
+        elif self._in_lane(y) and self._duration_ms > 0:
+            self.setCursor(Qt.CrossCursor)      # qui si disegna un sottotitolo nuovo
         else:
             self.unsetCursor()
 
@@ -1174,11 +1252,58 @@ class WaveformWidget(QWidget):
                                                             media_end)
             if snapped is not None and snapped in (drag.new_start, drag.new_end):
                 drag.snap_ms = snapped
+            self._cross_neighbours(drag, self._x_to_ms(x), media_end)
+        self._invalidate()
+
+    def _cross_neighbours(self, drag: _TimingDrag, at: float,
+                          media_end: Optional[float]) -> None:
+        """Mouse oltre lo spazio del blocco: scambio con il blocco sotto il mouse, posto in
+        un'altra pausa o niente (il blocco segue il mouse e al rilascio torna indietro)."""
+        drag.target, drag.target_row = None, -1
+        lo, hi = timing_edit.neighbour_limits(drag.times, drag.row, media_end)
+        if lo <= at <= hi:
+            return
+        drag.snap_ms = None
+        offset = drag.press_ms - drag.start          # punto del blocco preso col mouse
+        ghost = (at - offset, at - offset + (drag.end - drag.start))
+        other = timing_edit.row_at(drag.times, at, drag.row)
+        if other >= 0:
+            # il blocco resta al suo posto (tratteggiato): si vede bene quello di arrivo
+            drag.target, drag.target_row = "swap", other
+            drag.new_start, drag.new_end = drag.times[other]
+            return
+        slot = timing_edit.free_slot(drag.times, drag.row, at, media_end)
+        if slot is not None:
+            drag.target = "slot"
+            drag.new_start, drag.new_end = slot
+        else:
+            drag.target = "none"
+            drag.new_start, drag.new_end = ghost
+
+    def _drag_create(self, x: float) -> None:
+        """Sottotitolo nuovo da dove si è premuto fino al mouse, dentro quella pausa."""
+        create = self._creating
+        w = self.width()
+        span = self._view_end_ms - self._view_start_ms
+        if create is None or w <= 0 or span <= 0:
+            return
+        if (x < 0 or x > w) and self.is_zoomed():
+            over = x if x < 0 else x - w
+            self._set_view(self._view_start_ms + over * span / w, span)
+        x = min(max(x, 0.0), float(w))
+        create.block = timing_edit.new_block(
+            create.times, create.press_ms, self._x_to_ms(x),
+            timing_edit.MIN_DURATION_S * 1000.0, self._duration_ms or None)
         self._invalidate()
 
     def _finish_timing(self, drag: _TimingDrag) -> None:
         """Fine del trascinamento: segnale con i nuovi tempi (se sono cambiati)."""
         self.unsetCursor()
+        if drag.target in ("swap", "none"):
+            self._invalidate()
+            if drag.target == "swap":
+                self.subtitles_swapped.emit(drag.row, drag.target_row)
+            return
         if abs(drag.new_start - drag.start) < 0.5 and abs(drag.new_end - drag.end) < 0.5:
             self._invalidate()
             return
@@ -1190,7 +1315,8 @@ class WaveformWidget(QWidget):
         self._sub_starts = [e[0] for e in self._sub_index]
         self._max_sub_ms = max((e[1] - e[0] for e in self._sub_index), default=0.0)
         self._invalidate()
-        self.timing_edited.emit(drag.row, drag.new_start / 1000.0, drag.new_end / 1000.0)
+        signal = self.subtitle_moved if drag.target == "slot" else self.timing_edited
+        signal.emit(drag.row, drag.new_start / 1000.0, drag.new_end / 1000.0)
 
     # ----------------------------------------------------------------
     # Zoom / scorrimento della vista (mai il playhead)
@@ -1273,6 +1399,18 @@ class WaveformWidget(QWidget):
     # ----------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------
+
+    def _times(self) -> list:
+        """[(inizio, fine)] in ms di ogni sottotitolo, per riga."""
+        times = [(0.0, 0.0)] * len(self._subtitles)
+        for start, end, r in self._sub_index:
+            if r < len(times):
+                times[r] = (start, end)
+        return times
+
+    def _in_lane(self, y: float) -> bool:
+        """True se ``y`` è nella corsia dei blocchi, sotto la forma d'onda."""
+        return y >= self.height() - _LANE_H
 
     def _x_to_ms(self, x: float) -> float:
         w = self.width()

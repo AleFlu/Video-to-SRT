@@ -26,7 +26,7 @@ computer**: no file is uploaded anywhere and, after the first setup, the app wor
 - Live checks: overlaps, subtitles that are too fast, too short or too long
 - Review aids: words Whisper was unsure about are highlighted (until you edit the line), and an Italian spell checker underlines typos, with suggestions and "Aggiungi al dizionario" on right-click
 - Video preview with subtitles on top, and an interactive waveform: click to seek, scroll wheel or two fingers to pan, ⌘ + wheel or pinch to zoom
-- Timing by hand, like in a video editor: drag a subtitle's edges on the waveform (or the whole block) with snapping to the playhead and the neighbours, press I / O to set the start / end at the playhead, and switch to the big timeline (⌘⇧E) to get the waveform full width under the video
+- Timing by hand, like in a video editor: drag a subtitle's edges on the waveform (or the whole block) with snapping to the playhead and the neighbours, drop a block on another to swap their texts or into a pause to move it there, draw in the empty lane (or double-click) to add a subtitle, press I / O to set the start / end at the playhead, and switch to the big timeline (⌘⇧E) to get the waveform full width under the video
 - Editor-style shortcuts (Space, J/K/L, I/O, arrows); everything is keyboard-reachable with a visible focus ring
 
 **Export**

@@ -127,7 +127,7 @@ def test_dragging_the_start_edge_snaps_to_the_playhead(wf):
 def test_moving_a_block_stops_at_the_next_one(wf):
     w, edits = wf
     assert w._hit_block(300, LANE_Y) == (0, "move")
-    _drag(w, [300, 350, 600])           # +3 s, ma il successivo comincia a 15 s
+    _drag(w, [300, 350, 450])           # +1,5 s, ma il successivo comincia a 15 s
     assert edits == [(0, 13.0, 15.0)]
 
 
@@ -326,3 +326,143 @@ def test_section_borders_are_easy_to_grab(workspace):
     assert SPLIT_HANDLE >= 5
     assert workspace._vsplit.handleWidth() == SPLIT_HANDLE
     assert workspace._hsplit.handleWidth() == SPLIT_HANDLE
+
+
+
+# ── Oltre i vicini: scambio, altra pausa, sottotitolo nuovo ─────────────────
+
+def test_rules_for_gaps_and_new_blocks():
+    times = [(1.0, 3.0), (3.5, 5.0), (6.0, 8.0)]
+    assert te.row_at(times, 4.0) == 1 and te.row_at(times, 4.0, exclude=1) == -1
+    assert te.row_at(times, 5.5) == -1
+    assert te.gap_at(times, 5.5) == (5.0, 6.0)
+    assert te.gap_at(times, 9.0, media_end=10.0) == (8.0, 10.0)
+    assert te.gap_at(times, 2.0) is None
+    assert te.gap_at(times, 4.0, exclude=1) == (3.0, 6.0)       # senza sé stesso
+    # la riga 0 (2 s) entra dopo l'ultima, centrata sul mouse; non tra 5 e 6
+    assert te.free_slot(times, 0, 9.0, media_end=20.0) == (8.0, 10.0)
+    assert te.free_slot(times, 0, 9.5, media_end=20.0) == (8.5, 10.5)
+    assert te.free_slot(times, 0, 5.5) is None
+    # sottotitolo nuovo: tenuto nella pausa dove si è premuto, almeno la durata minima
+    assert te.new_block(times, 5.2, 5.6, 0.2) == (5.2, 5.6)
+    assert te.new_block(times, 5.2, 7.5, 0.2) == (5.2, 6.0)
+    assert te.new_block(times, 5.5, 5.55, 0.2) == pytest.approx((5.5, 5.7))
+    assert te.new_block(times, 5.9, 5.95, 0.2) == pytest.approx((5.8, 6.0))
+    assert te.new_block(times, 2.0, 5.0, 0.2) is None          # premuto su un sottotitolo
+    assert te.default_block(times, 8.5, 2.0, 0.2, media_end=20.0) == (8.5, 10.5)
+    assert te.default_block(times, 5.5, 2.0, 0.2) == (5.0, 6.0)  # pausa più corta
+    assert te.default_block([(1.0, 3.0), (3.1, 4.0)], 3.05, 2.0, 0.2) is None
+
+
+def test_commands_swap_move_and_insert_undo_cleanly(app):
+    from PySide6.QtGui import QUndoStack
+    from core.subtitle_table_model import SubtitleTableModel
+    from core.undo_commands import (InsertSubtitleCommand, MoveSubtitleCommand,
+                                    SwapTextsCommand)
+    model = SubtitleTableModel([Subtitle(1.0, 3.0, "uno", asr_text="uno"),
+                                Subtitle(3.5, 5.0, "due"), Subtitle(6.0, 8.0, "tre")])
+    stack = QUndoStack()
+
+    def rows():
+        return [(s.start, s.end, s.text) for s in model.subtitles()]
+
+    before = rows()
+    stack.push(SwapTextsCommand(model, 0, 2))
+    assert rows() == [(1.0, 3.0, "tre"), (3.5, 5.0, "due"), (6.0, 8.0, "uno")]
+    assert model.subtitle_at(2).asr_text == "uno"        # i dati di revisione seguono il testo
+    stack.undo()
+    assert rows() == before
+    cmd = MoveSubtitleCommand(model, 0, 9.0, 11.0)
+    stack.push(cmd)
+    assert cmd.new_row == 2
+    assert rows() == [(3.5, 5.0, "due"), (6.0, 8.0, "tre"), (9.0, 11.0, "uno")]
+    stack.undo()
+    assert rows() == before
+    ins = InsertSubtitleCommand(model, Subtitle(5.2, 5.8, ""))
+    stack.push(ins)
+    assert ins.row == 2 and rows()[2] == (5.2, 5.8, "")
+    stack.undo()
+    assert rows() == before
+    stack.redo()
+    assert rows()[2] == (5.2, 5.8, "")
+
+
+def _signals(w):
+    got = {"swap": [], "move": [], "new": []}
+    w.subtitles_swapped.connect(lambda a, b: got["swap"].append((a, b)))
+    w.subtitle_moved.connect(lambda r, s, e: got["move"].append((r, round(s, 3), round(e, 3))))
+    w.subtitle_created.connect(lambda s, e: got["new"].append((round(s, 3), round(e, 3))))
+    return got
+
+
+def test_dropping_a_block_on_another_swaps_the_texts(wf):
+    w, edits = wf
+    got = _signals(w)
+    _drag(w, [300, 350, 600], release=False)            # mouse sopra "due"
+    assert w._timing.target == "swap" and w._timing.target_row == 1
+    QTest.mouseRelease(w, Qt.LeftButton, Qt.NoModifier, QPoint(600, LANE_Y))
+    assert got["swap"] == [(0, 1)] and edits == []
+
+
+def test_dropping_a_block_in_another_pause_moves_it_there(wf):
+    w, edits = wf
+    got = _signals(w)
+    _drag(w, [300, 350, 900])           # 19 s: pausa dopo "due", c'è posto
+    assert got["move"] == [(0, 18.0, 20.0)] and edits == []
+
+
+def test_a_pause_too_short_takes_nothing(wf):
+    w, edits = wf
+    w.set_subtitles([Subtitle(12.0, 14.0, "uno"), Subtitle(15.0, 17.0, "due"),
+                     Subtitle(17.5, 19.0, "tre")])
+    got = _signals(w)
+    _drag(w, [300, 350, 730], release=False)            # 17,3 s: pausa di 0,5 s
+    assert w._timing.target == "none"
+    QTest.mouseRelease(w, Qt.LeftButton, Qt.NoModifier, QPoint(730, LANE_Y))
+    assert got == {"swap": [], "move": [], "new": []} and edits == []
+
+
+def test_drawing_in_the_empty_lane_creates_a_subtitle(wf):
+    w, edits = wf
+    got = _signals(w)
+    _drag(w, [420, 440, 480])           # da 14,2 a 14,8 s, nella pausa tra i due
+    assert got["new"] == [(14.2, 14.8)]
+    _drag(w, [420, 600, 900])           # oltre "due": si ferma a fine pausa
+    assert got["new"][-1] == (14.2, 15.0)
+    _drag(w, [420, 460], release=False)
+    QTest.keyClick(w, Qt.Key_Escape)    # Esc annulla anche il disegno
+    QTest.mouseRelease(w, Qt.LeftButton, Qt.NoModifier, QPoint(460, LANE_Y))
+    assert len(got["new"]) == 2 and edits == []
+
+
+def test_double_click_in_the_lane_creates_and_on_the_wave_resets_zoom(wf):
+    w, _ = wf
+    got = _signals(w)
+    QTest.mouseDClick(w, Qt.LeftButton, Qt.NoModifier, QPoint(800, LANE_Y))
+    assert got["new"] == [(18.0, 20.0)]
+    QTest.mouseDClick(w, Qt.LeftButton, Qt.NoModifier, QPoint(800, 60))
+    assert not w.is_zoomed() and len(got["new"]) == 1
+
+
+def test_hover_on_the_empty_lane_shows_a_crosshair(wf):
+    w, _ = wf
+    QApplication.sendEvent(w, QMouseEvent(QMouseEvent.MouseMove, QPointF(450, LANE_Y),
+                                          QPointF(450, LANE_Y), Qt.NoButton,
+                                          Qt.NoButton, Qt.NoModifier))
+    assert w.cursor().shape() == Qt.CrossCursor
+
+
+def test_new_moved_and_swapped_subtitles_reach_the_table(workspace):
+    ws = workspace
+    wf, tl = ws.preview.waveform, ws.timeline
+    wf.subtitle_created.emit(5.0, 6.5)
+    assert [(s.start, s.text) for s in tl.model.subtitles()] == [(1.0, "uno"), (5.0, "")]
+    assert tl._current_row() == 1
+    wf.subtitles_swapped.emit(0, 1)
+    assert [s.text for s in tl.model.subtitles()] == ["", "uno"]
+    wf.subtitle_moved.emit(1, 0.0, 0.8)
+    assert [(s.start, s.text) for s in tl.model.subtitles()] == [(0.0, "uno"), (1.0, "")]
+    assert tl._current_row() == 0
+    for _ in range(3):
+        tl.undo_stack.undo()
+    assert [(s.start, s.text) for s in tl.model.subtitles()] == [(1.0, "uno")]

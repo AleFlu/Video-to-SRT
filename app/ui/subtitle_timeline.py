@@ -43,8 +43,8 @@ from core.subtitle_table_model import (
 )
 from core.transcription_config import active_readability
 from core.undo_commands import (
-    EditFieldCommand, DeleteSubtitleCommand,
-    SplitSubtitleCommand, MergeWithNextCommand, ReplaceAllCommand
+    EditFieldCommand, DeleteSubtitleCommand, InsertSubtitleCommand, MergeWithNextCommand,
+    MoveSubtitleCommand, ReplaceAllCommand, SplitSubtitleCommand, SwapTextsCommand,
 )
 from core.audio_player import AudioPlayer
 from core.spelling import SPELLER
@@ -1150,6 +1150,38 @@ class SubtitleTimeline(QWidget):
             self.view.selectRow(row)
             self.view.scrollTo(self.model.index(row, COL_TEXT),
                                QAbstractItemView.EnsureVisible)
+
+    def _select(self, row: int) -> None:
+        if 0 <= row < self.model.rowCount():
+            self.view.selectRow(row)
+            self.view.scrollTo(self.model.index(row, COL_TEXT),
+                               QAbstractItemView.EnsureVisible)
+
+    def swap_texts(self, row_a: int, row_b: int) -> None:
+        """Scambia i testi di due sottotitoli (blocco lasciato sopra un altro): un passo
+        di annullamento, selezionato quello dove è arrivato il testo trascinato."""
+        if row_a == row_b or self.model.subtitle_at(row_a) is None \
+                or self.model.subtitle_at(row_b) is None:
+            return
+        self.undo_stack.push(SwapTextsCommand(self.model, row_a, row_b))
+        self._select(row_b)
+
+    def move_subtitle(self, row: int, start: float, end: float) -> None:
+        """Sposta un sottotitolo in un'altra pausa (oltre i vicini): la riga cambia posto."""
+        if self.model.subtitle_at(row) is None or end <= start:
+            return
+        cmd = MoveSubtitleCommand(self.model, row, start, end)
+        self.undo_stack.push(cmd)
+        self._select(cmd.new_row)
+
+    def create_subtitle(self, start: float, end: float) -> int:
+        """Sottotitolo nuovo e vuoto in una pausa: lo seleziona e restituisce la riga."""
+        if end <= start:
+            return -1
+        cmd = InsertSubtitleCommand(self.model, Subtitle(start, end, ""))
+        self.undo_stack.push(cmd)
+        self._select(cmd.row)
+        return cmd.row
 
     def _mark_in(self):
         """I: l'inizio del sottotitolo va al cursore di riproduzione."""

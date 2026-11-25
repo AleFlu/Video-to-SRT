@@ -118,12 +118,17 @@ testo dell'Inspector, forma d'onda, Home/risultato ed Esportazione).
 
 Forma d'onda col mouse/trackpad: rotella o due dita (verticale e orizzontale) = scorrimento
 (solo con zoom, il playhead non si muove); Ctrl/⌘ o Alt + rotella e pizzico = zoom attorno al
-cursore; doppio clic sullo sfondo = tutta la durata; clic = seek; tenere premuto e trascinare =
-scrub (il playhead segue il mouse e resta dove lo si lascia; oltre i bordi la vista scorre);
-⌥/Alt + trascinamento = scorrimento della vista. Nella corsia dei sottotitoli: trascinare un
-bordo di un blocco = inizio o fine, trascinarne il centro = spostarlo (aggancio a playhead e
-vicini entro 8 px, Maiusc lo toglie, Esc annulla; mai oltre i vicini né sotto 0,2 s: regole
-in `core.timing_edit`); al rilascio un solo passo di annullamento (`SubtitleTimeline.set_timing`).
+cursore; doppio clic sulla forma d'onda = tutta la durata; clic = seek; tenere premuto e
+trascinare sulla forma d'onda = scrub (il playhead segue il mouse e resta dove lo si lascia;
+oltre i bordi la vista scorre); ⌥/Alt + trascinamento = scorrimento della vista. Nella corsia
+dei sottotitoli: trascinare un bordo di un blocco = inizio o fine, trascinarne il centro =
+spostarlo (aggancio a playhead e vicini entro 8 px, Maiusc lo toglie, Esc annulla; non sotto
+0,2 s: regole in `core.timing_edit`); al rilascio un solo passo di annullamento
+(`SubtitleTimeline.set_timing`). Portato oltre i vicini: lasciato sopra un altro blocco i
+due si scambiano il testo, i tempi restano (`swap_texts`); lasciato in una pausa ci entra se
+c'è posto e la riga cambia posto (`move_subtitle`), altrimenti torna indietro. Trascinare
+nella corsia vuota o doppio clic lì = sottotitolo nuovo dentro quella pausa (2 s col doppio
+clic), selezionato con il cursore nel testo dell'Inspector (`create_subtitle`).
 
 Home: le impostazioni di trascrizione non scorrono; la finestra non scende sotto l'altezza che
 servono (`MainWindow._fit_min_height`). Solo su uno schermo più basso di così diventano

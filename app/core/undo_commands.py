@@ -7,6 +7,7 @@ Il `command_id` abilita il merge di comandi consecutivi dello stesso tipo
 """
 
 from __future__ import annotations
+import bisect
 from dataclasses import replace
 
 from PySide6.QtGui import QUndoCommand
@@ -218,3 +219,72 @@ class ReplaceAllCommand(QUndoCommand):
     def undo(self):
         for row, old, _new in self.replacements:
             self.model.apply_edit_raw(row, COL_TEXT, old)
+
+
+def _sorted_row(model: SubtitleTableModel, start: float) -> int:
+    """Posizione in cui va un sottotitolo che comincia a ``start`` (righe in ordine)."""
+    subs = model.subtitles()
+    return bisect.bisect_right([s.start for s in subs], start)
+
+
+class SwapTextsCommand(QUndoCommand):
+    """Scambia il testo (con i dati di revisione) di due sottotitoli; i tempi restano."""
+
+    def __init__(self, model: SubtitleTableModel, row_a: int, row_b: int):
+        super().__init__("Scambia sottotitoli")
+        self.model = model
+        self.rows = (row_a, row_b)
+
+    def _swap(self):
+        a, b = self.rows
+        sa, sb = self.model.subtitle_at(a), self.model.subtitle_at(b)
+        if sa is None or sb is None:
+            return
+        self.model.replace_subtitle(a, replace(sb, start=sa.start, end=sa.end))
+        self.model.replace_subtitle(b, replace(sa, start=sb.start, end=sb.end))
+
+    def redo(self):
+        self._swap()
+
+    def undo(self):
+        self._swap()
+
+
+class MoveSubtitleCommand(QUndoCommand):
+    """Sposta un sottotitolo a nuovi tempi anche oltre i vicini: la riga va al suo posto
+    nell'ordine (``new_row`` dopo ``redo``)."""
+
+    def __init__(self, model: SubtitleTableModel, row: int, start: float, end: float):
+        super().__init__("Sposta sottotitolo")
+        self.model = model
+        self.row = row
+        self._old = replace(model.subtitle_at(row))
+        self._times = (start, end)
+        self.new_row = row
+
+    def redo(self):
+        self.model.remove_subtitle(self.row)
+        start, end = self._times
+        self.new_row = _sorted_row(self.model, start)
+        self.model.insert_subtitle(self.new_row, replace(self._old, start=start, end=end))
+
+    def undo(self):
+        self.model.remove_subtitle(self.new_row)
+        self.model.insert_subtitle(self.row, replace(self._old))
+
+
+class InsertSubtitleCommand(QUndoCommand):
+    """Aggiunge un sottotitolo al suo posto nell'ordine (``row`` dopo ``redo``)."""
+
+    def __init__(self, model: SubtitleTableModel, sub: Subtitle):
+        super().__init__("Nuovo sottotitolo")
+        self.model = model
+        self._sub = replace(sub)
+        self.row = -1
+
+    def redo(self):
+        self.row = _sorted_row(self.model, self._sub.start)
+        self.model.insert_subtitle(self.row, replace(self._sub))
+
+    def undo(self):
+        self.model.remove_subtitle(self.row)
