@@ -442,8 +442,11 @@ class ProgressWidget(QWidget):
         title_col.setSpacing(4)
         self.title_lbl = QLabel("Trascrizione in corso…")
         title_col.addWidget(self.title_lbl)
+        # Solo avvisi (errore, annullamento, log copiato): l'avanzamento è la percentuale
+        # grande, le fasi e il log
         self.status_lbl = QLabel("")
         self.status_lbl.setWordWrap(True)
+        self.status_lbl.hide()
         title_col.addWidget(self.status_lbl)
         time_row = QHBoxLayout()
         time_row.setSpacing(16)
@@ -658,7 +661,6 @@ class ProgressWidget(QWidget):
             str(settings.get("model_size", "—")),
             lang,
             f"VAD {'attivo' if settings.get('vad_filter') else 'disattivo'}",
-            f"Beam {settings.get('beam_size', 5)}",
         ]
         if settings.get("high_accuracy"):
             parts.insert(3, "alta precisione")
@@ -667,7 +669,7 @@ class ProgressWidget(QWidget):
         self.progress.setValue(0)
         self._set_pct(0)
         self._reset_phases()
-        self.status_lbl.setText("")
+        self._set_note("")
         self._reset_eta()
         self._t_start = time.monotonic()
         self._tick()
@@ -754,7 +756,6 @@ class ProgressWidget(QWidget):
     # ---- Slots worker ----
 
     def _on_status(self, msg: str):
-        self.status_lbl.setText(msg)
         self._append_log(msg)
         self._advance_phase(msg)
 
@@ -821,7 +822,7 @@ class ProgressWidget(QWidget):
         self._finish_phases()
         n = len(segments)
         self.title_lbl.setText(f"Completato — {n} sottotitoli trovati")
-        self.status_lbl.setText("Trascrizione completata")
+        self._set_note("")
         self._learn_speed()
         self._stop_clock("Completata in")
         self._reset_eta()
@@ -832,7 +833,7 @@ class ProgressWidget(QWidget):
     def _on_failed(self, err: str):
         self._freeze_phases()
         self.title_lbl.setText("Errore trascrizione")
-        self.status_lbl.setText(f"Errore: {err}")
+        self._set_note(f"Errore: {err}")
         self._stop_clock()
         self._reset_eta()
         self._append_log(f"ERRORE: {err}")
@@ -850,7 +851,7 @@ class ProgressWidget(QWidget):
         self.progress.setValue(0)
         self._set_pct(0)
         self.title_lbl.setText("Trascrizione annullata")
-        self.status_lbl.setText("Annullata")
+        self._set_note("")
         self._stop_clock()
         self._reset_eta()
         self._append_log("--- Annullata ---")
@@ -863,9 +864,14 @@ class ProgressWidget(QWidget):
         else:
             self._on_stop()
 
+    def _set_note(self, text: str):
+        """Riga sotto il titolo: solo per avvisi, nascosta quando non c'è niente da dire."""
+        self.status_lbl.setText(text)
+        self.status_lbl.setVisible(bool(text))
+
     def _copy_log(self):
         QApplication.clipboard().setText(self.log.toPlainText())
-        self.status_lbl.setText("Log copiato negli appunti")
+        self._set_note("Log copiato negli appunti")
 
     def _on_escape(self):
         if self._worker and self._thread and self.stop_btn.isEnabled():
@@ -884,7 +890,7 @@ class ProgressWidget(QWidget):
         if self._worker and self._thread:
             self._worker.request_cancel()
             self.stop_btn.setEnabled(False)
-            self.status_lbl.setText("Annullamento in corso…")
+            self._set_note("Annullamento in corso…")
         else:
             # Bottone riconvertito in "torna home" dopo errore
             self.transcription_cancelled.emit()

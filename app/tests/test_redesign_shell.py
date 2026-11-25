@@ -111,7 +111,9 @@ def test_phase_states_follow_status_and_ignore_unknown(app):
     pw._on_status("Modello già pronto")
     assert pw.phase_states() == ["done", "active", "pending", "pending", "pending"]
     pw._on_status("Qualcosa di nuovo")
-    assert pw.status_lbl.text() == "Qualcosa di nuovo"
+    assert pw.log.toPlainText().endswith("Qualcosa di nuovo")
+    # l'avanzamento è già nella percentuale grande: nessuna riga ripetuta sotto il titolo
+    assert pw.status_lbl.text() == "" and pw.status_lbl.isHidden()
     assert pw.phase_states() == ["done", "active", "pending", "pending", "pending"]
     pw._on_status("Lingua: it (100%)")
     assert pw.phase_states()[2] == "active"
