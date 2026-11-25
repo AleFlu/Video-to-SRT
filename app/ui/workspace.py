@@ -14,7 +14,8 @@ Layout (misure del mockup):
 
 - Timeline grande (pulsante del trasporto, Ctrl+Shift+E): la preview prende quasi
   tutta l'altezza, il monitor va sopra e la forma d'onda sotto a tutta larghezza, con
-  zoom su TALL_VIEW_MS attorno al playhead; tabella e inspector restano sotto, bassi
+  zoom su TALL_VIEW_MS attorno al playhead; tabella e inspector restano sotto, bassi.
+  Non si ricorda: l'editor si apre sempre con monitor e forma d'onda affiancati
 - Preview e area di lavoro sono divisi da un QSplitter verticale, tabella e
   inspector da uno orizzontale: i valori predefiniti sono quelli del mockup,
   l'utente può ridimensionarli
@@ -40,7 +41,6 @@ from ui.prefs import read_list
 # solo accanto alla tabella) e le vecchie proporzioni non vanno più bene.
 _SETTINGS_HSPLIT = "workspace/hsplit_sizes_v2"   # [tabella, inspector]
 _SETTINGS_VSPLIT = "workspace/vsplit_sizes_v2"   # [preview + trasporto, area di lavoro]
-_SETTINGS_TALL = "workspace/tall_timeline"
 
 # Timeline grande: altezza dell'area di lavoro (toolbar + qualche riga) e vista iniziale
 TALL_LOWER_HEIGHT = 230
@@ -50,11 +50,20 @@ INSPECTOR_WIDTH = 324
 _TRANSPORT_HEIGHT = 46
 
 
+# Bordo tra le sezioni: una linea da 1 px dentro una fascia da trascinare (in hover si
+# accende), così si prende senza mirare al pixel.
+SPLIT_HANDLE = 6
+
+
 def _splitter_style() -> str:
+    c = theme.c
     return (
-        f"QSplitter::handle {{ background: {theme.c('line')}; }}"
-        "QSplitter::handle:horizontal { width: 1px; }"
-        "QSplitter::handle:vertical { height: 1px; }"
+        f"QSplitter::handle {{ background: {c('bg')}; }}"
+        f"QSplitter::handle:horizontal {{ width: {SPLIT_HANDLE}px;"
+        f" border-left: 1px solid {c('line')}; }}"
+        f"QSplitter::handle:vertical {{ height: {SPLIT_HANDLE}px;"
+        f" border-top: 1px solid {c('line')}; }}"
+        f"QSplitter::handle:hover {{ background: {c('line_2')}; }}"
     )
 
 
@@ -81,7 +90,7 @@ class WorkspaceWidget(QWidget):
         # ── Splitter verticale: [preview + trasporto | area di lavoro] ─────────
         self._vsplit = QSplitter(Qt.Vertical)
         self._vsplit.setChildrenCollapsible(False)
-        self._vsplit.setHandleWidth(1)
+        self._vsplit.setHandleWidth(SPLIT_HANDLE)
         self._vsplit.setStyleSheet(_splitter_style())
         root.addWidget(self._vsplit)
 
@@ -104,7 +113,7 @@ class WorkspaceWidget(QWidget):
 
         self._hsplit = QSplitter(Qt.Horizontal)
         self._hsplit.setChildrenCollapsible(False)
-        self._hsplit.setHandleWidth(1)
+        self._hsplit.setHandleWidth(SPLIT_HANDLE)
         self._hsplit.setStyleSheet(_splitter_style())
         self._hsplit.addWidget(self.timeline)
 
@@ -155,9 +164,6 @@ class WorkspaceWidget(QWidget):
 
         theme.MANAGER.theme_changed.connect(self._on_theme_changed)
 
-        if QSettings("VideoSRT", "v2").value(_SETTINGS_TALL, False) in (True, "true"):
-            self.set_tall_timeline(True)
-
     # ── Timeline grande ────────────────────────────────────────────────────────
 
     def is_tall_timeline(self) -> bool:
@@ -185,7 +191,6 @@ class WorkspaceWidget(QWidget):
             self._vsplit.setSizes(self._normal_vsizes)
         self._tall = on
         self.preview.set_tall_timeline(on)
-        QSettings("VideoSRT", "v2").setValue(_SETTINGS_TALL, on)
         self._zoom_if_tall()
 
     def _zoom_if_tall(self, *_):

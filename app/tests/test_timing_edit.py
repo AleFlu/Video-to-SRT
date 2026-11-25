@@ -256,7 +256,6 @@ def workspace(app):
 
 
 def test_tall_timeline_puts_the_waveform_under_the_monitor(workspace):
-    from PySide6.QtCore import QSettings
     ws = workspace
     normal = ws._vsplit.sizes()
     ws.preview.transport.btn_tall.click()
@@ -267,7 +266,6 @@ def test_tall_timeline_puts_the_waveform_under_the_monitor(workspace):
     assert lower <= 230 < top
     wf = ws.preview.waveform
     assert wf._view_end_ms - wf._view_start_ms == pytest.approx(15_000)
-    assert QSettings("VideoSRT", "v2").value("workspace/tall_timeline") in (True, "true")
     ws._save_geometry()          # in timeline grande si salvano le misure normali
     ws.toggle_tall_timeline()    # menu Vista / Ctrl+Shift+E
     QApplication.processEvents()
@@ -276,12 +274,15 @@ def test_tall_timeline_puts_the_waveform_under_the_monitor(workspace):
     assert ws._vsplit.sizes() == normal
 
 
-def test_tall_timeline_is_remembered(app):
+def test_editor_always_opens_side_by_side(app):
+    """La timeline grande è un'opzione del momento: l'editor riparte affiancato."""
     from PySide6.QtCore import QSettings
     from ui.workspace import WorkspaceWidget
-    QSettings("VideoSRT", "v2").setValue("workspace/tall_timeline", True)
+    QSettings("VideoSRT", "v2").setValue("workspace/tall_timeline", True)   # versioni vecchie
     ws = WorkspaceWidget()
-    assert ws.is_tall_timeline() and ws.preview.transport.btn_tall.isChecked()
+    assert not ws.is_tall_timeline() and not ws.preview.transport.btn_tall.isChecked()
+    assert ws.preview._top_split.orientation() == Qt.Horizontal
+    ws.set_tall_timeline(True)
     # la durata del media arriva dopo: lo zoom si applica allora
     ws.preview.waveform.set_duration(120_000)
     ws.preview.player.duration_changed.emit(120_000)
@@ -295,3 +296,33 @@ def test_waveform_edits_reach_the_undo_stack(workspace):
     ws.preview.waveform.timing_edited.emit(0, 1.2, 3.0)
     assert ws.timeline.model.subtitle_at(0).start == 1.2
     assert ws.timeline.undo_stack.count() == 1
+
+
+def test_fullscreen_button_sits_in_the_video_corner(workspace, monkeypatch):
+    from ui import preview_area as pa
+    pv = workspace.preview
+    assert pv.monitor_fullscreen_btn.isHidden()          # nessun video: niente pulsante
+    if pv._video_player_view is None:
+        pytest.skip("uscita video non disponibile")
+    pv._set_mode(pa.MODE_VIDEO)
+    box, btn = pv._monitor_box, pv.monitor_fullscreen_btn
+    box.resize(400, 240)
+    QApplication.processEvents()
+    assert not btn.isHidden()
+    assert btn.geometry().bottomRight().x() == 400 - 8 - 1
+    assert btn.geometry().bottomRight().y() == 240 - 8 - 1
+    calls = []
+    monkeypatch.setattr(pv, "enter_fullscreen", lambda: calls.append(1))
+    pv.monitor_fullscreen_btn.clicked.disconnect()
+    pv.monitor_fullscreen_btn.clicked.connect(pv.enter_fullscreen)
+    btn.click()
+    assert calls == [1]
+    pv._set_mode(pa.MODE_AUDIO)
+    assert btn.isHidden()
+
+
+def test_section_borders_are_easy_to_grab(workspace):
+    from ui.workspace import SPLIT_HANDLE
+    assert SPLIT_HANDLE >= 5
+    assert workspace._vsplit.handleWidth() == SPLIT_HANDLE
+    assert workspace._hsplit.handleWidth() == SPLIT_HANDLE

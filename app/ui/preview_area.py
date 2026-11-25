@@ -27,11 +27,11 @@ import logging
 from pathlib import Path
 from typing import List
 
-from PySide6.QtCore import Qt, QSettings, QSizeF, Signal
-from PySide6.QtGui import QFont, QPainter, QFontMetrics, QBrush, QPen
+from PySide6.QtCore import QEvent, QObject, Qt, QSettings, QSizeF, Signal
+from PySide6.QtGui import QBrush, QFont, QFontMetrics, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLayout, QFrame,
-    QSizePolicy, QSplitter, QStackedLayout, QGraphicsView, QGraphicsScene,
+    QSizePolicy, QSplitter, QStackedLayout, QGraphicsView, QGraphicsScene, QToolButton,
 )
 
 from core.subtitle_model import Subtitle
@@ -39,7 +39,7 @@ from core.audio_player import AudioPlayer
 from core.constants import SUPPORTED_VIDEO_EXTS
 from ui.waveform_widget import WaveformWidget
 from ui.transport_bar import TransportBar, _ms_to_full_label
-from ui import theme
+from ui import icons, theme
 from ui.widgets import ElidedLabel
 import platform_support
 
@@ -82,6 +82,28 @@ def monitor_mode(media_path: str, video_available: bool) -> str:
     if _is_video(media_path) and video_available:
         return MODE_VIDEO
     return MODE_AUDIO
+
+
+class _CornerPlacer(QObject):
+    """Tiene ``child`` nell'angolo in basso a destra di ``parent`` (anche ridimensionando)."""
+
+    def __init__(self, parent: QWidget, child: QWidget, margin: int):
+        super().__init__(parent)
+        self._parent, self._child, self._margin = parent, child, margin
+        parent.installEventFilter(self)
+        self.place()
+
+    def place(self) -> None:
+        m = self._margin
+        self._child.move(self._parent.width() - self._child.width() - m,
+                         self._parent.height() - self._child.height() - m)
+        self._child.raise_()
+
+    def eventFilter(self, obj, event):  # noqa: N802 (override Qt)
+        if obj is self._parent and event.type() in (QEvent.Resize, QEvent.Show,
+                                                    QEvent.LayoutRequest):
+            self.place()
+        return False
 
 
 class PreviewArea(QWidget):
@@ -138,6 +160,17 @@ class PreviewArea(QWidget):
         box_lay.addWidget(self._monitor_msg)                # 1: testo (vuoto / errore)
         mon_lay.addWidget(self._monitor_box, 1)
         top.addWidget(self._monitor)
+
+        # Schermo intero: pulsante nell'angolo in basso a destra del video
+        self.monitor_fullscreen_btn = QToolButton(self._monitor_box)
+        self.monitor_fullscreen_btn.setObjectName("monitorFullscreen")
+        self.monitor_fullscreen_btn.setToolTip(
+            "Video a schermo intero con i sottotitoli (Esc per uscire)")
+        self.monitor_fullscreen_btn.setAccessibleName("Video a schermo intero")
+        self.monitor_fullscreen_btn.setFixedSize(30, 30)
+        self.monitor_fullscreen_btn.setCursor(Qt.PointingHandCursor)
+        self.monitor_fullscreen_btn.clicked.connect(self.enter_fullscreen)
+        self._corner = _CornerPlacer(self._monitor_box, self.monitor_fullscreen_btn, 8)
 
         # Collega il player al video item UNA SOLA VOLTA durante costruzione
         if self._video_player_view is not None:
@@ -226,8 +259,11 @@ class PreviewArea(QWidget):
         """Applica la modalità: audio chiude il monitor, gli altri casi lo mostrano."""
         self._mode = mode
         self._monitor.setVisible(mode != MODE_AUDIO)
-        self.transport.set_fullscreen_available(
-            mode == MODE_VIDEO and self._video_player_view is not None)
+        can_fullscreen = mode == MODE_VIDEO and self._video_player_view is not None
+        self.transport.set_fullscreen_available(can_fullscreen)
+        self.monitor_fullscreen_btn.setVisible(can_fullscreen)
+        if can_fullscreen:
+            self._corner.place()
         if mode == MODE_VIDEO and self._qvideo_widget is not None:
             self._monitor_stack.setCurrentIndex(_MONITOR_VIDEO)
         else:
@@ -244,6 +280,13 @@ class PreviewArea(QWidget):
             f"QFrame#previewMonitorBox {{ background: {c('video_bg')};"
             f" border: 1px solid {c('line')}; }}"
         )
+        # sul video (scuro in entrambi i temi): fondo semitrasparente, icona chiara
+        self.monitor_fullscreen_btn.setIcon(
+            QIcon(icons.pixmap("fullscreen", theme.qcolor("overlay_fg"), 16)))
+        self.monitor_fullscreen_btn.setStyleSheet(
+            f"QToolButton#monitorFullscreen {{ background: {c('overlay_bg')};"
+            f" border: 1px solid {c('overlay_bg')}; border-radius: 6px; }}"
+            f"QToolButton#monitorFullscreen:hover {{ border-color: {c('overlay_fg')}; }}")
         self._top_split.setStyleSheet(
             f"QSplitter#previewSplit::handle {{ background: {c('bg')}; }}"
             f"QSplitter#previewSplit::handle:hover {{ background: {c('line_2')}; }}"
