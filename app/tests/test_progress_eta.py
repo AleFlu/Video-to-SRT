@@ -135,3 +135,55 @@ def test_widget_ticks_shows_phrases_and_final_duration(app, clock):
     assert w.elapsed_lbl.text() == "Completata in 1:35"
     w._on_cancelled()
     assert w.elapsed_lbl.text() == ""
+
+
+# ── Primo blocco: velocità attesa, poi misurata ─────────────────────────────
+
+def test_first_block_rises_at_the_expected_speed_and_stops_at_its_end():
+    sp = pwm.SmoothProgress()
+    sp.real(0.15, now=0.0)
+    sp.expect(speech_s=40.0, secs_per_speech_s=1.0, now=2.0)   # 40 s di lavoro in tutto
+    assert sp.shown(now=2.0) == pytest.approx(0.15)
+    assert sp.shown(now=12.0) == pytest.approx(0.15 + 0.75 / 4)  # un quarto del parlato
+    # il blocco è 30 s su 40: la salita si ferma prima della sua fine
+    assert sp.shown(now=500.0) == pytest.approx(0.15 + 0.75 * 0.75 * 0.8)
+    # arriva il blocco vero: da lì vale la velocità misurata
+    assert sp.real(0.70, now=600.0) == pytest.approx(0.70)
+
+
+def test_long_file_first_block_cap_is_a_small_slice():
+    sp = pwm.SmoothProgress()
+    sp.real(0.15, now=0.0)
+    sp.expect(speech_s=3600.0, secs_per_speech_s=1.0, now=0.0)
+    assert sp.shown(now=10_000.0) == pytest.approx(0.15 + 0.75 * 30 / 3600 * 0.8)
+
+
+def test_speed_is_learned_and_averaged(app):
+    from PySide6.QtCore import QSettings
+    QSettings("VideoSRT", "v2").remove(pwm.SPEED_KEY + "large-v3")
+    assert pwm.expected_speed("large-v3") == 1.3                  # valore tipico
+    pwm.remember_speed("large-v3", secs=60.0, speech_s=40.0)      # 1,5
+    assert pwm.expected_speed("large-v3") == pytest.approx(1.5)
+    pwm.remember_speed("large-v3", secs=40.0, speech_s=40.0)      # media con 1,0
+    assert pwm.expected_speed("large-v3") == pytest.approx(1.25)
+    pwm.remember_speed("large-v3", secs=50.0, speech_s=5.0)       # clip troppo corta
+    assert pwm.expected_speed("large-v3") == pytest.approx(1.25)
+    assert pwm.expected_speed("modello-ignoto") == 1.0
+
+
+def test_widget_learns_speed_from_a_transcription(app, clock):
+    from PySide6.QtCore import QSettings
+    QSettings("VideoSRT", "v2").remove(pwm.SPEED_KEY + "turbo-test")
+    w = pwm.ProgressWidget()
+    w._reset_eta()
+    w._model, w._speech, w._last_block = "turbo-test", None, None
+    w._on_progress(0.15)
+    w._on_audio(50.0, 40.0)
+    clock.now = 5.0
+    w._tick()
+    assert w.pct_lbl.text().count(">15<") == 0          # sale già nel primo blocco
+    clock.now = 12.0
+    w._on_progress(0.90)                                 # tutto il parlato in 12 s
+    clock.now = 20.0
+    w._on_finished([])
+    assert pwm.expected_speed("turbo-test") == pytest.approx(0.3)

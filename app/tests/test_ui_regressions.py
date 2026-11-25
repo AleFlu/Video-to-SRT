@@ -442,6 +442,7 @@ class _FakeWorker(QObject):
     status = Signal(str)
     progress = Signal(float)
     text = Signal(float, str)
+    audio = Signal(float, float)
     finished = Signal(list)
     failed = Signal(str)
     cancelled = Signal()

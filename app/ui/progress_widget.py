@@ -19,7 +19,7 @@ import warnings
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread, QTimer
+from PySide6.QtCore import QSettings, Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QPainter, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy,
@@ -172,6 +172,42 @@ def audio_clock(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
+# Secondi di elaborazione per secondo di parlato, finché l'app non ha misurato questo Mac
+# (Mac M1 8 GB, CPU int8). Dopo ogni trascrizione si usa la velocità misurata.
+_PRIOR_SECS_PER_SPEECH_S = {
+    "tiny": 0.1, "base": 0.15, "small": 0.35, "medium": 0.8,
+    "large-v3-turbo": 0.4, "large-v3": 1.3,
+}
+SPEED_KEY = "progress/secs_per_speech_s/"
+_SPEED_MIN_SPEECH_S = 10.0      # clip troppo corte non insegnano niente
+
+
+def expected_speed(model: str) -> float:
+    """Secondi di elaborazione per secondo di parlato: misurati qui, o tipici del modello."""
+    raw = QSettings("VideoSRT", "v2").value(SPEED_KEY + model)
+    try:
+        value = float(raw)
+        if 0.01 < value < 20:
+            return value
+    except (TypeError, ValueError):
+        pass
+    return _PRIOR_SECS_PER_SPEECH_S.get(model, 1.0)
+
+
+def remember_speed(model: str, secs: float, speech_s: float) -> None:
+    """Salva la velocità misurata (media con la precedente, così un caso strano pesa poco)."""
+    if speech_s < _SPEED_MIN_SPEECH_S or secs <= 0:
+        return
+    measured = secs / speech_s
+    settings = QSettings("VideoSRT", "v2")
+    old = settings.value(SPEED_KEY + model)
+    try:
+        measured = (float(old) + measured) / 2 if old is not None else measured
+    except (TypeError, ValueError):
+        pass
+    settings.setValue(SPEED_KEY + model, round(measured, 3))
+
+
 class SmoothProgress:
     """Percentuale che sale anche tra un aggiornamento del motore e l'altro.
 
@@ -180,6 +216,10 @@ class SmoothProgress:
     salire alla velocità misurata, ma al massimo di quanto è salito il salto più grande
     visto finora (circa un blocco) e mai oltre il 90 %: se il blocco tarda, si ferma lì
     e aspetta il valore vero. Non scende mai.
+
+    Il primo blocco (30 s di parlato: su una clip di un minuto è più di metà) non ha
+    ancora una velocità misurata: con ``expect`` si usa quella attesa per il modello e la
+    salita si ferma dove dovrebbe finire il blocco.
     """
 
     def __init__(self):
@@ -187,6 +227,17 @@ class SmoothProgress:
         self._real: Optional[tuple] = None      # (istante, ultimo avanzamento vero)
         self._step = 0.0                        # salto vero più grande nella trascrizione
         self._shown = 0.0
+        self._first: Optional[tuple] = None     # (istante, velocità, tetto) per il 1° blocco
+
+    def expect(self, speech_s: float, secs_per_speech_s: float, now: float) -> None:
+        """Inizia il primo blocco: ``speech_s`` di parlato a quella velocità."""
+        if speech_s <= 0 or secs_per_speech_s <= 0:
+            return
+        span = _ETA_END - _ETA_START
+        rate = span / (speech_s * secs_per_speech_s)
+        # Whisper chiude il blocco all'ultima frase intera: di solito arriva prima dei 30 s
+        block = span * min(1.0, 30.0 / speech_s) * 0.8
+        self._first = (now, rate, min(_ETA_START + block, _ETA_END - 0.05))
 
     def real(self, pct: float, now: float) -> float:
         """Nuovo avanzamento dal motore; restituisce la percentuale da mostrare."""
@@ -208,6 +259,9 @@ class SmoothProgress:
                 rate = (pct - p0) / (t - t0)
                 cap = min(pct + self._step, _ETA_END - 0.005)
                 value = min(pct + rate * (now - t), cap)
+        elif self._first is not None and self._step == 0 and _ETA_START <= pct < _ETA_END:
+            t1, rate, cap = self._first
+            value = max(pct, min(pct + rate * (now - t1), cap))
         self._shown = max(self._shown, value)
         return self._shown
 
@@ -403,6 +457,9 @@ class ProgressWidget(QWidget):
         self._eta = RemainingEstimate()
         self._smooth = SmoothProgress()
         self._t_start: Optional[float] = None
+        self._model = ""
+        self._speech: Optional[tuple] = None    # (istante inizio 1° blocco, secondi di parlato)
+        self._last_block: Optional[tuple] = None  # (istante, avanzamento) dell'ultimo blocco
         # Ogni secondo: tempo trascorso, percentuale tra un blocco e l'altro, stima
         self._eta_timer = QTimer(self)
         self._eta_timer.setInterval(1000)
@@ -582,6 +639,9 @@ class ProgressWidget(QWidget):
             return   # già in corso — non avviare due volte
 
         self._source_path = source_path
+        self._model = str(settings.get("model_size") or "")
+        self._speech = None
+        self._last_block = None
 
         # Aggiorna riepilogo
         self.title_lbl.setText("Trascrizione in corso…")
@@ -635,6 +695,7 @@ class ProgressWidget(QWidget):
         self._worker.status.connect(self._on_status)
         self._worker.progress.connect(self._on_progress)
         self._worker.text.connect(self._on_text)
+        self._worker.audio.connect(self._on_audio)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -665,7 +726,7 @@ class ProgressWidget(QWidget):
         # Un segnale tardivo del worker non deve più raggiungere questo widget
         # (es. transcription_done su un progetto già chiuso).
         pairs = ((w.status, self._on_status), (w.progress, self._on_progress),
-                 (w.text, self._on_text),
+                 (w.text, self._on_text), (w.audio, self._on_audio),
                  (w.finished, self._on_finished), (w.failed, self._on_failed),
                  (w.cancelled, self._on_cancelled), (w.finished, self._cleanup),
                  (w.failed, self._cleanup), (w.cancelled, self._cleanup))
@@ -699,9 +760,26 @@ class ProgressWidget(QWidget):
 
     def _on_progress(self, pct: float):
         now = time.monotonic()
+        if self._speech is not None and _ETA_START < pct <= _ETA_END:
+            self._last_block = (now, pct)       # ultimo blocco finito (per la velocità)
         self._show_progress(self._smooth.real(pct, now))
         if self._eta.update(pct, now) is not None:
             self._show_eta(now)
+
+    def _learn_speed(self):
+        """Velocità di questo Mac: dal primo blocco all'ultimo, sul parlato fatto."""
+        if self._speech is not None and self._last_block is not None:
+            t0, speech = self._speech
+            t1, pct = self._last_block
+            done = speech * (pct - _ETA_START) / (_ETA_END - _ETA_START)
+            remember_speed(self._model, t1 - t0, done)
+        self._speech = self._last_block = None
+
+    def _on_audio(self, duration: float, speech: float):
+        """Sta per cominciare il primo blocco: da qui la percentuale sale da sola."""
+        now = time.monotonic()
+        self._speech = (now, speech)
+        self._smooth.expect(speech, expected_speed(self._model), now)
 
     def _on_text(self, start: float, text: str):
         """Frase appena trascritta: nel log, col punto dell'audio (si vede che lavora)."""
@@ -744,6 +822,7 @@ class ProgressWidget(QWidget):
         n = len(segments)
         self.title_lbl.setText(f"Completato — {n} sottotitoli trovati")
         self.status_lbl.setText("Trascrizione completata")
+        self._learn_speed()
         self._stop_clock("Completata in")
         self._reset_eta()
         self._append_log(f"--- Completato: {n} sottotitoli ---")

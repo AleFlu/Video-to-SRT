@@ -148,8 +148,12 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
   di 30 s, quindi `on_progress` arriva a scatti (su file lunghi minuti senza aggiornamenti).
   La schermata Progress mostra il tempo trascorso (timer da 1 s), fa salire la percentuale
   con `SmoothProgress` (velocità misurata, al massimo un blocco, mai oltre il 90 %, mai
-  indietro) e scrive nel log ogni frase appena trascritta (`on_text` → `worker.text`). I worker
-  finti nei test devono avere anche il segnale `text`.
+  indietro) e scrive nel log ogni frase appena trascritta (`on_text` → `worker.text`).
+  Il primo blocco (30 s di parlato, più di metà di una clip da un minuto) sale con la velocità
+  attesa: `on_audio` → `worker.audio` (secondi di parlato dopo il VAD, prima di decodificare) e
+  `expected_speed(modello)`, misurata a fine trascrizione e salvata in QSettings
+  (`progress/secs_per_speech_s/<modello>`). I worker finti nei test devono avere anche i
+  segnali `text` e `audio`.
 - **Tasti di riproduzione**: sono QShortcut della timeline (contesto finestra). Se il widget col
   focus usa quel tasto (campo di testo, Spazio su pulsanti/interruttori, frecce sul volume) il
   tasto gli viene restituito (`ui.widgets.focus_owns_key`); widget custom attivabili con Spazio:

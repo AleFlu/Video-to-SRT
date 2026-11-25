@@ -955,6 +955,7 @@ def transcribe(
     on_status: Optional[Callable] = None,
     on_progress: Optional[Callable] = None,
     on_text: Optional[Callable[[float, str], None]] = None,
+    on_audio: Optional[Callable[[float, float], None]] = None,
 ) -> List[Dict]:
     """Trascrive ``input_path`` e restituisce i sottotitoli come dict start/end/text.
 
@@ -965,6 +966,8 @@ def transcribe(
     espliciti.
     ``on_text(inizio, testo)`` riceve ogni frase appena Whisper la scrive (per il log):
     l'avanzamento arriva a blocchi di 30 s di audio, il testo mostra che sta lavorando.
+    ``on_audio(durata, parlato)`` arriva prima del primo blocco: secondi di audio e di
+    parlato da trascrivere (dopo il VAD), per stimare l'avanzamento mentre si aspetta.
     """
     language = normalize_language(language)
     config = config or TranscriptionConfig()
@@ -1054,6 +1057,18 @@ def transcribe(
         _check_cancel(cancel_event)
         status("Elaborazione audio in corso...")
 
+        def announce(audio_info, vad_on: bool):
+            """Prima del primo blocco (che può durare minuti): quanto audio c'è da fare."""
+            total = float(audio_info.duration or 0)
+            speech = getattr(audio_info, "duration_after_vad", None) if vad_on else None
+            speech = float(speech or total)
+            if total <= 0:
+                return
+            status(f"Trascrizione del primo blocco ({min(30, round(speech))} s di parlato "
+                   f"su {round(speech)} s)...")
+            if on_audio:
+                on_audio(total, speech)
+
         if vad_filter:
             try:
                 segments_iter, info = model.transcribe(
@@ -1062,6 +1077,7 @@ def transcribe(
                     vad_parameters=config.vad.as_dict(),
                 )
                 _check_cancel(cancel_event)
+                announce(info, True)
                 first_seg = next(segments_iter, None)
                 vad_active = True
             except TranscriptionCancelled:
@@ -1080,6 +1096,7 @@ def transcribe(
             segments_iter, info = model.transcribe(audio_path, **transcribe_params,
                                                    vad_filter=False)
             _check_cancel(cancel_event)
+            announce(info, False)
             first_seg = next(segments_iter, None)
 
         _check_cancel(cancel_event)
