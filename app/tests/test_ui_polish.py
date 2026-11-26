@@ -827,7 +827,8 @@ def test_export_panel_no_second_overwrite_prompt_after_file_dialog(app, tmp_path
     try:
         panel.refresh_from_project()
         asked = []
-        monkeypatch.setattr(panel, "_resolve_existing", lambda p: asked.append(p) or p)
+        monkeypatch.setattr("ui.export_panel.resolve_existing",
+                            lambda _parent, p: asked.append(p) or p)
         monkeypatch.setattr(QFileDialog, "getSaveFileName",
                             staticmethod(lambda *a, **k: (str(target), "")))
         panel._browse()

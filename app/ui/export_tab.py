@@ -534,15 +534,17 @@ class _ExportPanel(QWidget):
 
     def _save_srt_as(self, title: str, default_name: str):
         """Salva l'SRT corrente dove sceglie l'utente; gli errori di scrittura sono mostrati."""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        from core.srt_io import subtitles_to_srt
+        from PySide6.QtWidgets import QMessageBox
+        from core.export_formats import BY_EXT
+        from core.srt_io import write_srt
+        from ui.export_dialogs import ask_save_path
         if not self._current_subs:
             return
-        path, _ = QFileDialog.getSaveFileName(self, title, default_name, "SRT (*.srt)")
+        path = ask_save_path(self, BY_EXT[".srt"], title, default_name)
         if not path:
             return
         try:
-            Path(path).write_text(subtitles_to_srt(self._current_subs), encoding="utf-8")
+            write_srt(self._current_subs, path)
         except OSError as e:
             QMessageBox.critical(self, "Errore esportazione",
                                  f"Impossibile salvare il file:\n{e}")

@@ -25,6 +25,7 @@ app/                          # tutta l'applicazione
 │   ├── subtitle_table_model.py  # QAbstractTableModel, parse/format timestamp, issues
 │   ├── undo_commands.py      # QUndoCommand per ogni modifica
 │   ├── srt_io.py, v2srt_io.py   # lettura/scrittura SRT/VTT/TXT/ASS e progetto .v2srt
+│   ├── export_formats.py     # formati di esportazione (etichetta, filtro, scrittura): unica tabella
 │   ├── transcription_worker.py  # QThread che chiama engine
 │   ├── transcription_config.py  # configurazione .vsrtconfig (decodifica, glossario, VAD, leggibilità)
 │   ├── whisper_models.py     # catalogo modelli, modello consigliato (RAM/GPU), cache HF, download
@@ -42,6 +43,7 @@ app/                          # tutta l'applicazione
 │   ├── editor_tab.py, subtitle_timeline.py, inspector_widget.py, find_replace_dialog.py
 │   ├── review_marks.py       # disegno di parole incerte ed errori (tabella e Inspector)
 │   ├── preview_area.py, transport_bar.py, waveform_widget.py
+│   ├── export_dialogs.py     # dove salvare e "il file esiste già", condivisi dall'esportazione
 │   └── export_tab.py, export_panel.py, placeholder_widget.py
 └── tests/                    # pytest (UI offscreen)
 packaging/                    # script di setup/build (README.md: tabella per piattaforma)
@@ -171,6 +173,12 @@ l'auto-scroll del playhead resta sospeso per 2 s (`FOLLOW_HOLD_S`); un seek espl
 - **Snapshot undo**: nei `QUndoCommand` usare `dataclasses.replace(sub)` per copiare il sottotitolo,
   altrimenti le modifiche successive contaminano lo stato salvato.
 - **Il worker non scrive l'SRT**: i segmenti tornano alla UI per l'editing; scrive solo l'esportazione.
+- **Una sola strada per esportare**: finestra Esporta (⌘S), tab Esportazione, menu dell'editor e
+  Salva progetto (⇧⌘S) usano `core.export_formats` e `ui.export_dialogs`
+  (`ProjectWidget._save_as`). Un formato nuovo si aggiunge solo in `FORMATS`.
+- **Benchmark prima/dopo**: `tools/benchmark.py <cartella clip> prima.json`, poi dopo la modifica
+  `... dopo.json --confronta prima.json`: testo identico e tempi per clip (WER se c'è un
+  riferimento in `<cartella>/riferimenti/`). Da usare per ogni modifica al motore.
 - **Editor modificato + nuova apertura**: chiedere sempre conferma prima di sovrascrivere; una sola
   trascrizione alla volta; `_editor_loaded` in `ProjectWidget` evita doppi caricamenti.
 - **PyInstaller**: solo i moduli Qt usati (`--hidden-import PySide6.Qt…`, niente `--collect-all

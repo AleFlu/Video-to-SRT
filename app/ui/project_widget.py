@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import platform_support
+from core import export_formats
 from core.burn_in import BurnInWorker
 from core.subtitle_model import SubtitleProject
 from core.v2srt_io import load_project, is_v2srt, save_project, EXTENSION as V2SRT_EXT
@@ -41,6 +42,7 @@ from ui.progress_widget import ProgressWidget
 from ui.result_widget import ResultWidget
 from ui.tab_bar import TabBar
 from ui.editor_tab import EditorTab
+from ui.export_dialogs import ask_save_path
 from ui.export_panel import ExportPanel
 from ui.export_tab import ExportTab
 from ui.prefs import add_recent, write_config
@@ -235,7 +237,7 @@ class ProjectWidget(QWidget):
         self.export_tab.export_vtt_requested.connect(self._on_tab_export_vtt)
         self.export_tab.export_txt_requested.connect(self._on_tab_export_txt)
         self.export_tab.export_ass_requested.connect(self._on_tab_export_ass)
-        self.export_tab.save_v2srt_requested.connect(self._export_tab_v2srt)
+        self.export_tab.save_v2srt_requested.connect(self._on_tab_save_v2srt)
         self.export_tab.export_video_requested.connect(self._on_tab_export_video)
 
     # ── Tab switching ──────────────────────────────────────────────────────────
@@ -462,16 +464,10 @@ class ProjectWidget(QWidget):
     # ── Export ────────────────────────────────────────────────────────────────
 
     def do_export(self):
-        subs = self.workspace.get_subtitles()
-        if not subs:
-            if self._segments_raw:
-                self.project.load_from_segments(self._segments_raw, self._source_path)
-            else:
-                QMessageBox.warning(self, "Nessun sottotitolo",
-                                    "Non ci sono sottotitoli da esportare.")
-                return
-        else:
-            self.project.subtitles = subs
+        if not self._editor_subtitles():
+            QMessageBox.warning(self, "Nessun sottotitolo",
+                                "Non ci sono sottotitoli da esportare.")
+            return
 
         self._export_panel.refresh_from_project()
         self._export_panel.setWindowTitle("Esporta sottotitoli")
@@ -484,25 +480,67 @@ class ProjectWidget(QWidget):
 
     # Slot senza lambda (una lambda che cattura self crea cicli non raccoglibili)
     def _on_tl_export_vtt(self, *_a) -> None:
-        self._do_export_format(".vtt")
+        self._save_as(self._editor_subtitles(), ".vtt")
 
     def _on_tl_export_txt(self, *_a) -> None:
-        self._do_export_format(".txt")
+        self._save_as(self._editor_subtitles(), ".txt")
 
     def _on_tl_export_ass(self, *_a) -> None:
-        self._do_export_format(".ass")
+        self._save_as(self._editor_subtitles(), ".ass")
 
     def _on_tab_export_srt(self, *_a) -> None:
-        self._export_tab_format(".srt")
+        self._save_as(self.export_tab.current_subtitles(), ".srt")
 
     def _on_tab_export_vtt(self, *_a) -> None:
-        self._export_tab_format(".vtt")
+        self._save_as(self.export_tab.current_subtitles(), ".vtt")
 
     def _on_tab_export_txt(self, *_a) -> None:
-        self._export_tab_format(".txt")
+        self._save_as(self.export_tab.current_subtitles(), ".txt")
 
     def _on_tab_export_ass(self, *_a) -> None:
-        self._export_tab_format(".ass")
+        self._save_as(self.export_tab.current_subtitles(), ".ass")
+
+    def _on_tab_save_v2srt(self, *_a) -> None:
+        self._save_as(self.export_tab.current_subtitles(), V2SRT_EXT)
+
+    def save_v2srt(self):
+        self._save_as(self._editor_subtitles(), V2SRT_EXT)
+
+    def _editor_subtitles(self) -> list:
+        """I sottotitoli dell'editor, o quelli della trascrizione se l'editor non li ha
+        ancora; il progetto si allinea a quelli."""
+        subs = self.workspace.get_subtitles()
+        if subs:
+            self.project.subtitles = subs
+        elif self._segments_raw:
+            self.project.load_from_segments(self._segments_raw, self._source_path)
+        else:
+            return []
+        return self.project.subtitles
+
+    def _save_as(self, subs: list, ext: str) -> None:
+        """Chiede dove salvare ``subs`` nel formato ``ext`` e scrive il file. Unica strada
+        per il menu dell'editor, la tab Esportazione e Salva progetto (⇧⌘S)."""
+        fmt = export_formats.BY_EXT[ext]
+        noun = "salvare" if fmt.is_project else "esportare"
+        if not subs:
+            QMessageBox.warning(self, "Nessun sottotitolo",
+                                f"Non ci sono sottotitoli da {noun}.")
+            return
+        source = self.project.source_path or self._source_path
+        initial = str(Path(source).with_suffix(ext)) if source else ""
+        title = "Salva progetto" if fmt.is_project else "Esporta…"
+        path = ask_save_path(self, fmt, title, initial)
+        if not path:
+            return
+        try:
+            export_formats.write(subs, path, ext, source, self.project)
+        except Exception as e:  # noqa: BLE001 — qualsiasi errore di scrittura va mostrato
+            QMessageBox.critical(
+                self, "Errore salvataggio" if fmt.is_project else "Errore esportazione",
+                f"Impossibile salvare il file:\n{e}")
+            return
+        self._mark_exported(path, "Progetto salvato" if fmt.is_project else "Esportato")
 
     # ── Video con i sottotitoli impressi ───────────────────────────────────────
 
@@ -597,124 +635,6 @@ class ProjectWidget(QWidget):
             worker.wait(10000)
         self._finish_burn()
 
-    def _do_export_format(self, ext: str):
-        from PySide6.QtWidgets import QFileDialog
-        from core.srt_io import write_vtt, write_txt, write_ass
-
-        subs = self.workspace.get_subtitles()
-        if not subs:
-            if self._segments_raw:
-                self.project.load_from_segments(self._segments_raw, self._source_path)
-                subs = self.project.subtitles
-            else:
-                QMessageBox.warning(self, "Nessun sottotitolo",
-                                    "Non ci sono sottotitoli da esportare.")
-                return
-        else:
-            self.project.subtitles = subs
-
-        _filters = {
-            ".vtt": "WebVTT (*.vtt)",
-            ".txt": "Testo semplice (*.txt)",
-            ".ass": "Advanced SubStation Alpha (*.ass)",
-        }
-        initial = ""
-        if self.project.source_path:
-            initial = str(Path(self.project.source_path).with_suffix(ext))
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Esporta…", initial, _filters.get(ext, f"*{ext}")
-        )
-        if not path:
-            return
-        if not path.lower().endswith(ext):
-            path += ext
-
-        try:
-            if ext == ".vtt":
-                write_vtt(subs, path)
-            elif ext == ".txt":
-                write_txt(subs, path)
-            elif ext == ".ass":
-                write_ass(subs, path)
-            self._mark_exported(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Errore esportazione", str(e))
-
-    def _export_tab_format(self, ext: str):
-        """
-        Esporta direttamente il formato richiesto usando i sub già pronti in ExportTab.
-        Chiamato dai bottoni della tab Esportazione — nessun pannello floating.
-        """
-        from PySide6.QtWidgets import QFileDialog
-        from core.srt_io import write_srt, write_vtt, write_txt, write_ass
-
-        subs = self.export_tab.current_subtitles()
-        if not subs:
-            QMessageBox.warning(self, "Nessun sottotitolo",
-                                "Non ci sono sottotitoli da esportare.")
-            return
-
-        _filters = {
-            ".srt":  "SubRip Subtitle (*.srt)",
-            ".vtt":  "WebVTT (*.vtt)",
-            ".txt":  "Testo semplice (*.txt)",
-            ".ass":  "Advanced SubStation Alpha (*.ass)",
-        }
-        initial = ""
-        if self._source_path:
-            initial = str(Path(self._source_path).with_suffix(ext))
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Esporta…", initial, _filters.get(ext, f"*{ext}")
-        )
-        if not path:
-            return
-        if not path.lower().endswith(ext):
-            path += ext
-
-        try:
-            if ext == ".srt":
-                write_srt(subs, path)
-            elif ext == ".vtt":
-                write_vtt(subs, path)
-            elif ext == ".txt":
-                write_txt(subs, path)
-            elif ext == ".ass":
-                write_ass(subs, path)
-            self._mark_exported(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Errore esportazione", str(e))
-
-    def _export_tab_v2srt(self):
-        """Salva progetto .v2srt usando i sub dell'ExportTab."""
-        from PySide6.QtWidgets import QFileDialog
-
-        subs = self.export_tab.current_subtitles()
-        if not subs:
-            QMessageBox.warning(self, "Nessun sottotitolo",
-                                "Non ci sono sottotitoli da salvare.")
-            return
-
-        self.project.subtitles = subs
-        initial = ""
-        if self._source_path:
-            initial = str(Path(self._source_path).with_suffix(V2SRT_EXT))
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Salva progetto", initial, "Progetto V2SRT (*.v2srt)"
-        )
-        if not path:
-            return
-        if not path.lower().endswith(V2SRT_EXT):
-            path += V2SRT_EXT
-
-        try:
-            save_project(self.project, path)
-            self._mark_exported(path, "Progetto salvato")
-        except Exception as e:
-            QMessageBox.critical(self, "Errore salvataggio", str(e))
-
     def _on_exported(self, path: str):
         self._mark_exported(path, "Salvato")
 
@@ -726,30 +646,6 @@ class ProjectWidget(QWidget):
         self.modified_changed.emit(False)
         self.result.set_modified_badge(False)
         self._delete_autosave()
-
-    def save_v2srt(self):
-        from PySide6.QtWidgets import QFileDialog
-        subs = self.workspace.get_subtitles()
-        if not subs:
-            QMessageBox.warning(self, "Nessun sottotitolo",
-                                "Non ci sono sottotitoli da salvare.")
-            return
-        self.project.subtitles = subs
-        initial = ""
-        if self.project.source_path:
-            initial = str(Path(self.project.source_path).with_suffix(V2SRT_EXT))
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Salva progetto", initial, "Progetto V2SRT (*.v2srt)"
-        )
-        if not path:
-            return
-        if not path.lower().endswith(V2SRT_EXT):
-            path += V2SRT_EXT
-        try:
-            save_project(self.project, path)
-            self._mark_exported(path, "Progetto salvato")
-        except Exception as e:
-            QMessageBox.critical(self, "Errore salvataggio", str(e))
 
     # ── Status / badge ────────────────────────────────────────────────────────
 

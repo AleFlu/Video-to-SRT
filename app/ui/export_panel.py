@@ -18,20 +18,10 @@ from PySide6.QtWidgets import (
 
 import platform_support
 from ui import theme
-from core.srt_io import (
-    write_srt, write_vtt, write_txt, write_ass, default_output_for, unique_output_path,
-)
-from core.v2srt_io import save_project
-
-
-# Formato → (etichetta, estensione, filtro dialog)
-_FORMATS = [
-    ("SRT — SubRip",          ".srt",   "SubRip SRT (*.srt)"),
-    ("VTT — WebVTT",          ".vtt",   "WebVTT (*.vtt)"),
-    ("TXT — Testo semplice",  ".txt",   "Testo (*.txt)"),
-    ("ASS — Advanced Sub",    ".ass",   "ASS (*.ass)"),
-    ("V2SRT — Progetto",      ".v2srt", "Progetto V2SRT (*.v2srt)"),
-]
+from core import export_formats
+from core.export_formats import BY_EXT, FORMATS, with_ext
+from core.srt_io import default_output_for
+from ui.export_dialogs import resolve_existing
 
 
 class ExportPanel(QWidget):
@@ -60,20 +50,12 @@ class ExportPanel(QWidget):
         outer.addWidget(self._section("Formato"))
         self.fmt_combo = QComboBox()
         self.fmt_combo.setAccessibleName("Formato di esportazione")
-        for label, ext, _ in _FORMATS:
-            self.fmt_combo.addItem(label, ext)
+        for fmt in FORMATS:
+            self.fmt_combo.addItem(fmt.label, fmt.ext)
         self.fmt_combo.currentIndexChanged.connect(self._on_format_changed)
         outer.addWidget(self.fmt_combo)
 
-        fmt_desc = {
-            ".srt":   "Compatibile con tutti i player e piattaforme.",
-            ".vtt":   "Per il web, YouTube, HTML5 video.",
-            ".txt":   "Solo testo, senza timing.",
-            ".ass":   "Styling avanzato per video amatoriali/anime.",
-            ".v2srt": "Progetto Video→SRT: riapri per continuare a editare.",
-        }
-        self._fmt_desc = fmt_desc
-        self.fmt_hint = QLabel(fmt_desc[".srt"])
+        self.fmt_hint = QLabel(FORMATS[0].hint)
         self.fmt_hint.setObjectName("exportPanelHint")
         outer.addWidget(self.fmt_hint)
         outer.addSpacing(8)
@@ -159,15 +141,13 @@ class ExportPanel(QWidget):
         return self.fmt_combo.currentData() or ".srt"
 
     def _current_filter(self) -> str:
-        idx = self.fmt_combo.currentIndex()
-        _, _, flt = _FORMATS[idx]
-        return flt + ";;Tutti i file (*.*)"
+        return BY_EXT[self._current_ext()].file_filter + ";;Tutti i file (*.*)"
 
     # ---- Aggiornamento path al cambio formato ----
 
     def _on_format_changed(self, _idx: int):
         ext = self._current_ext()
-        self.fmt_hint.setText(self._fmt_desc.get(ext, ""))
+        self.fmt_hint.setText(BY_EXT[ext].hint)
         # Aggiorna estensione nel path se già presente
         current = self.path_edit.text().strip()
         if current:
@@ -212,9 +192,7 @@ class ExportPanel(QWidget):
         if path:
             # Con l'estensione già corretta il dialog ha già chiesto conferma
             self._dialog_confirmed_path = path if path.lower().endswith(ext) else ""
-            if not path.lower().endswith(ext):
-                path += ext
-            self.path_edit.setText(path)
+            self.path_edit.setText(with_ext(path, ext))
             self._path_is_auto = False
 
     # ---- Salvataggio ----
@@ -237,56 +215,20 @@ class ExportPanel(QWidget):
                 if not path:
                     return
 
-        if not path.lower().endswith(ext):
-            path += ext
-
+        path = with_ext(path, ext)
         if os.path.exists(path) and path != self._dialog_confirmed_path:
-            path = self._resolve_existing(path)
+            path = resolve_existing(self, path)
             if not path:
                 return
 
         try:
-            self._write(proj, path, ext)
+            export_formats.write(proj.subtitles, path, ext, proj.source_path, proj)
             self._last_saved = path
             self._show_result(path)
             self.exported.emit(path)
         except Exception as e:
             QMessageBox.critical(self, "Errore salvataggio",
                                  f"Impossibile salvare il file:\n{e}")
-
-    def _resolve_existing(self, path: str) -> str:
-        """Il file esiste già: chiede se sovrascriverlo o salvare con un nuovo nome."""
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("File già esistente")
-        box.setText(f"«{Path(path).name}» esiste già.")
-        box.setInformativeText("Vuoi sostituirlo o salvare una copia con un nuovo nome?")
-        overwrite = box.addButton("Sostituisci", QMessageBox.DestructiveRole)
-        copy = box.addButton("Salva con nuovo nome", QMessageBox.AcceptRole)
-        box.addButton("Annulla", QMessageBox.RejectRole)
-        box.setDefaultButton(copy)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is overwrite:
-            return path
-        if clicked is copy:
-            return unique_output_path(path)
-        return ""
-
-    def _write(self, proj, path: str, ext: str):
-        subs = proj.subtitles
-        if ext == ".srt":
-            write_srt(subs, path)
-        elif ext == ".vtt":
-            write_vtt(subs, path)
-        elif ext == ".txt":
-            write_txt(subs, path)
-        elif ext == ".ass":
-            write_ass(subs, path, title=Path(proj.source_path or path).stem)
-        elif ext == ".v2srt":
-            save_project(proj, path)
-        else:
-            write_srt(subs, path)
 
     # ---- Risultato ----
 
