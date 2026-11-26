@@ -9,6 +9,7 @@ Le differenze tra sistemi operativi passano da ``platform_support``.
 from __future__ import annotations
 
 import gc
+import itertools
 import logging
 import os
 import re
@@ -45,6 +46,10 @@ def _check_cancel(cancel_event: Optional[threading.Event]) -> None:
     """Solleva ``TranscriptionCancelled`` se l'utente ha richiesto l'annullamento."""
     if cancel_event is not None and cancel_event.is_set():
         raise TranscriptionCancelled("Trascrizione annullata dall'utente")
+
+
+def _noop(*_args) -> None:
+    """Callback non fornita."""
 
 
 # ============================================================
@@ -826,13 +831,8 @@ def _transcribe_whisperx(
     language = normalize_language(language)
     config = config or TranscriptionConfig()
 
-    def status(msg):
-        if on_status:
-            on_status(msg)
-
-    def progress(pct):
-        if on_progress:
-            on_progress(pct)
+    status = on_status or _noop
+    progress = on_progress or _noop
 
     device, compute_type = get_optimal_device()
     logger.info("Backend WhisperX: %s, %s, %s", model_size, device, compute_type)
@@ -941,6 +941,11 @@ def _close_iter(it) -> None:
             logger.debug("Chiusura del generatore non riuscita: %s", e)
 
 
+def _whisperx_usable() -> bool:
+    """WhisperX installato e app non impacchettata (nel bundle non c'è)."""
+    return _has_whisperx() and not _is_frozen()
+
+
 def transcribe(
     input_path: str,
     *,
@@ -971,19 +976,14 @@ def transcribe(
     """
     language = normalize_language(language)
     config = config or TranscriptionConfig()
-
-    def status(msg):
-        if on_status:
-            on_status(msg)
-
-    def progress(pct):
-        if on_progress:
-            on_progress(pct)
+    status = on_status or _noop
+    progress = on_progress or _noop
 
     _setup_environment()
+    use_whisperx = high_accuracy and _whisperx_usable()
 
     # Modello mancante: lo si scarica prima di tutto (avanzamento 0–5 %, stato in GB)
-    if not (high_accuracy and _has_whisperx() and not _is_frozen()):
+    if not use_whisperx:
         ensure_model(model_size, on_status=on_status,
                      on_progress=lambda p: progress(0.05 * p), cancel_event=cancel_event)
     progress(0.05)
@@ -994,20 +994,19 @@ def transcribe(
         preprocessed_path = preprocess_audio(
             input_path, on_status=on_status, cancel_event=cancel_event,
         )
-    audio_path = preprocessed_path if preprocessed_path else input_path
+    audio_path = preprocessed_path or input_path
     if preprocessed_path:
         status("Audio ripulito")
     progress(0.10)
 
-    segments_iter = None
     try:
-        if high_accuracy and not (_has_whisperx() and not _is_frozen()):
+        if high_accuracy and not use_whisperx:
             # Mai un ripiego silenzioso: l'utente ha chiesto una modalità che non c'è.
             reason = high_accuracy_unavailable_reason() or "WhisperX non utilizzabile"
             logger.warning("Alta precisione richiesta ma non disponibile: %s", reason)
             status(f"⚠️ Alta precisione non disponibile ({reason}) — uso la modalità standard")
 
-        if high_accuracy and _has_whisperx() and not _is_frozen():
+        if use_whisperx:
             try:
                 status("Backend: WhisperX (alta precisione)")
                 logger.info("Uso il backend WhisperX (allineamento wav2vec2)")
@@ -1022,146 +1021,196 @@ def transcribe(
                 logger.warning("WhisperX fallito: %s", wx_err)
                 status("⚠️ WhisperX non riuscito — fallback a faster-whisper...")
 
-        logger.info("Uso il backend faster-whisper")
-        model = _get_or_load_model(model_size, on_status=on_status)
-        progress(0.15)
-
-        # Parametri di decodifica (predefiniti in core.transcription_config)
-        dec = config.decoding
-        transcribe_params = dict(
-            language=language,
-            task="transcribe",
-            beam_size=beam_size,
-            patience=dec.patience,
-            initial_prompt=dec.prompt_for(language),
-            word_timestamps=True,
-            condition_on_previous_text=dec.condition_on_previous_text,
-            no_speech_threshold=dec.no_speech_threshold,
-            log_prob_threshold=dec.log_prob_threshold,
-            compression_ratio_threshold=dec.compression_ratio_threshold,
-            temperature=list(dec.temperature),
+        return _transcribe_faster_whisper(
+            audio_path, model_size=model_size, beam_size=beam_size, vad_filter=vad_filter,
+            language=language, config=config, cancel_event=cancel_event,
+            on_status=on_status, on_progress=on_progress, on_text=on_text, on_audio=on_audio,
         )
-        # Glossario: a differenza di initial_prompt (solo la prima finestra di 30 s con
-        # condition_on_previous_text=False), hotwords vale per ogni finestra.
-        hotwords = dec.hotwords()
-        if hotwords:
-            if _accepts_kwarg(model.transcribe, "hotwords"):
-                transcribe_params["hotwords"] = hotwords
-            else:
-                logger.warning("Glossario ignorato: questa versione di faster-whisper "
-                               "non supporta hotwords")
-
-        vad_active = False
-        first_seg = None
-        info = None
-        _check_cancel(cancel_event)
-        status("Elaborazione audio in corso...")
-
-        def announce(audio_info, vad_on: bool):
-            """Prima del primo blocco (che può durare minuti): quanto audio c'è da fare."""
-            total = float(audio_info.duration or 0)
-            speech = getattr(audio_info, "duration_after_vad", None) if vad_on else None
-            speech = float(speech or total)
-            if total <= 0:
-                return
-            status(f"Trascrizione del primo blocco ({min(30, round(speech))} s di parlato "
-                   f"su {round(speech)} s)...")
-            if on_audio:
-                on_audio(total, speech)
-
-        if vad_filter:
-            try:
-                segments_iter, info = model.transcribe(
-                    audio_path, **transcribe_params,
-                    vad_filter=True,
-                    vad_parameters=config.vad.as_dict(),
-                )
-                _check_cancel(cancel_event)
-                announce(info, True)
-                first_seg = next(segments_iter, None)
-                vad_active = True
-            except TranscriptionCancelled:
-                raise
-            except Exception as vad_err:
-                if not _is_vad_unavailable_error(vad_err):
-                    raise
-                logger.warning("VAD non disponibile: %s", vad_err)
-                status("⚠️ VAD non disponibile — proseguo senza filtro silenzi...")
-                _close_iter(segments_iter)
-                segments_iter = None
-                first_seg = None
-
-        if not vad_active:
-            _check_cancel(cancel_event)
-            segments_iter, info = model.transcribe(audio_path, **transcribe_params,
-                                                   vad_filter=False)
-            _check_cancel(cancel_event)
-            announce(info, False)
-            first_seg = next(segments_iter, None)
-
-        _check_cancel(cancel_event)
-
-        duration = info.duration or 0
-        vad_label = " · VAD attivo" if vad_active else (" · VAD off" if vad_filter else "")
-        status(f"Lingua: {info.language} ({info.language_probability:.0%}){vad_label}")
-
-        # Raccoglie tutti i segmenti grezzi
-        raw_segments = []
-
-        def collect_segment(seg):
-            _check_cancel(cancel_event)
-            raw_segments.append(seg)
-            text = (seg.text or "").strip()
-            if on_text and text:
-                on_text(float(seg.start), text)
-            if duration > 0:
-                progress(min(0.15 + (seg.end / duration) * 0.75, 0.90))
-                status(f"Trascrizione in corso... {int(seg.end / duration * 100)}%")
-
-        if first_seg is not None:
-            collect_segment(first_seg)
-        for seg in segments_iter:
-            collect_segment(seg)
-
-        _close_iter(segments_iter)
-        segments_iter = None
-
-        # Tratti di parlato che Whisper ha saltato (con o senza filtro VAD): ritrascritti
-        _check_cancel(cancel_event)
-        try:
-            audio_pcm = _decode_pcm(audio_path)
-        except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
-            logger.warning("Audio per il recupero del parlato saltato non disponibile: %s",
-                           e)
-            audio_pcm = None
-        if audio_pcm is not None:
-            decode_kwargs = dict(transcribe_params, language=language or info.language)
-            raw_segments = _recover_skipped_speech(
-                model, audio_pcm, raw_segments, config.vad.as_dict(), decode_kwargs,
-                cancel_event=cancel_event, on_status=on_status,
-            )
-            del audio_pcm
-
-        # Composizione dei sottotitoli: divisione, testo e tempi definitivi
-        _check_cancel(cancel_event)
-        status("Segmentazione sottotitoli...")
-        italian = language == "it" or (language is None and info.language == "it")
-        collected = _build_subtitles(raw_segments, config.readability.layout_rules(),
-                                     info.duration or None, italian,
-                                     config.readability.light_punctuation)
-
-        status(f"Trascrizione completata: {len(collected)} sottotitoli")
-        progress(1.0)
-        return collected
-
     finally:
-        if segments_iter is not None:
-            _close_iter(segments_iter)
         if preprocessed_path:
             try:
                 os.unlink(preprocessed_path)
             except OSError:
                 pass
+
+
+def _transcribe_faster_whisper(
+    audio_path: str,
+    *,
+    model_size: str,
+    beam_size: int,
+    vad_filter: bool,
+    language: Optional[str],
+    config: TranscriptionConfig,
+    cancel_event: Optional[threading.Event],
+    on_status: Optional[Callable],
+    on_progress: Optional[Callable],
+    on_text: Optional[Callable[[float, str], None]],
+    on_audio: Optional[Callable[[float, float], None]],
+) -> List[Dict]:
+    """Backend standard: decodifica, recupero del parlato saltato, sottotitoli (15–100 %)."""
+    status = on_status or _noop
+    progress = on_progress or _noop
+
+    logger.info("Uso il backend faster-whisper")
+    model = _get_or_load_model(model_size, on_status=on_status)
+    progress(0.15)
+
+    params = _decode_options(model, config, language, beam_size)
+    _check_cancel(cancel_event)
+    status("Elaborazione audio in corso...")
+
+    def announce(audio_info, vad_on: bool) -> None:
+        _announce_audio(audio_info, vad_on, status, on_audio)
+
+    segments_iter, info, first_seg, vad_active = _start_decoding(
+        model, audio_path, params, vad_filter, config.vad.as_dict(), cancel_event, status,
+        announce)
+    try:
+        _check_cancel(cancel_event)
+        vad_label = " · VAD attivo" if vad_active else (" · VAD off" if vad_filter else "")
+        status(f"Lingua: {info.language} ({info.language_probability:.0%}){vad_label}")
+        raw_segments = _collect_segments(first_seg, segments_iter, info.duration or 0,
+                                         cancel_event, status, progress, on_text)
+    finally:
+        _close_iter(segments_iter)
+
+    # Tratti di parlato che Whisper ha saltato (con o senza filtro VAD): ritrascritti
+    raw_segments = _recover_with_audio(model, audio_path, raw_segments, params,
+                                       language or info.language, config, cancel_event,
+                                       on_status)
+
+    # Composizione dei sottotitoli: divisione, testo e tempi definitivi
+    _check_cancel(cancel_event)
+    status("Segmentazione sottotitoli...")
+    italian = language == "it" or (language is None and info.language == "it")
+    collected = _build_subtitles(raw_segments, config.readability.layout_rules(),
+                                 info.duration or None, italian,
+                                 config.readability.light_punctuation)
+
+    status(f"Trascrizione completata: {len(collected)} sottotitoli")
+    progress(1.0)
+    return collected
+
+
+def _decode_options(model, config: TranscriptionConfig, language: Optional[str],
+                    beam_size: int) -> Dict[str, Any]:
+    """Parametri di ``model.transcribe`` (predefiniti in core.transcription_config)."""
+    dec = config.decoding
+    params: Dict[str, Any] = dict(
+        language=language,
+        task="transcribe",
+        beam_size=beam_size,
+        patience=dec.patience,
+        initial_prompt=dec.prompt_for(language),
+        word_timestamps=True,
+        condition_on_previous_text=dec.condition_on_previous_text,
+        no_speech_threshold=dec.no_speech_threshold,
+        log_prob_threshold=dec.log_prob_threshold,
+        compression_ratio_threshold=dec.compression_ratio_threshold,
+        temperature=list(dec.temperature),
+    )
+    # Glossario: a differenza di initial_prompt (solo la prima finestra di 30 s con
+    # condition_on_previous_text=False), hotwords vale per ogni finestra.
+    hotwords = dec.hotwords()
+    if hotwords:
+        if _accepts_kwarg(model.transcribe, "hotwords"):
+            params["hotwords"] = hotwords
+        else:
+            logger.warning("Glossario ignorato: questa versione di faster-whisper "
+                           "non supporta hotwords")
+    return params
+
+
+def _announce_audio(audio_info, vad_on: bool, status: Callable,
+                    on_audio: Optional[Callable[[float, float], None]]) -> None:
+    """Prima del primo blocco (che può durare minuti): quanto audio c'è da fare."""
+    total = float(audio_info.duration or 0)
+    speech = getattr(audio_info, "duration_after_vad", None) if vad_on else None
+    speech = float(speech or total)
+    if total <= 0:
+        return
+    status(f"Trascrizione del primo blocco ({min(30, round(speech))} s di parlato "
+           f"su {round(speech)} s)...")
+    if on_audio:
+        on_audio(total, speech)
+
+
+def _start_decoding(model, audio_path: str, params: Dict[str, Any], vad_filter: bool,
+                    vad_params: Dict[str, Any], cancel_event: Optional[threading.Event],
+                    status: Callable, announce: Callable):
+    """Avvia la decodifica e aspetta il primo segmento (cioè il primo blocco di 30 s).
+
+    Con il filtro VAD, se il VAD non è disponibile (Silero/ONNX) si riprova senza.
+    Ritorna ``(iteratore, info, primo segmento o None, VAD attivo)``; in caso di errore
+    l'iteratore è già chiuso.
+    """
+    if vad_filter:
+        segments_iter = None
+        try:
+            segments_iter, info = model.transcribe(
+                audio_path, **params, vad_filter=True, vad_parameters=vad_params)
+            _check_cancel(cancel_event)
+            announce(info, True)
+            return segments_iter, info, next(segments_iter, None), True
+        except TranscriptionCancelled:
+            _close_iter(segments_iter)
+            raise
+        except Exception as vad_err:
+            _close_iter(segments_iter)
+            if not _is_vad_unavailable_error(vad_err):
+                raise
+            logger.warning("VAD non disponibile: %s", vad_err)
+            status("⚠️ VAD non disponibile — proseguo senza filtro silenzi...")
+
+    _check_cancel(cancel_event)
+    segments_iter, info = model.transcribe(audio_path, **params, vad_filter=False)
+    try:
+        _check_cancel(cancel_event)
+        announce(info, False)
+        return segments_iter, info, next(segments_iter, None), False
+    except BaseException:
+        _close_iter(segments_iter)
+        raise
+
+
+def _collect_segments(first_seg, segments_iter, duration: float,
+                      cancel_event: Optional[threading.Event], status: Callable,
+                      progress: Callable,
+                      on_text: Optional[Callable[[float, str], None]]) -> list:
+    """Raccoglie i segmenti grezzi; avanzamento 15–90 % sulla posizione nell'audio."""
+    raw_segments = []
+    head = [first_seg] if first_seg is not None else []
+    for seg in itertools.chain(head, segments_iter):
+        _check_cancel(cancel_event)
+        raw_segments.append(seg)
+        text = (seg.text or "").strip()
+        if on_text and text:
+            on_text(float(seg.start), text)
+        if duration > 0:
+            progress(min(0.15 + (seg.end / duration) * 0.75, 0.90))
+            status(f"Trascrizione in corso... {int(seg.end / duration * 100)}%")
+    return raw_segments
+
+
+def _recover_with_audio(model, audio_path: str, raw_segments: list, params: Dict[str, Any],
+                        language: Optional[str], config: TranscriptionConfig,
+                        cancel_event: Optional[threading.Event],
+                        on_status: Optional[Callable]) -> list:
+    """Ritrascrive il parlato saltato da Whisper; senza audio decodificato si salta
+    (il recupero è un extra, mai bloccante)."""
+    _check_cancel(cancel_event)
+    try:
+        audio_pcm = _decode_pcm(audio_path)
+    except Exception as e:  # noqa: BLE001 — il recupero è un extra, mai bloccante
+        logger.warning("Audio per il recupero del parlato saltato non disponibile: %s", e)
+        return raw_segments
+    if audio_pcm is None:
+        return raw_segments
+    return _recover_skipped_speech(
+        model, audio_pcm, raw_segments, config.vad.as_dict(), dict(params, language=language),
+        cancel_event=cancel_event, on_status=on_status,
+    )
 
 
 # ============================================================
@@ -1189,9 +1238,7 @@ def run_pipeline(
     from core.srt_io import unique_output_path, write_srt
     from core.subtitle_model import Subtitle
 
-    def status(msg):
-        if on_status:
-            on_status(msg)
+    status = on_status or _noop
 
     language = normalize_language(language)
     if not output_path:

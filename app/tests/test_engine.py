@@ -771,3 +771,119 @@ def test_bundled_ffmpeg_prefers_its_own_folder(tmp_path, monkeypatch):
     (tmp_path / "ffmpeg-bin").mkdir()
     (tmp_path / "ffmpeg-bin" / name).write_bytes(b"x")
     assert engine.get_bundled_ffmpeg() == str(tmp_path / "ffmpeg-bin" / name)
+
+
+# ── Decodifica: VAD mancante, annullamento, chiusura del generatore ──────────
+
+class _ClosingIter:
+    """Generatore di segmenti finto che ricorda se è stato chiuso."""
+
+    def __init__(self, segments, before_each=None):
+        self._it, self.closed, self._before = iter(segments), False, before_each
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._before:
+            self._before()
+        return next(self._it)
+
+    def close(self):
+        self.closed = True
+
+
+def _decoding_model(segments, vad_error=None, before_each=None, duration=10.0):
+    """Modello che con ``vad_filter=True`` solleva ``vad_error`` (se dato)."""
+    calls, iters = [], []
+
+    class Model:
+        def transcribe(self, audio, **kwargs):
+            calls.append(kwargs.get("vad_filter"))
+            it = _ClosingIter(segments, before_each)
+            iters.append(it)
+            info = SimpleNamespace(duration=duration, duration_after_vad=6.0,
+                                   language="it", language_probability=0.9)
+            if kwargs.get("vad_filter") and vad_error is not None:
+                raise vad_error
+            return it, info
+
+    return Model(), calls, iters
+
+
+def _run(monkeypatch, model, **kwargs):
+    monkeypatch.setattr(engine, "_setup_environment", lambda: None)
+    monkeypatch.setattr(engine, "_get_or_load_model", lambda *a, **k: model)
+    monkeypatch.setattr(engine, "_decode_pcm", lambda path: None)
+    return engine.transcribe("x.wav", denoise=False, **kwargs)
+
+
+def test_missing_vad_retries_without_filter(monkeypatch):
+    model, calls, _ = _decoding_model([_speech_seg(["Ciao."], 1.0)],
+                                      vad_error=ImportError("No module named 'onnxruntime'"))
+    statuses = []
+    out = _run(monkeypatch, model, vad_filter=True, on_status=statuses.append)
+    assert calls == [True, False]
+    assert [s["text"] for s in out] == ["Ciao."]
+    assert any("VAD non disponibile" in s for s in statuses)
+    assert any(s.endswith("· VAD off") for s in statuses)
+
+
+def test_other_vad_errors_are_not_hidden(monkeypatch):
+    model, calls, _ = _decoding_model([], vad_error=RuntimeError("out of memory"))
+    with pytest.raises(RuntimeError, match="out of memory"):
+        _run(monkeypatch, model, vad_filter=True)
+    assert calls == [True]
+
+
+def test_text_and_audio_callbacks(monkeypatch):
+    model, _, iters = _decoding_model([_speech_seg(["Uno."], 1.0), _speech_seg(["Due."], 4.0)])
+    texts, audio, statuses = [], [], []
+    _run(monkeypatch, model, vad_filter=True, on_text=lambda s, t: texts.append((s, t)),
+         on_audio=lambda d, sp: audio.append((d, sp)), on_status=statuses.append)
+    assert [t for _, t in texts] == ["Uno.", "Due."]
+    assert audio == [(10.0, 6.0)]                       # parlato dopo il VAD
+    assert "Trascrizione del primo blocco (6 s di parlato su 6 s)..." in statuses
+    assert any(s.endswith("· VAD attivo") for s in statuses)
+    assert iters[-1].closed
+
+
+def test_cancel_while_collecting_closes_the_decoder(monkeypatch):
+    ev = threading.Event()
+    segs = [_speech_seg(["Uno."], 1.0), _speech_seg(["Due."], 4.0), _speech_seg(["Tre."], 7.0)]
+    model, _, iters = _decoding_model(segs)
+    texts = []
+
+    def on_text(_start, text):
+        texts.append(text)
+        ev.set()                                        # annulla dopo la prima frase
+
+    with pytest.raises(engine.TranscriptionCancelled):
+        _run(monkeypatch, model, vad_filter=False, cancel_event=ev, on_text=on_text)
+    assert texts == ["Uno."] and iters[-1].closed
+
+
+def test_error_in_first_block_closes_the_decoder(monkeypatch):
+    def boom():
+        raise RuntimeError("decoder rotto")
+
+    model, _, iters = _decoding_model([_speech_seg(["Uno."], 1.0)], before_each=boom)
+    with pytest.raises(RuntimeError, match="decoder rotto"):
+        _run(monkeypatch, model, vad_filter=True)
+    assert iters[-1].closed
+
+
+def test_whisperx_failure_falls_back_to_standard_model(monkeypatch):
+    model, calls, _ = _decoding_model([_speech_seg(["Ciao."], 1.0)])
+    monkeypatch.setattr(engine, "_has_whisperx", lambda: True)
+    monkeypatch.setattr(engine, "_is_frozen", lambda: False)
+
+    def broken(*a, **k):
+        raise RuntimeError("wav2vec2 mancante")
+
+    monkeypatch.setattr(engine, "_transcribe_whisperx", broken)
+    statuses = []
+    out = _run(monkeypatch, model, vad_filter=False, high_accuracy=True,
+               on_status=statuses.append)
+    assert [s["text"] for s in out] == ["Ciao."]
+    assert any("WhisperX non riuscito" in s for s in statuses)
