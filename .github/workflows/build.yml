@@ -14,8 +14,8 @@ jobs:
     name: macOS (Apple Silicon)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: ffmpeg
@@ -29,7 +29,7 @@ jobs:
         run: .venv/bin/python packaging/macos/build_mac.py --clean --no-dmg
       - name: Pacchetto
         run: ditto -c -k --keepParent dist/Video-to-SRT.app Video-to-SRT-macOS-arm64.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Video-to-SRT-macOS-arm64
           path: Video-to-SRT-macOS-arm64.zip
@@ -39,8 +39,8 @@ jobs:
     name: Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       # ffmpeg statico (build "essentials" di gyan.dev): un solo .exe da includere
@@ -55,7 +55,7 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r app/requirements.txt pyinstaller
       - name: Build e autotest
         run: python packaging/windows/build_windows.py --clean
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Video-to-SRT-Windows
           path: dist/VideoSRT
